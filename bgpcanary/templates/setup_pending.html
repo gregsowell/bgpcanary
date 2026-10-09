@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Setup pending · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<div class="panel login">
+  <h1>Not set up yet</h1>
+  <p>An admin needs to enter the ASN and prefixes to monitor before there's anything to show. Ask your administrator to sign in and finish setup.</p>
+  <p><a href="/logout">Log out</a></p>
+</div>
+{% endblock %}

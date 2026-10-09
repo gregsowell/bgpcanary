@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if outage %}OUTAGE · {% endif %}{% block title %}{{ cfg.site_name }}{% endblock %}</title>
+<link rel="icon" id="favicon" type="image/svg+xml" href="/static/{{ 'favicon-alert.svg' if outage else 'favicon.svg' }}">
+<link rel="alternate icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#1e3a8a">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+{% if user %}
+<header>
+  <div class="wrap">
+    <a class="brand" href="/"><img id="brand-logo" src="/static/{{ 'favicon-alert.svg' if outage else 'favicon.svg' }}" alt="" width="28" height="28">{{ cfg.site_name }}</a>
+    <nav>
+      {% set path = request.url.path %}
+      <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
+      <a href="/events" class="{{ 'active' if path.startswith('/events') }}">Events</a>
+      <a href="/paths" class="{{ 'active' if path.startswith('/paths') }}">Paths</a>
+      <a href="/updates" class="{{ 'active' if path.startswith('/updates') }}">Updates</a>
+      <a href="/registry" class="{{ 'active' if path.startswith('/registry') }}">Registry</a>
+      <a href="/probes" class="{{ 'active' if path.startswith('/probes') or path.startswith('/snapshots') }}" title="Ping, traceroute and BGP snapshots from Route Views">Route Views</a>
+      <a href="/atlas" class="{{ 'active' if path.startswith('/atlas') }}" title="Ping and traceroute from RIPE Atlas probes worldwide">RIPE Atlas</a>
+      <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
+      {% if is_admin %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users</a>{% endif %}
+    </nav>
+    {% if update and update.available %}<a class="badge b-warning" href="/settings/about" title="A newer bgpcanary release is available">update {{ update.latest }}</a>{% endif %}
+    <span class="me">
+      <span class="dot {{ 'ok' if status.ws_connected else 'bad' }}" title="RIS Live {{ 'connected' if status.ws_connected else 'disconnected' }}"></span>{{ status.phase }} · {{ user }}{% if role == 'viewer' %} <span class="badge b-info">view only</span>{% endif %} · <a href="/logout">Log out</a>
+    </span>
+  </div>
+</header>
+{% endif %}
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+{% if user %}<footer class="wrap muted" style="font-size:12px;padding:0 16px 24px">bgpcanary {{ version }} · <a href="/settings/about">About &amp; updates</a></footer>{% endif %}
+</body>
+</html>

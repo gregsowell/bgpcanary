@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Events · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>Events</h1>
+<form class="toolbar" method="get">
+  <select name="kind"><option value="">All types</option>{% for k in kinds %}<option {{ 'selected' if k == kind }}>{{ k }}</option>{% endfor %}</select>
+  <select name="severity"><option value="">Warning + critical</option>{% for s in ['critical','warning','info'] %}<option {{ 'selected' if s == severity }}>{{ s }}</option>{% endfor %}</select>
+  <label><input type="checkbox" name="info" value="1" {{ 'checked' if info }}> include info (dips, new chains)</label>
+  <button type="submit">Filter</button>
+  <span class="muted">{{ total }} event{{ 's' if total != 1 }}</span>
+</form>
+<div class="panel scroll">
+<table>
+  <tr><th>Start</th><th>End</th><th>Duration</th><th>Severity</th><th>Type</th><th>Event</th><th>Min vis.</th></tr>
+  {% for e in rows %}
+  <tr>
+    <td><time data-ts="{{ e.start_ts }}" data-sec="1"></time></td>
+    <td>{% if e.end_ts %}<time data-ts="{{ e.end_ts }}" data-sec="1"></time>{% else %}<span class="badge b-{{ 'info' if e.severity == 'info' else 'critical' }}">open</span>{% endif %}</td>
+    <td>{{ ((e.end_ts or now) - e.start_ts)|dur }}</td>
+    <td><span class="badge b-{{ e.severity }}">{{ e.severity }}</span></td>
+    <td class="muted">{{ e.kind }}</td>
+    <td><a href="/events/{{ e.id }}">{{ e.title }}</a>{% if e.historical %} <span class="muted">(backfill)</span>{% endif %}</td>
+    <td>{% if e.min_visible is not none %}{{ e.min_visible }}{% if e.baseline %}/{{ '%.0f'|format(e.baseline) }}{% endif %}{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="muted">No events.</td></tr>{% endfor %}
+</table>
+</div>
+<p class="toolbar">
+  {% if page > 1 %}<a class="btn" href="?kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page - 1 }}">← Newer</a>{% endif %}
+  {% if page * 100 < total %}<a class="btn" href="?kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page + 1 }}">Older →</a>{% endif %}
+</p>
+{% endblock %}

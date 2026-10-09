@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign in · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<div class="panel login">
+  <div style="text-align:center;margin-bottom:8px"><img src="/static/favicon.svg" alt="" width="64" height="64"></div>
+  <h1 style="text-align:center">{{ cfg.site_name }}</h1>
+  <p class="muted">AS{{ cfg.asn }} · {{ cfg.prefixes|join(', ') }}</p>
+  {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="u">Username</label>
+    <input id="u" name="username" autocomplete="username" required autofocus>
+    <label for="p">Password</label>
+    <input id="p" name="password" type="password" autocomplete="current-password" required>
+    <p><button class="primary" type="submit">Sign in</button></p>
+  </form>
+</div>
+{% endblock %}

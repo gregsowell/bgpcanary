@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Registry · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>Registry watch</h1>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div class="panel">
+  <div class="toolbar">
+    <p class="muted" style="margin:0;flex:1">Checks the routing registries that providers use to build their filters, every {{ cfg.registry_minutes }} min. It looks at IRR route objects (RADB, ARIN, LEVEL3, NTTCOM, ALTDB, RIPE and others, via whois.radb.net), the as-sets that list AS{{ cfg.asn }}, a simulation of the filters your upstreams' transits would build, and RPKI. Problems open events: warnings for anything that can break or hijack your routing, FYI notices for the rest. Every change is logged below, so you can see when a registry changed before the effect shows up in BGP.</p>
+    <form method="post" action="/registry/toggle" class="inline">
+      <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if reg_enabled }} {{ '' if is_admin else 'disabled' }} onchange="this.form.submit()"> {{ 'On' if reg_enabled else 'Off' }}</label>
+    </form>
+    <form method="post" action="/registry/run" class="inline"><button class="primary" type="submit" {{ 'disabled' if running or not reg_enabled or not is_admin }}>{{ 'Running…' if running else 'Run checks now' }}</button></form>
+  </div>
+  {% if last %}<p class="muted" style="margin:0">Last check <time data-ts="{{ last }}" data-sec="1"></time></p>{% endif %}
+</div>
+
+{% if rep %}
+<div class="panel scroll">
+  <h2>Checklist</h2>
+  <table>
+    <tr><th style="width:110px">Result</th><th style="width:220px">Check</th><th>Detail</th></tr>
+    {% for c in rep.checks|sort(attribute='status') %}
+    <tr><td>{% if c.status == 'pass' %}<span class="badge b-ok">pass</span>{% elif c.status == 'warn' or c.severity == 'info' %}<span class="badge b-info">{{ 'FYI' if c.severity == 'info' else 'check' }}</span>{% else %}<span class="badge b-{{ c.severity or 'warning' }}">{{ 'problem' }}</span>{% endif %}</td>
+      <td>{{ c.name }}</td><td>{{ c.msg }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="grid g2">
+  <div class="panel scroll">
+    <h2>Route objects for your space</h2>
+    <table>
+      <tr><th>Registry</th><th>Route</th><th>Origin</th><th>Maintainer</th><th>RPKI</th></tr>
+      {% for o in rep.objects %}
+      <tr><td>{{ o.source }}</td><td class="mono">{{ o.route }} <span class="muted">{{ o.rel }}</span></td>
+        <td>{% if o.origin == 'AS' ~ cfg.asn %}{{ o.origin }}{% else %}<span class="badge b-warning">{{ o.origin }}</span>{% endif %}</td>
+        <td class="muted">{{ o.mnt }}</td>
+        <td>{% if o.rpki == 'valid' %}<span class="badge b-ok">valid</span>{% elif o.rpki in ('', 'n/a') %}<span class="muted">{{ o.rpki or '—' }}</span>{% else %}<span class="badge b-warning">{{ o.rpki }}</span>{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% if rep.foreign %}
+    <h2 style="margin-top:16px">Route objects claiming AS{{ cfg.asn }} for other space</h2>
+    <table>{% for o in rep.foreign %}<tr><td>{{ o.source }}</td><td class="mono">{{ o.route }}</td><td class="muted">{{ o.mnt }}</td></tr>{% endfor %}</table>
+    {% endif %}
+  </div>
+  <div class="panel scroll">
+    <h2>As-sets that list AS{{ cfg.asn }}</h2>
+    <table>
+      <tr><th>As-set</th><th>Registry</th><th>Maintainer</th><th>Modified</th></tr>
+      {% for a in rep.assets %}<tr><td class="mono"><a class="asset-link" href="/registry/asset/{{ a.name|urlencode }}?source={{ a.source|urlencode }}" data-name="{{ a.name }}" data-source="{{ a.source }}">{{ a.name }}</a></td><td>{{ a.source }}</td><td class="muted">{{ a.mnt }}</td><td class="muted">{{ a.modified[:10] }}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">None. No as-set lists your ASN directly.</td></tr>{% endfor %}
+    </table>
+    <h2 style="margin-top:16px">Your upstreams' registrations &amp; who carries you</h2>
+    <p class="muted" style="font-size:12px;margin-top:0">Your upstream accepting your routes is one step. Its <em>transits</em> then filter what it sends them, usually with a prefix list built from the as-set the upstream registered in PeeringDB. The first line shows whether that registration would include your prefix; the table shows which of its transits actually carry you right now (live RIS data) and why.</p>
+    {% for f in rep.filters %}
+    <div class="upblock">
+      <div><strong>AS{{ f.upstream }}</strong> <span class="muted">{{ names.get(f.upstream, '') }}</span></div>
+      <div style="font-size:13px;margin:4px 0 6px">
+        Registered for its transits to filter on: <span class="mono">{{ f.set or 'nothing (no as-set in PeeringDB)' }}</span>
+        {% if f.unregistered_sets %}<br><span class="muted">Exists but isn't registered: <span class="mono">{{ f.unregistered_sets|join(', ') }}</span> (lists you)</span>{% endif %}
+        <br>A filter built from that registration
+        {% if f.includes_prefix %}<span class="badge b-ok">includes your prefix</span>{% else %}<span class="badge b-warning">would not include your prefix</span>{% endif %}
+      </div>
+      <table>
+        <tr><th>Its transit / peer</th><th class="right">Carrying you now</th><th>Why</th></tr>
+        {% for r in reality.get(f.upstream, []) %}
+        <tr><td>AS{{ r.transit }} <span class="muted">{{ names.get(r.transit, '') }}</span></td>
+          <td class="right">{% if r.ours %}<span class="badge b-ok">{{ r.ours }} peers</span>{% else %}<span class="badge b-info">no</span>{% endif %}</td>
+          <td style="font-size:13px">
+            {% if r.ours and r.own_sets %}Its own as-set <span class="mono">{{ r.own_sets|join(', ') }}</span> lists you, so it doesn't depend on AS{{ f.upstream }}'s registration
+            {% elif r.ours and f.includes_prefix %}AS{{ f.upstream }}'s registration includes you
+            {% elif r.ours %}Accepts you some other way (a manual prefix list, or another registry)
+            {% elif f.includes_prefix %}Not carrying you, although AS{{ f.upstream }}'s registration includes you. Either AS{{ f.upstream }} isn't announcing your prefix to them, or they filter on something else (for example only AS{{ f.upstream }}'s own route objects, or a manual prefix list)
+            {% else %}Filters built from AS{{ f.upstream }}'s registration exclude you{% if r.ref %} (it carries AS{{ f.upstream }}'s own prefixes to {{ r.ref }} peers){% endif %}
+            {% endif %}</td></tr>
+        {% else %}<tr><td colspan="3" class="muted">No transit data yet (the transit filter check runs every {{ cfg.transit_filter_minutes }} min).</td></tr>{% endfor %}
+      </table>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="panel scroll">
+  <h2>Registry history</h2>
+  <table>
+    <tr><th>When</th><th></th><th>Event</th></tr>
+    {% for e in hist %}
+    <tr><td><time data-ts="{{ e.start_ts }}" data-sec="1"></time></td><td><span class="badge b-{{ e.severity }}">{{ 'FYI' if e.severity == 'info' else e.severity }}</span></td>
+      <td><a href="/events/{{ e.id }}">{{ e.title }}</a>{% if not e.end_ts %} <span class="badge b-{{ 'info' if e.severity == 'info' else 'warning' }}">open</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="3" class="muted">No registry events yet. The first check records a baseline, and later checks log every change from there.</td></tr>{% endfor %}
+  </table>
+</div>
+<div id="asset-card" class="hovercard"></div>
+<script>
+// Hover card for as-set names: fetched on first hover, cached per page.
+(function () {
+  const card = document.getElementById("asset-card"), cache = {};
+  let timer = null, current = null;
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  const show = (a, html) => {
+    card.innerHTML = html;
+    const r = a.getBoundingClientRect();
+    card.style.display = "block";
+    const left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - card.offsetWidth - 16);
+    card.style.left = Math.max(8, left) + "px";
+    card.style.top = (r.bottom + window.scrollY + 6) + "px";
+  };
+  const render = d => {
+    const chain = d.chain ? d.chain.map(esc).join(" → ") : "";
+    const prev = d.direct_preview.map(x => `<span class="mono">${esc(x.m)}</span>${x.name ? ` <span class="muted">${esc(x.name.split(" ")[0])}</span>` : ""}`).join(", ");
+    return `<div class="hc-title mono">${esc(d.name)} <span class="badge b-info">${esc(d.source)}</span></div>
+      ${d.descr ? `<div class="muted">${esc(d.descr)}</div>` : ""}
+      <div class="hc-row"><span>Maintainer</span><span class="mono">${esc(d.mnt || "—")}</span></div>
+      <div class="hc-row"><span>Last modified</span><span>${esc((d.modified || "—").slice(0, 10))}</span></div>
+      <div class="hc-row"><span>Members</span><span>${d.direct_count} direct${d.direct_sets.length ? ` (${d.direct_sets.length} nested set${d.direct_sets.length > 1 ? "s" : ""})` : ""} · ${d.expanded_count} ASNs expanded</span></div>
+      <div class="hc-row"><span>AS${d.asn}</span><span>${d.includes_me ? '<span class="badge b-ok">included</span>' : '<span class="badge b-warning">not included</span>'}</span></div>
+      ${chain ? `<div class="hc-row"><span>Via</span><span class="mono">${chain}</span></div>` : ""}
+      ${d.upstreams_in.length ? `<div class="hc-row"><span>Your upstreams</span><span>${d.upstreams_in.map(esc).join(", ")}</span></div>` : ""}
+      <div class="hc-members"><span class="muted">Direct members:</span> ${prev}${d.direct_count > d.direct_preview.length ? " …" : ""}</div>
+      <div class="muted" style="margin-top:6px;font-size:11px">Click for the full list</div>`;
+  };
+  document.querySelectorAll(".asset-link").forEach(a => {
+    const key = a.dataset.name + "|" + a.dataset.source;
+    a.addEventListener("mouseenter", () => {
+      current = a; clearTimeout(timer);
+      timer = setTimeout(async () => {
+        if (!cache[key]) {
+          show(a, '<span class="muted">Loading ' + esc(a.dataset.name) + '…</span>');
+          try {
+            const r = await fetch("/api/asset?" + new URLSearchParams({ name: a.dataset.name, source: a.dataset.source }));
+            cache[key] = r.ok ? render(await r.json()) : '<span class="muted">Could not load this as-set.</span>';
+          } catch (e) { cache[key] = '<span class="muted">Could not load this as-set.</span>'; }
+        }
+        if (current === a) show(a, cache[key]);
+      }, 250);
+    });
+    a.addEventListener("mouseleave", () => { current = null; clearTimeout(timer); card.style.display = "none"; });
+  });
+})();
+</script>
+{% endblock %}

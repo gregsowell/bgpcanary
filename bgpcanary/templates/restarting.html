@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Restarting · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<div class="panel login">
+  <h1>Applying settings…</h1>
+  <p id="rs-msg">The service is restarting with the new monitoring settings. This page continues on its own when it's back.</p>
+  {% if added %}<p class="muted">History for {{ added|join(', ') }} loads in the background over the next few minutes. Charts fill in as it arrives.</p>{% endif %}
+  <p class="muted" id="rs-wait">Waiting…</p>
+</div>
+<script>
+(function () {
+  const since = {{ since|tojson }};
+  let n = 0;
+  const tick = async () => {
+    n++;
+    document.getElementById("rs-wait").textContent = "Waiting… " + n + "s";
+    try {
+      const r = await fetch("/healthz", { cache: "no-store" });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.started && d.started !== since) { location.href = "/"; return; }
+      }
+    } catch (e) { /* still restarting */ }
+    if (n > 90) { document.getElementById("rs-msg").textContent = "It's taking longer than expected. Check 'sudo systemctl status bgpcanary' on the server."; return; }
+    setTimeout(tick, 1000);
+  };
+  setTimeout(tick, 1500);
+})();
+</script>
+{% endblock %}

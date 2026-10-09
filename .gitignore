@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.venv/
+venv/
+bgpcanary/static/vendor/
+config.toml
+!deploy/config.example.toml
+*.tgz
+.env
+
+# media and editor/project files that don't belong in the repository
+*.mp4
+*.mov
+*.tscproj
+*.trec
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

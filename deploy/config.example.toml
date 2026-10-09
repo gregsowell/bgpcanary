@@ -1,0 +1,90 @@
+# bgpcanary configuration.
+#
+# Almost everything here can be managed in the web UI (Settings): ASN/prefixes/upstreams, detection
+# thresholds, data sources, alert channels, users. Values saved in the UI are stored in the database and
+# take precedence; this file only supplies first-start defaults. The settings the service needs before it
+# can start - [storage] db_path, [web] listen_host/listen_port/secret_key - are only read from here.
+# After editing: sudo systemctl restart bgpcanary
+
+[monitor]
+# Your ASN and the prefixes you announce (IPv4 and/or IPv6). Leave asn = 0 to set these up in the web UI
+# on first login (Settings > Monitoring); values saved there override this section.
+asn = 0
+prefixes = []                 # e.g. ["192.0.2.0/24", "2001:db8::/48"]
+# Your direct transit providers. Anything else adjacent to your origin raises an "unexpected_upstream"
+# warning. Leave empty to get a warning the first time a new upstream appears.
+expected_upstreams = []       # e.g. [64501, 64502]
+# Other address space you hold but don't list above (e.g. your allocations). Your ASN announcing or
+# registering route objects inside it is expected and not flagged. Large networks: list your aggregates.
+owned_space = []              # e.g. ["198.51.100.0/22"]
+# At most this many unmonitored prefixes involving your ASN are tracked (protects large networks).
+max_unmonitored = 200
+
+[storage]
+db_path = "/var/lib/bgpcanary/bgpcanary.db"
+raw_retention_days = 365     # raw BGP updates; buckets/events are kept forever
+
+[web]
+listen_host = "127.0.0.1"
+listen_port = 8080
+site_name = "BGP Monitor"
+base_url = "https://__FQDN__"   # used for links in alerts
+secret_key = "__SECRET__"
+
+[detection]
+bucket_seconds = 30
+outage_threshold_pct = 80    # outage if visibility < 80% of the 24h baseline ...
+sustain_seconds = 60         # ... for this long (shorter dips are logged as "blip" info events)
+recover_threshold_pct = 90   # closed when back above 90% for sustain_seconds
+baseline_hours = 24
+reconcile_minutes = 5        # re-check state against the RIPEstat looking glass when quiet
+stale_days = 14              # drop routes not refreshed for this long and not confirmed by the looking glass
+backfill_days = 90           # history loaded from RIPEstat BGPlay on first start
+# Transit filter check (informational): flags a transit provider that carries an upstream's own
+# prefixes but none of yours via that upstream. Can also be switched on/off on the Settings page.
+transit_filter_check = true
+transit_filter_min_peers = 5     # ignore transits that carry the upstream's prefixes to fewer RIS peers
+transit_filter_minutes = 10
+# Registry watch: IRR route objects, as-set membership, simulated upstream filters, RPKI.
+# Can also be switched on/off on the Registry page.
+registry_watch = true
+registry_minutes = 60
+# Covering (less-specific) announcements to ignore, e.g. a provider aggregate you know about
+covering_ignore = []
+# Ignore covering announcements shorter than this (0.0.0.0/0 default routes leaked into RIS feeds, etc.)
+covering_min_length = 8
+
+[routeviews]
+# First server is also used for ping/traceroute (route-views.routeviews.org allows both)
+servers = [
+  "route-views.routeviews.org", "route-views2.routeviews.org", "route-views4.routeviews.org",
+  "route-views.chicago.routeviews.org", "route-views.eqix.routeviews.org", "route-views.linx.routeviews.org",
+  "route-views.sg.routeviews.org", "route-views.sydney.routeviews.org", "route-views.wide.routeviews.org",
+]
+poll_minutes = 720                          # routine "show ip bgp <prefix>" snapshots (Route Views allows
+                                            # 100 connections + 500 KB per collector per day per IP)
+probe_targets = []                          # addresses in your space that answer ping, e.g. ["192.0.2.1"]
+probe_minutes = 360                         # routine ping + traceroute (first collector)
+probe_on_event = true                       # query immediately when an outage/hijack/etc. opens or closes
+followup_change_pct = 10                    # ...and re-query during it only on a major change: visibility
+                                            # moving >= this % of normal, or an upstream path appearing/vanishing
+
+[alerts]
+min_severity = "warning"     # info | warning | critical
+
+[alerts.email]
+enabled = false
+smtp_host = "smtp.example.com"
+smtp_port = 587
+starttls = true
+ssl = false                  # true for implicit TLS (port 465)
+username = ""
+password = ""
+from = "bgpcanary@example.com"
+to = ["noc@example.com"]
+
+# One [[alerts.webhooks]] block per destination. format = "slack" or "json"
+# [[alerts.webhooks]]
+# name = "slack-noc"
+# format = "slack"
+# url = "https://hooks.slack.com/services/XXX/YYY/ZZZ"

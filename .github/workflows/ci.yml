@@ -1,0 +1,33 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # the oldest Python bgpcanary supports (it needs tomllib)
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Python compiles and imports
+        run: |
+          python -m compileall -q bgpcanary
+          python -c "import bgpcanary.config, bgpcanary.db, bgpcanary.engine, bgpcanary.paths, bgpcanary.updates"
+      - name: Templates compile
+        run: |
+          python - <<'EOF'
+          import glob, jinja2, os
+          env = jinja2.Environment(loader=jinja2.FileSystemLoader("bgpcanary/templates"))
+          env.filters.update(dur=lambda x: x, fromjson=lambda x: x)
+          for t in sorted(glob.glob("bgpcanary/templates/*.html")):
+              env.get_template(os.path.basename(t))
+          print("templates ok")
+          EOF
+      - name: Shell scripts parse
+        run: for f in deploy/*.sh; do bash -n "$f"; done
+      - name: Version is valid
+        run: grep -Eq '^__version__ = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?"$' bgpcanary/__init__.py

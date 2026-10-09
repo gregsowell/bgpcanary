@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Monitoring · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+{% if first_run %}
+<h1>Welcome. Let's set up monitoring</h1>
+<div class="msg">Enter your ASN and the prefixes you announce. When you save, the service restarts (about 10 seconds), loads up to {{ cfg.backfill_days }} days of history from RIPE RIS for each prefix, and starts watching them live.</div>
+{% else %}
+<h1><a href="/settings" style="color:var(--muted)">Settings</a> / Monitoring</h1>
+{% endif %}
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+<div class="panel">
+  <form method="post" action="/settings/monitor" class="formgrid" autocomplete="off">
+    <label>Your ASN<input name="asn" value="{{ m.asn or '' }}" placeholder="e.g. 64500" required inputmode="numeric"></label>
+    <label>Site name (header, alerts)<input name="site_name" value="{{ m.site_name }}" placeholder="BGP Monitor · AS64500"></label>
+    <label class="span2">Prefixes you announce: IPv4 and/or IPv6, one per line
+      <textarea name="prefixes" rows="5" placeholder="192.0.2.0/24&#10;2001:db8::/48" required>{{ m.prefixes|join('\n') }}</textarea>
+      <span style="font-size:12px">Each prefix is watched separately: visibility, outages, hijacks, more-specific and covering announcements, Route Views snapshots, registry and RPKI checks. Monitoring both an aggregate and the more-specifics you announce inside it is fine. Prefixes you add get their history loaded in the background. Removing a prefix stops monitoring it, but its history and events are kept.</span>
+    </label>
+    <label class="span2">Expected upstream ASNs (your direct transit providers)
+      <input name="expected_upstreams" value="{{ m.expected_upstreams|join(', ') }}" placeholder="e.g. 64501, 64502">
+      <span style="font-size:12px">Paths through any other neighbor raise an "unexpected upstream" warning. Upstreams that carry none of your paths raise an "expected upstream missing" warning. Each upstream's own transits and peers appear in the connectivity tree. Leave empty to warn on any upstream the first time it's seen.</span>
+    </label>
+    <label class="span2">Other address space you hold (optional; allocations or aggregates, one per line)
+      <textarea name="owned_space" rows="2" placeholder="198.51.100.0/22">{{ m.owned_space|join('\n') }}</textarea>
+      <span style="font-size:12px">Space you hold but don't want charted. Your ASN announcing prefixes or registering route objects inside it is treated as expected instead of being flagged. Larger networks should list their aggregates here.</span>
+    </label>
+    <label class="span2">Probe targets: addresses inside your space to ping and traceroute from Route Views
+      <input name="probe_targets" value="{{ m.probe_targets|join(', ') }}" placeholder="e.g. 192.0.2.1">
+      <span style="font-size:12px">Use something that answers ping, such as a router or firewall interface. Probes run every {{ cfg.probe_minutes }} min and whenever an outage opens or closes.</span>
+    </label>
+    <div class="span2 toolbar" style="margin:0">
+      <button class="primary" type="submit">{{ 'Save and start monitoring' if first_run else 'Save and restart monitoring' }}</button>
+      {% if not first_run %}<span class="muted" style="font-size:12px">The service restarts to apply this. Monitoring pauses for about 10 seconds, and any gap is filled in from RIPE's archive later.</span>{% endif %}
+    </div>
+  </form>
+</div>
+{% if not first_run %}
+<p class="muted" style="font-size:12px">{% if from_db %}These values were saved here and override the <code>[monitor]</code> section of <code>/etc/bgpcanary/config.toml</code>.{% else %}These values currently come from <code>/etc/bgpcanary/config.toml</code>. Once you save here, the saved values take over.{% endif %} Detection thresholds, Route Views servers and storage settings stay in the config file.</p>
+{% endif %}
+{% endblock %}

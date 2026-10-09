@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}About · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1><a href="/settings" style="color:var(--muted)">Settings</a> / About &amp; updates</h1>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<div class="panel">
+  <h2>bgpcanary {{ st.current }}</h2>
+  <p style="margin-top:0">BGP visibility and reachability monitor. Source, documentation and releases:
+    <a href="https://github.com/{{ repo }}" target="_blank" rel="noopener">github.com/{{ repo }}</a>.
+    Licensed under the <a href="https://github.com/{{ repo }}/blob/main/LICENSE.md" target="_blank" rel="noopener">Functional Source License 1.1 (Apache 2.0 future license)</a>.</p>
+  {% if st.available %}
+  <div class="msg" style="background:var(--warn-bg)"><strong>bgpcanary {{ st.latest }} is available</strong>{% if st.published %} (released {{ st.published[:10] }}){% endif %}.
+    {% if st.url %}<a href="{{ st.url }}" target="_blank" rel="noopener">Release notes</a>.{% endif %}</div>
+  {% elif st.latest %}
+  <p><span class="badge b-ok">up to date</span> <span class="muted">latest release is {{ st.latest }}</span></p>
+  {% endif %}
+  {% if st.checked %}<p class="muted" style="font-size:13px">Last checked <time data-ts="{{ st.checked }}"></time>{% if st.error %} · {{ st.error }}{% endif %}.</p>{% endif %}
+  {% if st.available and st.notes %}
+  <details open><summary><strong>What's new in {{ st.latest }}</strong></summary><pre style="white-space:pre-wrap">{{ st.notes }}</pre></details>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>How to update</h2>
+  <p style="margin-top:0">Updates are installed on the server (the web app deliberately has no system privileges). Run:</p>
+  <pre>sudo bgpcanary-update</pre>
+  <p class="muted" style="font-size:13px">It backs up the database and settings first, downloads the latest release, installs it (your configuration, data,
+  users and certificate are kept), and checks that the service comes back. If anything goes wrong, <code>sudo bgpcanary-update --rollback</code>
+  returns to the previous version and database. <code>sudo bgpcanary-update --check</code> only reports whether a newer version exists.</p>
+</div>
+
+{% if is_admin %}
+<div class="panel">
+  <h2>Update check</h2>
+  <form method="post" action="/settings/about" class="toolbar" style="margin:0">
+    <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if check_on }}> Check GitHub once a day for a newer release</label>
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <form method="post" action="/settings/about" style="margin-top:8px"><input type="hidden" name="action" value="check"><button type="submit">Check now</button></form>
+  <p class="muted" style="font-size:12px;margin-bottom:0">Only <code>api.github.com</code> is contacted, to read the latest release number. Nothing about this installation is sent.
+  When a newer version exists, admins see a small "update" badge in the header.</p>
+</div>
+{% endif %}
+{% endblock %}

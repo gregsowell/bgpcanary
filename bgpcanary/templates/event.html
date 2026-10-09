@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Event {{ ev.id }} · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1><span class="badge b-{{ ev.severity }}">{{ ev.severity }}</span> {{ ev.title }}</h1>
+<div class="grid g2">
+  <div class="panel">
+    <dl class="kv">
+      <dt>Type</dt><dd>{{ ev.kind }}{% if ev.historical %} <span class="muted">(found during backfill)</span>{% endif %}</dd>
+      <dt>Prefix</dt><dd>{{ ev.prefix or '—' }}</dd>
+      <dt>Started</dt><dd><time data-ts="{{ ev.start_ts }}" data-sec="1"></time></dd>
+      <dt>Ended</dt><dd>{% if ev.end_ts %}<time data-ts="{{ ev.end_ts }}" data-sec="1"></time>{% else %}<span class="badge b-critical">ongoing</span>{% endif %}</dd>
+      <dt>Duration</dt><dd>{{ ((ev.end_ts or now) - ev.start_ts)|dur }}</dd>
+      {% if ev.min_visible is not none %}<dt>Lowest visibility</dt><dd>{{ ev.min_visible }}{% if ev.baseline %} of {{ '%.0f'|format(ev.baseline) }} peers ({{ '%.0f'|format(100 * ev.min_visible / ev.baseline) }}%){% endif %}</dd>{% endif %}
+      {% set d = ev.detail|fromjson %}
+      {% if d.example_path %}<dt>Example path</dt><dd class="mono">{{ d.example_path|join(' ') }}</dd>{% endif %}
+      {% if d.path %}<dt>Path</dt><dd class="mono">{{ d.path|join(' ') }}</dd>{% endif %}
+      {% if d.peers %}<dt>Peers</dt><dd>{{ d.peers }}</dd>{% endif %}
+      {% if d.note %}<dt>Details</dt><dd>{{ d.note }}</dd>{% endif %}
+      {% if d.object %}<dt>{{ 'Object (now)' if d.before else 'Registry object' }}</dt><dd><pre style="margin:0">{{ d.object }}</pre></dd>{% endif %}
+      {% if d.before %}<dt>Object (before)</dt><dd><pre style="margin:0">{{ d.before }}</pre></dd>{% endif %}
+      {% if d.reference_prefixes %}<dt>Compared with</dt><dd class="mono">{{ d.reference_prefixes|join(', ') }} <span class="muted">(AS{{ d.upstream }}'s own prefixes)</span></dd>{% endif %}
+    </dl>
+  </div>
+  <div class="panel">
+    <h2>Alerts sent</h2>
+    <table>
+      {% for a in alerts %}<tr><td><time data-ts="{{ a.ts }}" data-sec="1"></time></td><td>{{ a.channel }}</td><td>{% if a.ok %}<span class="badge b-ok">sent</span>{% else %}<span class="badge b-critical">failed</span> <span class="muted">{{ a.error }}</span>{% endif %}</td></tr>
+      {% else %}<tr><td class="muted">{% if ev.historical %}Events found during backfill don't send alerts.{% else %}None. Notifications for this alert type may be off or limited to higher severities (Settings › Alert channels › What to alert on).{% endif %}</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+{% include "_evidence.html" %}
+
+{% if ev.prefix in cfg.prefixes %}
+<div class="panel">
+  <h2>Visibility around the event</h2>
+  <div class="chart"><canvas id="vis"></canvas></div>
+</div>
+<div class="grid g2">
+  <div class="panel"><h2>Upstream chains</h2><div class="chart small"><canvas id="chain"></canvas></div></div>
+  <div class="panel"><h2>Update churn</h2><div class="chart small"><canvas id="churn"></canvas></div></div>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev.prefix|tojson }}, start: {{ win_start }}, end: {{ win_end }}, visId: "vis", chainId: "chain", churnId: "churn" }));
+</script>
+{% endif %}
+
+{% if ev.prefix %}
+<div class="panel" id="replay">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Path tree replay</h2>
+    {% include "_tree_controls.html" %}
+  </div>
+  <div class="toolbar">
+    <button data-rp="play" type="button">▶ Play</button>
+    <button data-rp="jump-start" type="button">Event start</button>
+    <button data-rp="jump-drop" type="button">Lowest point</button>
+    <button data-rp="jump-end" type="button">Recovery</button>
+    <span class="muted" data-rp="status"></span>
+  </div>
+  {% include "_tree_body.html" %}
+  <p class="muted" style="margin:4px 0 0;font-size:12px">The tree starts at your AS and follows each RIS peer's AS path outward. Line thickness is the number of peers using a branch at the selected time. Colors compare each branch with the healthiest moment before the event (the dotted green line on the timeline): orange means it lost more than half its peers, red dashed means it dropped out completely. Click the timeline strip or drag the slider to scrub through the event. Playback and GIF frames spend more time where updates are happening.</p>
+</div>
+<script src="/static/replay.js"></script>
+<script>document.addEventListener("DOMContentLoaded", () => initReplay({{ ev.id }}));</script>
+{% endif %}
+
+<div class="panel">
+  <h2>BGP updates around the start ({{ ups|length }}{% if ups|length >= 3000 %}+{% endif %})</h2>
+  <div class="scroll" style="max-height:600px;overflow-y:auto"><table class="mono">
+    <tr><th>Time</th><th>Collector</th><th>Peer</th><th></th><th>AS path</th><th>Source</th></tr>
+    {% for u in ups %}
+    <tr><td><time data-ts="{{ u.ts }}" data-sec="1"></time></td><td>{{ u.collector }}</td><td>{{ u.peer }}{% if u.peer_asn %} <span class="muted">AS{{ u.peer_asn }}</span>{% endif %}</td>
+      <td>{% if u.kind == 'W' %}<span class="badge b-critical">W</span>{% else %}<span class="badge b-ok">A</span>{% endif %}</td>
+      <td>{{ u.path or '' }}</td><td class="muted">{{ u.source }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+<div class="rp-timebox">
+  <div class="rp-timehead">
+    <label><strong>Time</strong> <span class="muted">· drag to see the tree at any moment in this window</span></label>
+    <span class="rp-readout" data-rp="slider-time" aria-live="polite"></span>
+  </div>
+  <input type="range" data-rp="slider" class="rp-slider" min="0" max="1000" value="1000"
+         aria-label="Time: drag to see the connectivity tree at a moment in the selected window">
+  <div class="rp-timeends"><span data-rp="slider-start"></span><span class="muted rp-tipline">Tip: drag the handle, click the timeline strip under the tree, or focus the slider and use the ← → arrow keys</span><span data-rp="slider-end"></span></div>
+</div>
+<div data-rp="wrap" class="rp-wrap"><canvas data-rp="canvas"></canvas><div data-rp="tip" class="rp-tip"></div></div>
+<div class="rp-gifbox">
+  <div class="toolbar" style="margin:0">
+    <strong style="font-size:13px">GIF / playback range</strong>
+    <label>From <input type="datetime-local" step="1" data-rp="gif-from"></label>
+    <button data-rp="gif-from-slider" type="button" title="Use the slider's current time as the start">Set from slider</button>
+    <label>To <input type="datetime-local" step="1" data-rp="gif-to"></label>
+    <button data-rp="gif-to-slider" type="button" title="Use the slider's current time as the end">Set from slider</button>
+    <button data-rp="gif-reset" type="button">Whole window</button>
+    <span class="muted" data-rp="gif-span"></span>
+  </div>
+  <div class="toolbar" style="margin:8px 0 0">
+    <label>Frames <select data-rp="frames"><option>20</option><option>40</option><option selected>80</option><option>150</option></select></label>
+    <label>Frame delay <select data-rp="delay"><option value="80">80 ms</option><option value="150" selected>150 ms</option><option value="300">300 ms</option><option value="500">500 ms</option></select></label>
+    <button data-rp="gif" type="button" class="primary">Export GIF</button>
+    <span class="muted" data-rp="gifstatus"></span>
+  </div>
+</div>

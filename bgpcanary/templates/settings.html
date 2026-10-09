@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+{% if status.backfilling %}<div class="msg">Loading history for {{ status.backfilling }}…</div>{% endif %}
+{% set alerts_on = cfg.email.enabled or (cfg.webhooks|selectattr('enabled')|list) %}
+
+<div class="cards">
+  <a class="card" href="{{ '/settings/monitor' if is_admin else '#' }}">
+    <div class="card-head"><span class="card-title">Monitored network</span><span class="badge b-ok">active</span></div>
+    <p class="card-desc">Your ASN, the prefixes to watch, your upstream providers, and the addresses to ping.</p>
+    <div class="card-sum">
+      <strong>AS{{ cfg.asn }}</strong> · {{ cfg.prefixes|length }} prefix{{ 'es' if cfg.prefixes|length != 1 }}<br>
+      <span class="muted">{{ cfg.prefixes[:3]|join(', ') }}{{ ' …' if cfg.prefixes|length > 3 }}</span><br>
+      <span class="muted">Upstreams: {% for u in cfg.expected_upstreams %}AS{{ u }}{% if not loop.last %}, {% endif %}{% else %}not set{% endfor %}</span>
+    </div>
+    {% if is_admin %}<span class="card-open">Edit →</span>{% endif %}
+  </a>
+
+  <a class="card {{ 'card-warn' if not alerts_on }}" href="{{ '/settings/alerts' if is_admin else '#' }}">
+    <div class="card-head"><span class="card-title">Alert channels</span>
+      {% if alerts_on %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-warning">not set up</span>{% endif %}</div>
+    <p class="card-desc">Where notifications go: email, Slack, or any webhook. Also which severities to send.</p>
+    <div class="card-sum">
+      {% if alerts_on %}
+        {% if cfg.email.enabled %}Email → {{ cfg.email.recipients|join(', ') }}<br>{% endif %}
+        {% for w in cfg.webhooks if w.enabled %}{{ 'Slack' if w.format == 'slack' else 'Webhook' }}{{ ' · ' ~ w.name if w.name }}<br>{% endfor %}
+        <span class="muted">Sending {{ alert_types_on }} of {{ alert_types_total }} alert types</span>
+      {% else %}
+        <strong>You won't be notified of outages yet.</strong><br><span class="muted">Add an email address or a Slack webhook.</span>
+      {% endif %}
+    </div>
+    {% if is_admin %}<span class="card-open">{{ 'Edit' if alerts_on else 'Set up' }} →</span>{% endif %}
+  </a>
+
+  <a class="card" href="{{ '/settings/advanced' if is_admin else '#' }}">
+    <div class="card-head"><span class="card-title">Detection &amp; data sources</span></div>
+    <p class="card-desc">When an outage is declared, which route collectors to poll and how often, and how long data is kept.</p>
+    <div class="card-sum">
+      Outage below <strong>{{ cfg.outage_threshold_pct|round|int }}%</strong> of normal for <strong>{{ cfg.sustain_seconds }} s</strong><br>
+      <span class="muted">{{ cfg.rv_servers|length }} Route Views collectors · every {{ cfg.rv_poll_minutes }} min</span><br>
+      <span class="muted">Route Views ping/traceroute every {{ cfg.probe_minutes }} min · raw data kept {{ cfg.raw_retention_days }} days</span>
+    </div>
+    {% if is_admin %}<span class="card-open">Edit →</span>{% endif %}
+  </a>
+
+  <a class="card" href="#checks">
+    <div class="card-head"><span class="card-title">Background checks</span></div>
+    <p class="card-desc">Early warnings: providers that aren't carrying your routes, and IRR/RPKI registry problems.</p>
+    <div class="card-sum">
+      Transit filter check: {% if tf_enabled %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-info">off</span>{% endif %}<br>
+      Registry watch: {% if reg_enabled %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-info">off</span>{% endif %}
+      <span class="muted">(<span class="linklike" onclick="event.preventDefault();location.href='/registry'">Registry page</span>)</span>
+    </div>
+    <span class="card-open">View ↓</span>
+  </a>
+
+  <a class="card" href="{{ '/settings/atlas' if is_admin else '/atlas' }}">
+    <div class="card-head"><span class="card-title">RIPE Atlas <span class="muted" style="font-weight:400;font-size:13px">optional</span></span>
+      {% if atlas_on %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-info">off</span>{% endif %}</div>
+    <p class="card-desc">Ping and traceroute toward your space from probes in other networks: does traffic actually arrive, and how is latency and loss per carrier?</p>
+    <div class="card-sum">{% if atlas_on %}Baseline measurements running · <span class="linklike" onclick="event.preventDefault();location.href='/atlas'">Atlas page</span>{% else %}<span class="muted">Needs a RIPE Atlas API key and credits.</span>{% endif %}</div>
+    {% if is_admin %}<span class="card-open">{{ 'Edit' if atlas_on else 'Set up' }} →</span>{% endif %}
+  </a>
+
+  <a class="card" href="{{ '/users' if is_admin else '#' }}">
+    <div class="card-head"><span class="card-title">Users</span></div>
+    <p class="card-desc">Who can sign in. Admins can change settings; viewers can look but not change anything.</p>
+    <div class="card-sum">{{ n_admins }} admin{{ 's' if n_admins != 1 }} · {{ n_viewers }} viewer{{ 's' if n_viewers != 1 }}</div>
+    {% if is_admin %}<span class="card-open">Manage →</span>{% endif %}
+  </a>
+
+  <a class="card {{ 'card-warn' if update and update.available }}" href="/settings/about">
+    <div class="card-head"><span class="card-title">About &amp; updates</span>
+      {% if update and update.available %}<span class="badge b-warning">{{ update.latest }} available</span>{% else %}<span class="badge b-ok">{{ version }}</span>{% endif %}</div>
+    <p class="card-desc">Installed version, release notes, and how to update.</p>
+    <div class="card-sum">Running <strong>bgpcanary {{ version }}</strong></div>
+    <span class="card-open">Open →</span>
+  </a>
+
+  <a class="card" href="/account/password">
+    <div class="card-head"><span class="card-title">Your password</span></div>
+    <p class="card-desc">Change the password for <strong>{{ user }}</strong>.{% if is_admin %} To reset someone else's, use Users.{% endif %}</p>
+    <span class="card-open">Change →</span>
+  </a>
+</div>
+
+{% if is_admin %}
+<div class="panel">
+  <h2>Quick actions</h2>
+  <div class="actions">
+    <form method="post" action="/settings/test-alert"><button class="primary" type="submit">Send test alert</button></form>
+    <span class="muted">Sends a sample notification to every alert channel so you can confirm delivery.</span>
+    <form method="post" action="/actions/resync"><button type="submit">Resync from RIPEstat now</button></form>
+    <span class="muted">Re-checks the live routing state against the RIPEstat looking glass. Runs automatically every {{ cfg.reconcile_minutes }} min.</span>
+  </div>
+</div>
+{% endif %}
+
+<h2 class="section-title">Status &amp; diagnostics</h2>
+<div class="grid g2">
+  <div class="panel">
+    <h2>Collector status</h2>
+    <dl class="kv">
+      <dt>Phase</dt><dd>{{ status.phase }}</dd>
+      <dt>RIS Live</dt><dd>{{ 'connected' if status.ws_connected else 'disconnected' }}{% if status.ws_since %} since <time data-ts="{{ status.ws_since }}"></time>{% endif %}</dd>
+      <dt>Messages this run</dt><dd>{{ status.msgs }}</dd>
+      <dt>Last resync</dt><dd>{% if status.last_resync %}<time data-ts="{{ status.last_resync }}" data-sec="1"></time> ({{ status.resync_changes }} corrections){% else %}—{% endif %}</dd>
+      <dt>Database</dt><dd>{{ '%.1f'|format(size / 1048576) }} MB · data since {% if oldest %}<time data-ts="{{ oldest }}"></time>{% else %}—{% endif %}</dd>
+      {% for t, c in counts.items() %}<dt>{{ t }}</dt><dd>{{ '{:,}'.format(c) }}</dd>{% endfor %}
+    </dl>
+  </div>
+  <div class="panel scroll">
+    <h2>Alert log</h2>
+    <table>
+      <tr><th>Time</th><th>Channel</th><th>Result</th><th>Event</th></tr>
+      {% for a in log_rows %}
+      <tr><td><time data-ts="{{ a.ts }}" data-sec="1"></time></td><td>{{ a.channel }}</td><td>{% if a.ok %}<span class="badge b-ok">sent</span>{% else %}<span class="badge b-critical">failed</span> <span class="muted">{{ a.error }}</span>{% endif %}</td>
+        <td>{% if a.event_id %}<a href="/events/{{ a.event_id }}">{{ a.title }}</a>{% else %}test{% endif %}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">No alerts sent yet.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="panel scroll" id="checks">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Transit filter check <span class="badge b-info">informational</span></h2>
+    <form method="post" action="/settings/transit-filter" class="inline">
+      <label class="switch"><input type="checkbox" name="enabled" value="1" {{ 'checked' if tf_enabled }} {{ '' if is_admin else 'disabled' }} onchange="this.form.submit()"> {{ 'On' if tf_enabled else 'Off' }}</label>
+      <noscript><button type="submit">Save</button></noscript>
+    </form>
+  </div>
+  <p class="muted" style="margin-top:0">Every {{ cfg.transit_filter_minutes }} min, this compares how each upstream's <em>own</em> prefixes reach the internet with how yours do. If a provider carries the upstream's own prefixes to at least {{ cfg.transit_filter_min_peers }} RIS peers but none of yours, it posts an FYI notice. That usually means a prefix filter or IRR record somewhere between the two. Registry checks (IRR, as-sets, RPKI) are on the <a href="/registry">Registry</a> page.</p>
+  {% if tf_enabled %}
+  <table>
+    <tr><th>Upstream</th><th>Their transit</th><th class="right">Carries upstream's own prefixes</th><th class="right">Carries yours via upstream</th><th>Status</th></tr>
+    {% for r in tf_rows %}
+    <tr><td>AS{{ r.upstream }} <span class="muted">{{ names.get(r.upstream, '') }}</span></td>
+      <td>AS{{ r.transit }} <span class="muted">{{ names.get(r.transit, '') }}</span></td>
+      <td class="right">{{ r.ref }} peers</td><td class="right">{{ r.ours }} peers</td>
+      <td>{% if r.flag %}<span class="badge b-info">not carrying yours</span>{% elif r.ours %}<span class="badge b-ok">ok</span>{% else %}<span class="muted">below threshold</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No check has run yet. The first runs about 3 minutes after the service starts.</td></tr>{% endfor %}
+  </table>
+  {% if tf_last %}<p class="muted" style="margin-bottom:0">Last check <time data-ts="{{ tf_last }}" data-sec="1"></time></p>{% endif %}
+  {% endif %}
+</div>
+<p class="muted" style="font-size:12px">Only the database path, listen address and session key are set in <code>/etc/bgpcanary/config.toml</code>. Everything else is managed from this page.</p>
+{% endblock %}

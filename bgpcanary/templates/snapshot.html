@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Snapshot {{ s.id }} · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>show ip bgp {{ s.prefix }} · {{ s.server }}</h1>
+<div class="panel">
+  <dl class="kv">
+    <dt>Time</dt><dd><time data-ts="{{ s.ts }}" data-sec="1"></time></dd>
+    <dt>Paths</dt><dd>{{ s.n_paths }}</dd>
+    {% if s.event_id %}<dt>Event</dt><dd><a href="/events/{{ s.event_id }}">event {{ s.event_id }}</a></dd>{% endif %}
+    {% if s.error %}<dt>Error</dt><dd style="color:var(--crit)">{{ s.error }}</dd>{% endif %}
+  </dl>
+</div>
+<div class="panel"><h2>Raw output</h2><pre>{% for l in (s.raw or '').strip().splitlines() %}{{ l.strip() }}
+{% endfor %}</pre></div>
+{% endblock %}

@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Alert channels · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1><a href="/settings" style="color:var(--muted)">Settings</a> / Alert channels</h1>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+<p class="muted">{% if from_db %}These settings were saved here and override the <code>[alerts]</code> section of <code>/etc/bgpcanary/config.toml</code>.{% else %}These values currently come from <code>/etc/bgpcanary/config.toml</code>. Once you save anything here, the saved values take over. Changes apply immediately, with no restart needed.{% endif %}</p>
+
+<div class="panel">
+  <h2>General</h2>
+  <form method="post" action="/settings/alerts/general" class="toolbar" style="margin:0">
+    <label>Site URL for alert links <input name="base_url" value="{{ general.base_url }}" placeholder="https://bgpcanaryitor.example.com" style="width:300px"></label>
+    <button class="primary" type="submit">Save</button>
+  </form>
+  <p class="muted" style="margin:8px 0 0;font-size:12px">Alerts include a link to the event on this site. Which alerts are sent is set per type below.</p>
+</div>
+
+<div class="panel" id="types">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">What to alert on</h2>
+    <span class="muted" style="font-size:13px">Set every type to:</span>
+    <button type="button" onclick="presetTypes(2)">Critical only</button>
+    <button type="button" onclick="presetTypes(1)">Warning and up (recommended)</button>
+    <button type="button" onclick="presetTypes(0)">Everything</button>
+  </div>
+  <p class="muted" style="margin-top:0;font-size:13px">Every kind of alert bgpcanary can send, with its own settings. <strong>Notify</strong> controls whether it emails / posts to your
+  webhooks; events are always recorded and shown on the Events page either way. Recoveries ("resolved") are sent for anything that alerted when it opened.
+  {% if not kinds_saved %}Until you save here, these follow the old single "notify on" level ({{ cfg.alert_min_severity }} and above).{% endif %}
+  Changes apply immediately.</p>
+  <form method="post" action="/settings/alerts/types">
+  <div class="scroll"><table class="alert-types">
+    {% for g in groups %}
+    <tr><th colspan="4" style="padding-top:16px;font-size:13px;color:var(--text)">{{ g }}
+      {% if g == "Background checks" %}
+        {% set tf = types|selectattr('check', 'equalto', 'transit')|first %}{% set rg = types|selectattr('check', 'equalto', 'registry')|first %}
+        <span style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:16px">
+          <label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" name="check_transit" value="1" {{ 'checked' if tf.check_on }}> run the transit filter check</label>
+          <label style="display:inline-flex;gap:4px;align-items:center;margin-left:12px"><input type="checkbox" name="check_registry" value="1" {{ 'checked' if rg.check_on }}> run the registry watch</label>
+          <span class="muted">(a check that's off produces no events)</span></span>
+      {% endif %}</th></tr>
+    <tr><th style="width:26%">Alert</th><th style="width:12%">Severity</th><th style="width:16%">Notify</th><th>Settings</th></tr>
+    {% for t in types if t.group == g %}
+    <tr>
+      <td><strong>{{ t.name }}</strong>
+        <div class="muted" style="font-size:12px;margin-top:2px">{{ t.desc }}</div>
+        <div style="font-size:11px;margin-top:2px">{% if t.fired %}<a href="/events?kind={{ t.kind }}">{{ t.fired }} in the last 30 days</a>{% else %}<span class="muted">none in the last 30 days</span>{% endif %}
+          {% if t.atlas and not atlas_on %} · <span class="badge b-warning">needs RIPE Atlas</span> <a href="/settings/atlas">set up</a>{% endif %}
+          {% if t.check == 'transit' and not t.check_on or t.check == 'registry' and not t.check_on %} · <span class="badge b-info">check off</span>{% endif %}</div></td>
+      <td>{% for sv in t.sev %}<span class="badge b-{{ sv }}">{{ sv }}</span> {% endfor %}</td>
+      <td><select name="mode_{{ t.kind }}" data-sevs="{{ t.sev|join(',') }}">
+        {% for m, label in t.modes %}<option value="{{ m }}" {{ 'selected' if m == t.mode }}>{{ label }}</option>{% endfor %}</select></td>
+      <td>{% for x in t.tuning %}
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px" title="{{ x.opts.help }}">{{ x.label }}
+          {% if x.kind == 'prefixes' %}<textarea name="t_{{ x.attr }}" rows="2" style="width:100%">{{ x.value|join('\n') if x.value is not string else x.value }}</textarea>
+          {% else %}<input name="t_{{ x.attr }}" value="{{ x.value }}" inputmode="decimal" style="width:90px"{% if x.opts.min is defined %} data-min="{{ x.opts.min }}"{% endif %}>{% endif %}
+          <span style="display:block;font-size:11px">{{ x.opts.help }}</span></label>
+        {% else %}<span class="muted" style="font-size:12px">{% if t.kind == 'upstream_missing' or t.kind == 'unexpected_upstream' %}Uses the expected upstreams under <a href="/settings/monitor">Monitored network</a>.{% elif t.kind == 'blip' %}Uses the outage thresholds above.{% elif t.check == 'registry' %}Uses the registry watch (interval above).{% else %}No settings.{% endif %}</span>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+    {% endfor %}
+  </table></div>
+  <div class="toolbar" style="margin:12px 0 0">
+    <button class="primary" type="submit">Save alert types</button>
+    <span class="muted" style="font-size:12px">Checks that run automatically when an alert fires (Route Views snapshots and probes, RIPE Atlas traceroutes) are under
+      <a href="/settings/advanced">Detection &amp; data sources</a> and <a href="/settings/atlas">RIPE Atlas</a>.</span>
+  </div>
+  </form>
+</div>
+
+<div class="panel" id="email">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Email {% if email.enabled %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-info">off</span>{% endif %}</h2>
+    <span class="muted" style="font-size:13px">Fill in for:</span>
+    <button type="button" onclick="preset('m365')">Microsoft 365</button>
+    <button type="button" onclick="preset('gmail')">Google Workspace</button>
+    <button type="button" onclick="preset('relay')">Internal relay (port 25)</button>
+  </div>
+  <form method="post" action="/settings/alerts/email" class="formgrid" autocomplete="off">
+    <label class="span2"><input type="checkbox" name="enabled" value="1" {{ 'checked' if email.enabled }}> Send alerts by email</label>
+    <label>SMTP server<input name="smtp_host" id="e-host" value="{{ email.smtp_host }}" placeholder="smtp.office365.com"></label>
+    <label>Port<input name="smtp_port" id="e-port" value="{{ email.smtp_port }}" inputmode="numeric"></label>
+    <label>Security
+      <select name="security" id="e-sec">
+        <option value="starttls" {{ 'selected' if email.security == 'starttls' }}>STARTTLS (usually port 587)</option>
+        <option value="ssl" {{ 'selected' if email.security == 'ssl' }}>SSL/TLS (usually port 465)</option>
+        <option value="none" {{ 'selected' if email.security == 'none' }}>None (internal relay, port 25)</option>
+      </select></label>
+    <label>Username<input name="username" value="{{ email.username }}" placeholder="leave empty if the server needs no login" autocomplete="off"></label>
+    <label>Password
+      <input type="password" name="password" placeholder="{{ 'saved, leave blank to keep it' if email.has_password else 'not set' }}" autocomplete="new-password">
+      {% if email.has_password %}<span style="font-size:12px"><input type="checkbox" name="clear_password" value="1"> remove the saved password</span>{% endif %}</label>
+    <label>From address<input name="sender" value="{{ email.from }}" placeholder="bgpcanary@example.com"></label>
+    <label class="span2">Recipients (comma or one per line)<textarea name="recipients" rows="2">{{ email.to|join(', ') }}</textarea></label>
+    <div class="span2 toolbar" style="margin:0">
+      <button class="primary" type="submit">Save email settings</button>
+    </div>
+  </form>
+  <form method="post" action="/settings/alerts/test" class="inline" style="margin-top:8px">
+    <input type="hidden" name="channel" value="email">
+    <button type="submit">Send test email</button> <span class="muted" style="font-size:12px">Uses the saved settings. Save first. The test is sent even if email is switched off.</span>
+  </form>
+  <details style="margin-top:10px"><summary class="muted">Tips</summary>
+    <ul class="muted" style="font-size:13px">
+      <li><strong>Microsoft 365:</strong> smtp.office365.com, port 587, STARTTLS. The mailbox needs <em>Authenticated SMTP</em> enabled (M365 admin center, then the user's Mail settings, then Manage email apps). Many tenants turn it off by default.</li>
+      <li><strong>Google Workspace:</strong> smtp.gmail.com, port 587, STARTTLS, with an <em>app password</em> rather than the account password.</li>
+      <li><strong>Internal relay:</strong> often the simplest option. Allow the VM's IP on the relay, use port 25 with security "None", and leave the username and password empty.</li>
+    </ul>
+  </details>
+</div>
+
+<div class="panel scroll" id="webhooks">
+  <h2>Webhooks (Slack, Teams, anything that accepts JSON)</h2>
+  <table>
+    <tr><th>On</th><th>Name</th><th>Format</th><th>URL</th><th></th></tr>
+    {% for h in hooks %}
+    <tr>
+      <form method="post" action="/settings/alerts/webhooks/{{ h.i }}/update" id="wh{{ h.i }}"></form>
+      <td><input form="wh{{ h.i }}" type="checkbox" name="enabled" value="1" {{ 'checked' if h.enabled }} title="Send alerts to this webhook"></td>
+      <td><input form="wh{{ h.i }}" name="name" value="{{ h.name }}" style="width:140px"></td>
+      <td><select form="wh{{ h.i }}" name="format"><option value="slack" {{ 'selected' if h.format == 'slack' }}>Slack</option><option value="json" {{ 'selected' if h.format == 'json' }}>JSON</option></select></td>
+      <td><span class="mono muted">{{ h.masked }}</span><br><input form="wh{{ h.i }}" name="url" placeholder="paste a new URL to replace it" style="width:280px" autocomplete="off"></td>
+      <td style="white-space:nowrap">
+        <button form="wh{{ h.i }}" type="submit">Save</button>
+        <form method="post" action="/settings/alerts/test" class="inline"><input type="hidden" name="channel" value="webhook:{{ h.i }}"><button type="submit">Test</button></form>
+        <form method="post" action="/settings/alerts/webhooks/{{ h.i }}/delete" class="inline" onsubmit="return confirm('Delete webhook {{ h.name or h.format }}?')"><button type="submit">Delete</button></form>
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">No webhooks yet.</td></tr>{% endfor %}
+  </table>
+  <h2 style="margin-top:18px">Add a webhook</h2>
+  <form method="post" action="/settings/alerts/webhooks/add" class="toolbar" autocomplete="off">
+    <input name="name" placeholder="Name, e.g. slack-noc" style="width:160px">
+    <select name="format"><option value="slack">Slack</option><option value="json">JSON (generic)</option></select>
+    <input name="url" placeholder="https://hooks.slack.com/services/..." required style="flex:1;min-width:280px">
+    <button class="primary" type="submit">Add</button>
+  </form>
+  <details><summary class="muted">How to get a Slack webhook URL</summary>
+    <ol class="muted" style="font-size:13px">
+      <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noopener">api.slack.com/apps</a> and choose <strong>Create New App</strong>, then <strong>From scratch</strong>. Name it (e.g. "bgpcanary") and pick your workspace.</li>
+      <li>Open <strong>Incoming Webhooks</strong>, switch it <strong>On</strong>, then click <strong>Add New Webhook to Workspace</strong>.</li>
+      <li>Pick the channel, click <strong>Allow</strong>, then copy the URL into the form above and click <strong>Test</strong>.</li>
+    </ol>
+    <p class="muted" style="font-size:13px">The <strong>JSON</strong> format posts <code>{phase, state, subject, text, link, event{…}}</code>. Use it for Teams (through a Power Automate "When a HTTP request is received" flow), PagerDuty-style receivers, or your own scripts.</p>
+  </details>
+</div>
+<script>
+// fill every Notify box: 2 = critical only, 1 = warning and up, 0 = everything
+function presetTypes(floor) {
+  const R = { info: 0, warning: 1, critical: 2 };
+  document.querySelectorAll('#types select[name^="mode_"]').forEach(sel => {
+    const sevs = sel.dataset.sevs.split(",").map(x => R[x]), have = v => [...sel.options].some(o => o.value === v);
+    const kind = sel.name.slice(5), fyi = ["transit_filter", "filter_sim", "irr_change", "asset_change"].includes(kind);
+    let v = "off";
+    if (fyi || sevs.every(x => x >= floor)) v = "on";
+    else if (sevs.some(x => x >= floor)) v = floor === 2 ? "critical" : "warning";
+    if (!have(v)) v = have("on") && sevs.some(x => x >= floor) ? "on" : "off";
+    sel.value = v;
+  });
+}
+function preset(k) {
+  const v = { m365: ["smtp.office365.com", 587, "starttls"], gmail: ["smtp.gmail.com", 587, "starttls"], relay: ["", 25, "none"] }[k];
+  if (v[0]) document.getElementById("e-host").value = v[0];
+  document.getElementById("e-port").value = v[1];
+  document.getElementById("e-sec").value = v[2];
+  if (k === "relay") document.getElementById("e-host").focus();
+}
+</script>
+{% endblock %}

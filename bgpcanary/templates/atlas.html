@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}RIPE Atlas · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>RIPE Atlas <span class="muted" style="font-weight:400;font-size:14px">· ping &amp; traceroute toward your space from probes in thousands of networks (for Route Views collectors, see <a href="/probes">Route Views</a>)</span></h1>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+{% if credits %}
+<div class="toolbar" style="margin-top:-8px">
+  {% if credits.error %}<span class="badge b-warning">credits unavailable</span> <span class="muted" style="font-size:13px">{{ credits.error }}</span>
+  {% else %}
+  <span class="badge {{ 'b-critical' if not credits.current_balance else 'b-ok' }}" style="font-size:13px">{{ "{:,}".format(credits.current_balance|int) }} Atlas credits</span>
+  <span class="muted" style="font-size:13px">earning {{ "{:,}".format((credits.estimated_daily_income or 0)|int) }}/day ·
+    Atlas estimates spending {{ "{:,}".format((credits.estimated_daily_expenditure or 0)|int) }}/day ·
+    bgpcanary has committed ~{{ "{:,}".format(committed) }} of its {{ "{:,}".format(credit_cap) }}/day cap
+    {% if not credits.current_balance %}· <strong style="color:var(--crit)">no credits, so no new measurements</strong> (<a href="/settings/atlas#probe">how to earn them</a>){% endif %}</span>
+  {% endif %}
+</div>
+{% endif %}
+{% if on and last_error %}<div class="msg err">Last Atlas error: {{ last_error }}</div>{% endif %}
+
+{% if not targets %}
+<div class="panel">
+  <h2>RIPE Atlas isn't set up</h2>
+  <p style="margin-top:0">This optional add-on uses <a href="https://atlas.ripe.net/" target="_blank" rel="noopener">RIPE Atlas</a> probes in thousands of networks to check that
+  <em>traffic</em> actually reaches you, not just that routes exist, and to show latency and packet loss by the carrier it arrives through.</p>
+  {% if is_admin %}
+  <div class="actions">
+    <a class="btn" href="/settings/atlas">Set up RIPE Atlas</a><span class="muted">Needs an Atlas API key and credits.</span>
+    <form method="post" action="/atlas/demo"><button type="submit">Load sample data</button></form>
+    <span class="muted">Try the views with RIPE's public measurements toward k.root-servers.net. No key or credits needed; takes ~20 seconds.</span>
+  </div>
+  {% else %}<p class="muted">An admin can turn it on under Settings › RIPE Atlas.</p>{% endif %}
+</div>
+{% else %}
+
+<div class="toolbar">
+  <label>Target
+    <select id="target" onchange="go({target:this.value, msm:'', compare:''})">
+      {% for t in targets %}<option value="{{ t.target }}" {{ 'selected' if t.target == target }}>{{ t.target }}{{ ' — ' ~ t.label if t.label }}{{ ' (sample: k.root-servers.net)' if t.demo else (' · baseline' if t.baseline else ' · one-off') }}</option>{% endfor %}
+    </select></label>
+  {% if not msm and not start %}
+  {% for h, l in [(6, '6 h'), (24, '24 h'), (72, '3 d'), (168, '7 d')] %}
+    <button class="{{ 'on' if hours == h }}" onclick="go({hours:{{ h }}})">{{ l }}</button>
+  {% endfor %}
+  {% endif %}
+  <label>Group by
+    <select id="groupby">
+      <option value="carrier">Carrier into the upstream</option>
+      <option value="up">Upstream into the target</option>
+      <option value="region">Probe region</option>
+      <option value="probe_asn">Probe's network</option>
+    </select></label>
+  {% if is_admin %}<span style="flex:1"></span>
+    {% if on %}<form method="post" action="/atlas/trace" class="inline" onsubmit="return confirm('Run a one-off traceroute to your target from about {{ outage_probes }} probes now? It uses about {{ outage_probes * 60 }} credits.')"><button type="submit">Run traceroute now</button></form>{% endif %}
+    {% if targets|selectattr('demo')|list %}<form method="post" action="/atlas/demo" class="inline"><input type="hidden" name="action" value="clear"><button type="submit">Remove sample data</button></form>{% endif %}
+    <a class="btn" href="/settings/atlas">Atlas settings</a>{% endif %}
+</div>
+{% set base = targets|selectattr('baseline')|list %}
+{% if base|length > 1 %}
+{% set all_list = base|map(attribute='target')|join(',') %}
+<div class="panel" style="padding:10px 16px;margin-bottom:16px">
+  <div class="toolbar" style="margin:0">
+    <strong style="font-size:13px">Compare targets</strong>
+    <button class="{{ 'on' if compare|join(',') == all_list }}" onclick="go({compare:'{{ all_list }}', target:'', msm:'', start:'', end:''})">All ({{ base|length }})</button>
+    {% for g in groups %}{% set gl = base|selectattr('group', 'equalto', g)|map(attribute='target')|join(',') %}
+    <button class="{{ 'on' if compare|join(',') == gl }}" onclick="go({compare:'{{ gl }}', target:'', msm:'', start:'', end:''})">{{ g }}</button>{% endfor %}
+    <span class="muted" style="font-size:13px">or tick:</span>
+    {% for t in base %}<label style="display:inline-flex;gap:4px;align-items:center;color:var(--text)"><input type="checkbox" class="cmp" value="{{ t.target }}" {{ 'checked' if t.target in compare }}>
+      {{ t.label or t.target }}{% if t.group %} <span class="muted">[{{ t.group }}]</span>{% endif %}</label>{% endfor %}
+    <button onclick="const v=[...document.querySelectorAll('.cmp:checked')].map(x=>x.value); if (v.length < 2) alert('Tick at least two targets'); else go({compare:v.join(','), target:'', msm:'', start:'', end:''})">Compare ticked</button>
+    {% if compare %}<button onclick="go({compare:'', target:{{ compare[0]|tojson|forceescape }}})">Back to one target</button>{% endif %}
+  </div>
+  {% if not groups %}<p class="muted" style="font-size:12px;margin:6px 0 0">Tip: put targets in groups (e.g. one per border router) by adding <code>[border-1]</code> after their label in <a href="/settings/atlas">Atlas settings</a>; each group gets a button here.</p>{% endif %}
+</div>
+{% endif %}
+{% if is_admin and on %}
+<details class="panel" style="margin-bottom:16px" {{ 'open' if not targets|selectattr('baseline')|list }}>
+  <summary><strong>Test any address</strong> <span class="muted" style="font-size:13px">· one-off ping / traceroute from Atlas probes toward any IP or host name</span></summary>
+  <form method="post" action="/atlas/adhoc" class="toolbar" style="margin:12px 0 0">
+    <label>Target <input name="target" required placeholder="203.0.113.10 or www.example.com" style="width:240px"></label>
+    <label>Test <select name="kind"><option value="both">ping + traceroute</option><option value="ping">ping</option><option value="traceroute">traceroute</option></select></label>
+    <label>From <select name="source" onchange="this.form.value.style.display=this.value=='world'?'none':'';this.form.value.placeholder=this.value=='asn'?'ASN, e.g. 3356':'country, e.g. US'">
+      <option value="world">probes worldwide</option><option value="asn">probes inside a network</option><option value="country">probes in a country</option></select></label>
+    <input name="value" style="display:none;width:150px">
+    <label>Probes <input name="probes" value="20" inputmode="numeric" style="width:60px"></label>
+    <button class="primary" type="submit">Run</button>
+  </form>
+  <p class="muted" style="font-size:12px;margin:8px 0 0">Costs about 6 credits per probe for a ping and 60 for a traceroute (20 probes, both: ~1,300). Ping and traceroute use the same probes,
+  so latency can be grouped by carrier. Results show up in the views below under that target.</p>
+</details>
+{% endif %}
+{% if msm %}<div class="msg">Showing one-off measurement <a href="https://atlas.ripe.net/measurements/{{ msm.id }}/" target="_blank" rel="noopener">#{{ msm.id }}</a> ({{ msm.purpose }}{% if msm.event_id %}, <a href="/events/{{ msm.event_id }}">event {{ msm.event_id }}</a>{% endif %}), started <time data-ts="{{ msm.created }}"></time>. <a href="/atlas?target={{ target|urlencode }}">Back to the baseline</a></div>{% endif %}
+
+{% if compare %}
+<div class="panel">
+  <h2>Targets side by side</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Every baseline target is measured from the same probes, so differences between rows come from the path into each address,
+  not from different vantage points. Click a target to open it on its own.</p>
+  <div class="scroll"><table id="cmp-score"></table></div>
+</div>
+<div class="grid g2" style="margin-top:16px">
+  <div class="panel"><h2>Latency</h2><p class="muted" style="margin-top:0;font-size:13px">Median round-trip time across all probes, one line per target.</p>
+    <div class="chart" style="height:260px"><canvas id="cmp-rtt"></canvas></div></div>
+  <div class="panel"><h2>Packet loss</h2><p class="muted" style="margin-top:0;font-size:13px">Share of ping packets lost, one line per target.</p>
+    <div class="chart" style="height:260px"><canvas id="cmp-loss"></canvas></div></div>
+</div>
+<div class="panel">
+  <h2>Carrier × target</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Rows follow <em>Group by</em> above (by default the carrier traffic enters through). Each cell: median latency and packet loss for that group's probes toward that target,
+  with how many of its latest traceroutes arrived. Red = loss or failed traceroutes; compare across a row to see whether a carrier is bad into one target or into all of them.</p>
+  <div class="scroll"><table id="cmp-matrix"></table></div>
+</div>
+<div class="panel">
+  <h2>Traceroute maps</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Latest traceroute per probe for each target (same layout as the single-target map; hover for details). Colors are the same network in every map.</p>
+  <div id="cmp-maps" class="grid g2"></div>
+</div>
+{% else %}
+<div class="grid g4" id="stats"></div>
+
+<div class="panel" style="margin-top:16px">
+  <div class="toolbar" style="margin-bottom:4px">
+    <h2 style="margin:0;flex:1">Where traceroutes go</h2>
+    <span class="muted" style="font-size:13px">Latest traceroute per probe. Each spoke is one probe; it starts at the outside and steps inward one hop at a time toward
+    the target in the middle. Dots are colored by network. A red ✕ marks where a path stopped. Click a network in the legend to highlight it.</span>
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+    <div class="rp-wrap" style="flex:1 1 760px;min-width:280px"><canvas id="radial"></canvas><div class="rp-tip" id="rtip"></div></div>
+    <div id="legend" style="flex:1;min-width:240px;font-size:13px"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Carrier scorecard</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">One row per group. <strong>Reached</strong> = share of traceroutes that got to the target in this window. Latency is the round-trip time of
+  pings from the group's probes (median and 90th percentile). <strong>Loss</strong> = ping packets that didn't come back. Click a row to highlight its probes in the map above.</p>
+  <div class="scroll"><table id="score"></table></div>
+</div>
+
+<div class="panel">
+  <h2>Latency &amp; loss by group</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">Line = median round-trip time across the group's probes; band = spread between the group's fast and slow probes (10th–90th percentile once a group has 5 or more); red bars = packet loss (right axis). Same time scale on every chart, so a problem that only affects one carrier stands out.</p>
+  <div id="multiples" class="grid g2"></div>
+</div>
+
+<div class="grid g2" style="margin-top:16px">
+  <div class="panel">
+    <h2>Where latency is added</h2>
+    <p class="muted" style="margin-top:0;font-size:13px">Median jump in round-trip time when a path crosses from one network into the next (latest traceroutes, at least 2 probes). Large jumps are usually distance (an ocean); a jump that's new or uneven between carriers points at congestion.</p>
+    <div class="scroll"><table id="jumps"></table></div>
+  </div>
+  <div class="panel">
+    <h2>Where failed traceroutes stop</h2>
+    <p class="muted" style="margin-top:0;font-size:13px">For probes whose latest traceroute didn't reach the target: the last network that answered. Many stops in one network suggest that's where traffic toward you is being dropped.</p>
+    <div class="scroll"><table id="stops"></table></div>
+  </div>
+</div>
+{% endif %}
+
+{% if recent %}
+<div class="panel">
+  <h2>Measurements</h2>
+  <div class="scroll"><table>
+    <tr><th>ID</th><th>Type</th><th>Purpose</th><th>Target</th><th>Probes</th><th>Started</th><th>Status</th><th></th></tr>
+    {% for m in recent %}
+    <tr><td><a href="https://atlas.ripe.net/measurements/{{ m.id }}/" target="_blank" rel="noopener">{{ m.id }}</a></td><td>{{ m.kind }}</td>
+      <td>{{ m.purpose }}{% if m.event_id %} · <a href="/events/{{ m.event_id }}">{{ m.title or ('event ' ~ m.event_id) }}</a>{% endif %}</td>
+      <td class="mono">{{ m.target }}</td><td>{{ m.probes }}</td><td><time data-ts="{{ m.created }}"></time></td>
+      <td>{% if m.interval %}{% if m.stopped %}stopped{% else %}every {{ (m.interval / 60)|int }} min{% endif %}{% else %}one-off{% endif %}</td>
+      <td>{% if not m.interval and m.kind == 'traceroute' %}<a href="/atlas?target={{ m.target|urlencode }}&msm={{ m.id }}">view</a>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+<script src="/static/atlas.js"></script>
+<script>
+function go(o) {
+  const u = new URL(location.href);
+  for (const [k, v] of Object.entries(o)) { if (v === "" || v == null) u.searchParams.delete(k); else u.searchParams.set(k, v); }
+  u.searchParams.delete("msg"); u.searchParams.delete("err");
+  location.href = u;
+}
+initAtlas({
+  compare: {{ compare|tojson }}, target: {{ target|tojson }}, hours: {{ hours|tojson }}, msm: {{ (msm.id if msm else none)|tojson }},
+  start: {{ (msm.created - 300 if msm else start)|tojson }}, end: {{ (msm.created + 3600 if msm else end)|tojson }}
+});
+</script>
+{% endif %}
+{% endblock %}

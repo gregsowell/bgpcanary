@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Users · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>Users</h1>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+<div class="grid g2">
+  <div class="panel scroll">
+    <h2>Accounts</h2>
+    <table>
+      <tr><th>User</th><th>Role</th><th>Change role</th><th>Reset password</th><th></th></tr>
+      {% for u in users %}
+      <tr>
+        <td><strong>{{ u.username }}</strong>{% if u.username == me %} <span class="muted">(you)</span>{% endif %}
+          {% if u.must_change %}<br><span class="badge b-info">must change password</span>{% endif %}</td>
+        <td><span class="badge {{ 'b-warning' if u.role == 'admin' else 'b-info' }}">{{ u.role }}</span></td>
+        <td>
+          <form method="post" action="/users/{{ u.username|urlencode }}/role" class="inline">
+            <select name="role" onchange="this.form.submit()">
+              <option value="admin" {{ 'selected' if u.role == 'admin' }}>admin</option>
+              <option value="viewer" {{ 'selected' if u.role == 'viewer' }}>viewer</option>
+            </select>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="/users/{{ u.username|urlencode }}/reset" class="inline">
+            <input type="password" name="password" placeholder="New password" minlength="{{ min_pw }}" required autocomplete="new-password" style="width:140px">
+            <label title="Ask for a new password at next login"><input type="checkbox" name="must_change" value="1" checked> force change</label>
+            <button type="submit">Reset</button>
+          </form>
+        </td>
+        <td>{% if u.username != me %}
+          <form method="post" action="/users/{{ u.username|urlencode }}/delete" class="inline" onsubmit="return confirm('Delete {{ u.username }}? This cannot be undone.')">
+            <button type="submit">Delete</button>
+          </form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="panel">
+    <h2>Add a user</h2>
+    <form method="post" action="/users/add" class="grid" style="max-width:340px;gap:8px">
+      <input name="username" placeholder="Username" required pattern="[A-Za-z0-9._@\-]{2,64}" autocomplete="off">
+      <input type="password" name="password" placeholder="Initial password ({{ min_pw }}+ characters)" minlength="{{ min_pw }}" required autocomplete="new-password">
+      <select name="role">
+        <option value="viewer" selected>viewer: read-only</option>
+        <option value="admin">admin: full access</option>
+      </select>
+      <label><input type="checkbox" name="must_change" value="1" checked> Make them choose a new password at first login</label>
+      <button class="primary" type="submit">Add user</button>
+    </form>
+    <h2 style="margin-top:20px">Roles</h2>
+    <dl class="kv">
+      <dt><span class="badge b-info">viewer</span></dt><dd>Sees everything (dashboard, events, paths, updates, registry, probes, settings) and can export GIFs and change their own password. Can't run probes, start checks, change toggles, send test alerts or manage users.</dd>
+      <dt><span class="badge b-warning">admin</span></dt><dd>Everything, including this page.</dd>
+    </dl>
+    <p class="muted" style="font-size:12px">You can also manage users from the VM's command line: <code>sudo bgpcanary-admin useradd NAME --role viewer</code>, <code>users</code>, <code>userdel NAME</code>.</p>
+  </div>
+</div>
+{% endblock %}

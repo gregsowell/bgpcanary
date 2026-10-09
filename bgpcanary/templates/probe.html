@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ p.kind }} {{ p.target }} · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>{{ p.kind|capitalize }} {{ p.target }} from {{ p.server }}</h1>
+<div class="panel">
+  <dl class="kv">
+    <dt>Time</dt><dd><time data-ts="{{ p.ts }}" data-sec="1"></time></dd>
+    <dt>Trigger</dt><dd>{{ p.trigger }}{% if p.event_id %} · <a href="/events/{{ p.event_id }}">event {{ p.event_id }}</a>{% endif %}</dd>
+    {% if p.kind == 'ping' %}<dt>Success</dt><dd>{{ '%.0f'|format(p.success_pct or 0) }}%{% if p.rtt_avg %} · avg {{ '%.0f'|format(p.rtt_avg) }} ms{% endif %}</dd>
+    {% else %}<dt>Result</dt><dd>{% if p.reached %}<span class="badge b-ok">reached the target</span>
+      {% elif p.ping_ok %}<span class="badge b-ok">target answers ping</span> <span class="muted">path hidden after the last responding hop: the routers beyond it don't answer
+        traceroute, and bgpcanary stops after 4 silent hops to save Route Views' telnet budget</span>
+      {% else %}<span class="badge b-warning">did not reach the target</span>{% endif %}</dd>
+      <dt>Last responding hop</dt><dd>{{ p.last_hop or '—' }}{% if p.last_hop_asn %} (AS{{ p.last_hop_asn }}{{ ' ' ~ names.get(p.last_hop_asn) if names.get(p.last_hop_asn) }}){% endif %}</dd>{% endif %}
+    {% if p.error %}<dt>Error</dt><dd style="color:var(--crit)">{{ p.error }}</dd>{% endif %}
+  </dl>
+</div>
+<div class="panel"><pre>{{ p.output }}</pre></div>
+{% endblock %}

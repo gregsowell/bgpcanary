@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Detection & data sources · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1><a href="/settings" style="color:var(--muted)">Settings</a> / Detection &amp; data sources</h1>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+<p class="muted">Saving restarts the service (about 10 seconds), and any monitoring gap is filled in later from RIPE's archive. Settings marked <span class="badge b-info">changed</span> differ from the config-file default shown beneath them.</p>
+<form method="post" action="/settings/advanced" autocomplete="off">
+  {% for sec, items in sections.items() %}
+  <div class="panel">
+    <h2>{{ sec }}</h2>
+    <div class="formgrid">
+      {% for s in items %}
+      <label class="{{ 'span2' if s.kind in ('prefixes', 'hosts') }}">
+        <span>{{ s.label }} {% if s.changed %}<span class="badge b-info">changed</span>{% endif %}</span>
+        {% if s.kind == 'bool' %}
+          <span style="color:var(--text)"><input type="checkbox" name="{{ s.attr }}" value="1" {{ 'checked' if s.value }}> enabled</span>
+        {% elif s.kind == 'choice' %}
+          <select name="{{ s.attr }}">{% for c in s.opts.choices %}<option value="{{ c }}" {{ 'selected' if c == s.value }}>{{ c }}</option>{% endfor %}</select>
+        {% elif s.kind in ('prefixes', 'hosts') %}
+          <textarea name="{{ s.attr }}" rows="{{ [s.value|length, 2]|max + 1 if s.kind == 'hosts' else 2 }}">{{ s.value|join('\n') }}</textarea>
+        {% else %}
+          <input name="{{ s.attr }}" value="{{ s.value }}" inputmode="decimal" {% if s.opts.min is defined %}data-min="{{ s.opts.min }}"{% endif %}>
+        {% endif %}
+        {% if s.opts.pct_of_baseline and baselines %}
+        <span class="pct-example" data-attr="{{ s.attr }}" style="font-size:13px;color:var(--text)"></span>
+        {% endif %}
+        <span style="font-size:12px">{{ s.opts.help }}{% if s.changed %} Config-file default: <code>{{ s.default|join(', ') if s.kind in ('prefixes', 'hosts') else s.default }}</code>.{% endif %}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="toolbar">
+    <button class="primary" type="submit">Save and restart monitoring</button>
+  </div>
+</form>
+{% if from_db %}
+<form method="post" action="/settings/advanced/reset" onsubmit="return confirm('Reset every setting on this page to the config-file defaults and restart?')">
+  <button type="submit">Reset this page to config-file defaults</button>
+</form>
+{% endif %}
+<script>
+// Show what a % threshold means in RIS peers for each prefix, using its current normal (24 h baseline).
+(function () {
+  const baselines = {{ baselines|tojson }};
+  const words = { outage_threshold_pct: "outage when fewer than", recover_threshold_pct: "recovered at" };
+  document.querySelectorAll(".pct-example").forEach(el => {
+    const input = document.querySelector(`input[name="${el.dataset.attr}"]`);
+    const draw = () => {
+      const pct = parseFloat(input.value);
+      if (!(pct > 0)) { el.textContent = ""; return; }
+      el.textContent = Object.entries(baselines).map(([p, b]) =>
+        `${p}: ${words[el.dataset.attr]} ${Math.round(b * pct / 100)} of ~${Math.round(b)} peers` +
+        (el.dataset.attr === "outage_threshold_pct" ? ` (a ${Math.round(100 - pct)}% drop)` : "")).join(" · ");
+    };
+    input.addEventListener("input", draw);
+    draw();
+  });
+})();
+</script>
+<p class="muted" style="font-size:12px">The only settings left in <code>/etc/bgpcanary/config.toml</code> are the ones the service needs before it can start: the database path, listen address and port, and session secret key.</p>
+{% endblock %}

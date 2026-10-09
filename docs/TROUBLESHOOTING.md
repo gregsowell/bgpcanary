@@ -1,0 +1,72 @@
+# Troubleshooting
+
+Start with the log. It says what bgpcanary is doing and why something failed:
+
+```bash
+sudo journalctl -u bgpcanary -n 100        # last 100 lines
+sudo journalctl -u bgpcanary -f            # follow live
+systemctl status bgpcanary nginx
+curl -s http://127.0.0.1:8080/healthz      # {"ok": true, "version": ...} when the app is up
+```
+
+## The web page doesn't load
+
+- **"502 Bad Gateway":** nginx is up but the app isn't. Check `systemctl status bgpcanary` and the log.
+- **Nothing at all / timeout:**
+  - check the firewall: `sudo firewall-cmd --list-services` should include http and https;
+  - check that DNS points at the server.
+- **Certificate warning:** expected with the self-signed certificate. See [INSTALL.md](INSTALL.md#using-a-real-certificate).
+
+## I can't log in
+
+- **Forgot the admin password:** `sudo bgpcanary-admin useradd admin --must-change` sets a new one.
+- **"Too many attempts":** logins are throttled after repeated failures. Wait a few minutes.
+
+## No data / "RIS Live disconnected"
+
+- The server needs outbound HTTPS to `ris-live.ripe.net`. Test it:
+
+  ```bash
+  curl -sI https://ris-live.ripe.net/v1/stream/ | head -1
+  ```
+
+- Short disconnects are normal. bgpcanary reconnects on its own and fills the gap from RIPE's archive a few hours later.
+
+## Route Views shows errors or "rate-limited"
+
+- Port 23 (telnet) outbound to `*.routeviews.org` must be allowed.
+- If a collector is rate-limited, bgpcanary pauses it for 24 h by itself. Don't lower the polling intervals below the defaults.
+- A traceroute that ends early with "target answers ping" is fine: routers near your network just don't answer traceroute.
+
+## Alerts don't arrive
+
+- Use **Settings › Alert channels › Send test email / Test** and read the error shown.
+- Check that the alert type is switched on under **What to alert on**.
+- Check the event page: its **Alerts sent** box shows whether and where each alert went.
+
+**Email problems:**
+- *Microsoft 365:* the mailbox needs Authenticated SMTP enabled.
+- *Gmail / Google Workspace:* use an app password.
+- *Your own relay:* it must allow this server's IP.
+- *Delivery:* the receiving side may reject mail from a server without reverse DNS, SPF or DKIM.
+
+## RIPE Atlas
+
+- **Test connection** on Settings › RIPE Atlas checks the key, each permission, your credits and a real ping.
+- "Not enough credit" means your balance is 0 or your daily cap is too low. The settings page shows how many credits your choices need.
+- New periodic measurements take up to one interval (e.g. 30 min) to produce their first results.
+
+## The database is getting big
+
+Raw BGP updates are the bulk of the database. Lower **Keep raw BGP updates for (days)** under Settings ›
+Detection & data sources. Visibility history and events are kept regardless.
+
+## Something else
+
+[Open an issue](https://github.com/gregsowell/bgpcanary/issues) with:
+- your bgpcanary version (bottom of every page);
+- your OS version;
+- what you expected and what happened;
+- the relevant log lines.
+
+**Remove passwords, API keys and anything you don't want public first.**

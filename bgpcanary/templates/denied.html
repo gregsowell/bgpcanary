@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Admin only · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<div class="panel login">
+  <h1>Admin only</h1>
+  <p>Your account (<strong>{{ user }}</strong>) has the <span class="badge b-info">viewer</span> role, which is read-only. Ask an admin if you need to make changes.</p>
+  <p><a href="javascript:history.back()">← Back</a> · <a href="/">Dashboard</a></p>
+</div>
+{% endblock %}

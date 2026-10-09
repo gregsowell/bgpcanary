@@ -1,0 +1,110 @@
+{% macro asn(a) %}{% if a %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a>{% if evd.names.get(a) %} <span class="muted">{{ evd.names.get(a).split(' ')[0] }}</span>{% endif %}{% else %}<span class="muted">unknown</span>{% endif %}{% endmacro %}
+<div class="panel" id="evidence">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Troubleshooting evidence</h2>
+    <a class="btn" href="/events/{{ ev.id }}/report.txt" target="_blank" rel="noopener">Open evidence report (.txt)</a>
+    <a class="btn" href="/events/{{ ev.id }}/report.txt" download="bgpcanary-event-{{ ev.id }}.txt">Download</a>
+    <button type="button" onclick="fetch('/events/{{ ev.id }}/report.txt').then(r => r.text()).then(t => navigator.clipboard.writeText(t)).then(() => this.textContent = 'Copied ✓')">Copy report</button>
+  </div>
+  <p class="muted" style="margin-top:0;font-size:13px">Everything bgpcanary recorded from <time data-ts="{{ evd.window[0] }}"></time> to <time data-ts="{{ evd.window[1] }}"></time> (30 min either side):
+  BGP from RIPE RIS, Route Views collectors, and RIPE Atlas probes. The report has the same content as plain text, with UTC times and raw paths/outputs, ready to attach to a ticket with a provider.</p>
+
+  <h3 style="font-size:14px;margin:14px 0 6px">Timeline</h3>
+  <div class="scroll"><table>
+    {% for ts, k, text in evd.timeline %}
+    <tr style="{{ 'background:var(--crit-bg)' if k == 'atlas-bad' else ('background:var(--info-bg)' if k == 'event' else '') }}">
+      <td style="white-space:nowrap;width:1%"><time data-ts="{{ ts }}" data-sec="1"></time></td>
+      <td style="width:1%"><span class="badge b-{{ 'critical' if k == 'atlas-bad' else ('warning' if k == 'event' else 'info') }}">{{ {'event': 'event', 'related': 'event', 'atlas': 'Atlas', 'atlas-bad': 'Atlas', 'rv': 'Route Views', 'bgp': 'BGP'}[k] }}</span></td>
+      <td>{{ text }}</td></tr>
+    {% else %}<tr><td class="muted">Nothing recorded in this window.</td></tr>{% endfor %}
+  </table></div>
+  {% if evd.already_open %}<p class="muted" style="font-size:13px;margin:6px 0 0">Already open when this started: {% for r in evd.already_open %}<a href="/events/{{ r.id }}">{{ r.title[:70] }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+  {% if evd.related %}<p style="font-size:13px;margin:6px 0 0">Related events: {% for r in evd.related %}<a href="/events/{{ r.id }}"><span class="badge b-{{ r.severity }}">{{ r.kind }}</span> {{ r.title[:70] }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+</div>
+
+{% if evd.mix %}
+<div class="panel">
+  <h2>BGP: who carried {{ evd.prefix }}</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">RIS peers reaching your prefix through each upstream, just before the event, at the moment the mix changed most, and after it.</p>
+  <div class="scroll"><table>
+    <tr><th>Upstream</th>{% for m in evd.mix.moments %}<th class="right">{{ m.label }}<br><span style="font-weight:400;text-transform:none"><time data-ts="{{ m.ts }}" data-sec="1"></time></span></th>{% endfor %}</tr>
+    {% for u in evd.mix.upstreams %}
+    {% set b = evd.mix.moments[0].mix.get(u, 0) %}
+    <tr><td>{{ asn(u) }}</td>{% for m in evd.mix.moments %}{% set v = m.mix.get(u, 0) %}
+      <td class="right" style="{{ 'color:var(--crit);font-weight:600' if not loop.first and b and v < b * 0.5 else ('color:var(--ok);font-weight:600' if not loop.first and v > b * 1.5 + 5 else '') }}">{{ v }}</td>{% endfor %}</tr>
+    {% endfor %}
+    <tr><td class="muted">Total RIS peers seeing the prefix</td>{% for m in evd.mix.moments %}<td class="right muted">{{ m.visible }}</td>{% endfor %}</tr>
+  </table></div>
+  {% for snap in evd.paths %}
+  <details {{ 'open' if loop.index == 2 }} style="margin-top:10px"><summary><strong>AS paths {{ snap.label }}</strong> <span class="muted">· <time data-ts="{{ snap.ts }}" data-sec="1"></time> · prepends collapsed (Route Views below shows exact paths)</span></summary>
+    {% for g in snap.groups %}
+    <div style="margin:8px 0 2px;font-size:13px">via {{ asn(g.upstream) }} · {{ g.peers }} peers</div>
+    <pre style="margin:0">{% for p, n in g.paths %}{{ '%4d' % n }} ×  {{ p }}
+{% endfor %}{% if g.more %}        (+{{ g.more }} more distinct paths){% endif %}</pre>
+    {% else %}<p class="muted">No paths recorded at this moment.</p>{% endfor %}
+  </details>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Route Views</h2>
+  {% for run in evd.rv_runs %}
+  <details {{ 'open' if loop.index <= 2 }} style="margin-top:8px"><summary><strong>show ip bgp · {{ run.label }}</strong> <span class="muted">· <time data-ts="{{ run.ts }}" data-sec="1"></time></span></summary>
+    {% for x in run.snaps %}
+    <div class="toolbar" style="margin:10px 0 4px"><strong><a href="/snapshots/{{ x.id }}">{{ x.server }}</a></strong>{% if cfg.prefixes|length > 1 %} <span class="mono">{{ x.prefix }}</span>{% endif %}
+      <span class="muted" style="font-size:13px">{{ x.n_paths or 0 }} paths</span>{% if x.error %} <span class="badge b-critical">error</span> <span class="muted" style="font-size:13px">{{ x.error }}</span>{% endif %}</div>
+    {% if x.raw and x.raw.strip() %}<pre style="margin:0">{% for l in x.raw.strip().splitlines() %}{{ l.strip() }}
+{% endfor %}</pre>{% endif %}
+    {% endfor %}
+  </details>
+  {% else %}<p class="muted">No Route Views snapshots in this window.</p>{% endfor %}
+  {% if evd.rv_probes %}
+  <h3 style="font-size:14px;margin:16px 0 6px">Ping &amp; traceroute from Route Views</h3>
+  {% for p in evd.rv_probes %}
+  <details style="margin-top:6px"><summary><time data-ts="{{ p.ts }}" data-sec="1"></time> · <a href="/probes/{{ p.id }}">{{ p.kind }} {{ p.target }}</a> from {{ p.server }} ·
+    {% if p.error %}<span class="badge b-critical">error</span> {{ p.error }}{% elif p.kind == 'ping' %}{{ '%.0f'|format(p.success_pct or 0) }}% replies{% if p.rtt_avg %}, {{ '%.0f'|format(p.rtt_avg) }} ms{% endif %}{% elif p.reached %}<span class="badge b-ok">reached</span>{% elif p.ping_ok %}target answers ping; path hidden after {{ p.last_hop or '?' }}{% if p.last_hop_asn %} ({{ asn(p.last_hop_asn) }}){% endif %}{% else %}stopped at {{ p.last_hop or '?' }}{% if p.last_hop_asn %} ({{ asn(p.last_hop_asn) }}){% endif %}{% endif %}
+    <span class="muted">({{ p.trigger }})</span></summary>
+    <pre style="margin:6px 0 0">{{ (p.output or '').strip() }}</pre></details>
+  {% endfor %}
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="toolbar"><h2 style="margin:0;flex:1">RIPE Atlas</h2>
+    {% if atlas_target %}<a class="btn" href="/atlas?target={{ atlas_target|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">Latency &amp; loss by carrier in this window</a>{% endif %}
+    {% if compare_all and ',' in compare_all %}<a class="btn" href="/atlas?compare={{ compare_all|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">Compare all targets</a>{% endif %}</div>
+  {% if evd.atlas_rounds %}
+  <h3 style="font-size:14px;margin:6px 0">Ping rounds to your addresses</h3>
+  <div class="scroll"><table>
+    <tr><th>Time</th><th>Target</th><th>Probes replying</th><th>Packet loss</th><th>Median RTT</th><th>Measurement</th></tr>
+    {% for r in evd.atlas_rounds %}
+    {% set bad = r.no_reply * 2 >= r.probes %}
+    <tr style="{{ 'background:var(--crit-bg)' if bad }}"><td><time data-ts="{{ r.ts }}" data-sec="1"></time></td>
+      <td class="mono">{{ r.target }}{% if r.label %} <span class="muted">{{ r.label }}</span>{% endif %}</td>
+      <td style="{{ 'color:var(--crit);font-weight:600' if bad }}">{{ r.probes - r.no_reply }} / {{ r.probes }}</td>
+      <td>{{ '%.0f'|format(r.loss) ~ '%' if r.loss is not none else '–' }}</td><td>{{ '%.0f ms'|format(r.median_rtt) if r.median_rtt else '–' }}</td>
+      <td><a href="https://atlas.ripe.net/measurements/{{ r.msm }}/" target="_blank" rel="noopener">#{{ r.msm }}</a> <span class="muted">{{ r.purpose }}</span></td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+  {% for t in evd.atlas_traces %}
+  <h3 style="font-size:14px;margin:16px 0 6px">Traceroute ({{ t.purpose }}) to {{ t.target }}{% if t.label %} <span class="muted" style="font-weight:400">{{ t.label }}</span>{% endif %} ·
+    <time data-ts="{{ t.ts }}" data-sec="1"></time> · <span style="{{ 'color:var(--crit)' if t.reached < t.total * 0.9 }}">{{ t.reached }}/{{ t.total }} reached</span>
+    · <a href="/atlas?target={{ t.target|urlencode }}&msm={{ t.msm }}" style="font-weight:400">map</a> · <a href="https://atlas.ripe.net/measurements/{{ t.msm }}/" target="_blank" rel="noopener" style="font-weight:400">#{{ t.msm }}</a></h3>
+  <div class="grid g2">
+    <div class="scroll"><table>
+      <tr><th>Carrier → upstream</th><th class="right">Reached</th></tr>
+      {% for k, v in t.groups %}<tr><td>{{ asn(k[0]) }} → {{ asn(k[1]) }}</td><td class="right" style="{{ 'color:var(--crit);font-weight:600' if v[1] < v[0] }}">{{ v[1] }} / {{ v[0] }}</td></tr>{% endfor %}
+    </table></div>
+    <div>{% if t.stops %}<table><tr><th>Failed traceroutes stopped in</th><th class="right">Probes</th></tr>
+      {% for a, n in t.stops %}<tr><td>{{ asn(a) }}</td><td class="right">{{ n }}</td></tr>{% endfor %}</table>{% else %}<p class="muted">Every traceroute reached the target.</p>{% endif %}</div>
+  </div>
+  {% for f in t.failed %}
+  <details style="margin-top:6px"><summary>Probe {{ f.prb }} ({{ f.probe.cc or '?' }}, {{ asn(f.probe.asn) }}): hop by hop</summary>
+    <pre style="margin:6px 0 0">{% for h in f.hops %}{{ '%3s'|format(h.h) }}  {{ '%-40s'|format(h.ip or '*') }} {{ '%-12s'|format('AS' ~ h.asn if h.asn else '') }} {{ '%.1f ms'|format(h.rtt) if h.rtt is not none else '' }}
+{% endfor %}</pre></details>
+  {% endfor %}
+  {% endfor %}
+  {% if not evd.atlas_rounds and not evd.atlas_traces %}<p class="muted">No RIPE Atlas results in this window.{% if not atlas_target %} RIPE Atlas checks run once it's set up under Settings › RIPE Atlas.{% endif %}</p>{% endif %}
+</div>

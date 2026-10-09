@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}RIPE Atlas · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1><a href="/settings" style="color:var(--muted)">Settings</a> / RIPE Atlas</h1>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+{% if last_error %}<div class="msg err">Last Atlas error: {{ last_error }}</div>{% endif %}
+
+<div class="panel">
+  <h2>What this adds</h2>
+  <p style="margin-top:0">BGP data tells you <em>whether</em> networks have a route to you. <a href="https://atlas.ripe.net/" target="_blank" rel="noopener">RIPE Atlas</a>
+  probes (small devices in thousands of networks) test <em>whether traffic actually arrives</em>, and how fast. With it on, bgpcanary:</p>
+  <ul>
+    <li>pings your probe target from a set of probes around the world, plus probes inside each of your upstreams' transit providers, and charts latency and packet loss <strong>grouped by the carrier the traffic arrives through</strong></li>
+    <li>runs traceroutes from the same probes, drawn as a radial map that shows where paths stop</li>
+    <li>fires a one-off traceroute burst from many networks when an outage opens and when it clears</li>
+  </ul>
+  <p class="muted" style="margin-bottom:0">It's optional: everything else works without it. Measurements cost Atlas <em>credits</em>.
+  You earn them by hosting a probe (a hardware probe, or the free software probe on any Linux box, ~21,600 credits a day) or get them from another Atlas user.
+  Create an API key under <a href="https://atlas.ripe.net/keys/" target="_blank" rel="noopener">My Atlas › API keys</a> with the permissions
+  <strong>Create a new user defined measurement</strong>, <strong>Stop a user defined measurement</strong> and <strong>See your credit balance</strong>.</p>
+</div>
+
+{% if checks %}
+{% set bad = checks|selectattr(1, 'false')|list %}{% set warn = checks|selectattr(1, 'none')|list %}
+<div class="panel" id="test">
+  <h2>Test results {% if bad %}<span class="badge b-critical">problems found</span>{% elif warn %}<span class="badge b-warning">working, with notes</span>{% else %}<span class="badge b-ok">all good</span>{% endif %}</h2>
+  <table>
+    {% for name, ok, detail in checks %}
+    <tr><td style="width:1%;white-space:nowrap">{% if ok %}<span class="badge b-ok">OK</span>{% elif ok is none %}<span class="badge b-warning">note</span>{% else %}<span class="badge b-critical">failed</span>{% endif %}</td>
+      <td><strong>{{ name }}</strong><br><span class="muted">{{ detail }}</span></td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Status</h2>
+  <dl class="kv">
+    <dt>State</dt><dd>{% if a.enabled and has_key %}<span class="badge b-ok">on</span>{% elif has_key %}<span class="badge b-info">off (key saved)</span>{% else %}<span class="badge b-info">off (no API key)</span>{% endif %}</dd>
+    <dt>Target</dt><dd>{% if target %}<code>{{ target }}</code> <span class="muted">(first probe target from <a href="/settings/monitor">Monitored network</a>)</span>{% else %}<span class="badge b-warning">none</span> add a probe target under <a href="/settings/monitor">Monitored network</a>{% endif %}</dd>
+    {% if credits %}
+    <dt>Credit balance</dt><dd>{% if credits.error %}<span class="muted">{{ credits.error }}</span>{% else %}<strong>{{ "{:,}".format(credits.current_balance|int) }}</strong>
+      <span class="muted">· estimated daily income {{ "{:,}".format((credits.estimated_daily_income or 0)|int) }}, spending {{ "{:,}".format((credits.estimated_daily_expenditure or 0)|int) }}</span>{% endif %}</dd>
+    {% endif %}
+    <dt>Committed today</dt><dd>~{{ "{:,}".format(spent) }} of {{ "{:,}".format(a.credit_cap|int) }} credits <span class="muted">(running baseline + one-offs in the last 24 h)</span></dd>
+    {% if state.baseline_msms %}<dt>Baseline</dt><dd>{% for m in state.baseline_msms %}<a href="https://atlas.ripe.net/measurements/{{ m }}/" target="_blank" rel="noopener">#{{ m }}</a>{% if not loop.last %}, {% endif %}{% endfor %} · {{ state.baseline_probes|length }} probes</dd>{% endif %}
+  </dl>
+</div>
+
+<div class="panel">
+  <h2>Settings</h2>
+  <form method="post" action="/settings/atlas" class="formgrid" autocomplete="off" oninput="estimate()">
+    <label class="span2"><input type="checkbox" name="enabled" id="en" value="1" {{ 'checked' if a.enabled }}> Use RIPE Atlas</label>
+    <label class="span2">API key {% if has_key %}<span class="muted">(saved — leave blank to keep it)</span>{% endif %}
+      <input name="api_key" type="password" placeholder="{{ '••••••••-••••-••••-••••-••••••••••••' if has_key else 'paste your Atlas API key' }}" autocomplete="new-password"></label>
+    {% if has_key %}<label class="span2"><input type="checkbox" name="clear_key" value="1"> Remove the saved key</label>{% endif %}
+
+    <div class="span2">
+      <label for="tg">Baseline targets <span class="muted">(addresses measured continuously: one ping + one traceroute each, from the same probes)</span></label>
+      <div class="muted" style="font-size:12px;margin:4px 0 6px;line-height:1.5">
+        <strong>Format:</strong> one address per line (IPv4, IPv6 or a host name), then optionally a space and a label saying what it is, and optionally a group in square brackets
+        (e.g. <code>[border-1]</code>) to compare targets that belong together, like everything on one border router. Labels and groups show wherever results appear.
+        Lines starting with <code>#</code> are ignored. Left empty, the probe targets from <a href="/settings/monitor">Monitored network</a> are used.<br>
+        <strong>Tip:</strong> add <em>your side of each carrier's peering link</em> (the address on your border router's interface toward that upstream). Traffic to that address
+        normally arrives over that carrier's link, so each carrier gets its own continuous latency/loss record, separate from your main prefix. The router must answer ICMP on those interfaces.
+      </div>
+      <textarea name="targets" id="tg" rows="{{ [4, (a.targets|length) + 1]|max }}" style="width:100%;font-family:ui-monospace,monospace" oninput="estimate()"
+        placeholder="192.0.2.1        Core router loopback&#10;203.0.113.2      Carrier A peering [border-1]&#10;203.0.113.6      Carrier B peering [border-1]&#10;198.51.100.6     Carrier C peering [border-2]&#10;2001:db8:1::1    Core router IPv6">{% if targets_text is not none %}{{ targets_text }}{% else %}{% for t in a.targets %}{{ t }}{% if a.target_labels.get(t) %}  {{ a.target_labels[t] }}{% endif %}{% if (a.target_groups or {}).get(t) %}  [{{ a.target_groups[t] }}]{% endif %}
+{% endfor %}{% endif %}</textarea>
+      <span style="font-size:12px">Now measuring: {% for t in targets %}<code>{{ t }}</code>{% if a.target_labels.get(t) %} <span class="muted">({{ a.target_labels[t] }}{% if (a.target_groups or {}).get(t) %} · {{ a.target_groups[t] }}{% endif %})</span>{% endif %}{% if not loop.last %}, {% endif %}{% else %}nothing{% endfor %} ·
+        <span class="linklike" onclick="document.getElementById('tg').value={{ suggested|map('join', '  ')|join('\n')|tojson|forceescape }};estimate()">fill in suggestions from my prefixes</span>
+        <span class="muted">({% for t, l in suggested %}{{ t }}{% if not loop.last %}, {% endif %}{% endfor %})</span></span>
+    </div>
+    <label>Daily credit cap<input name="credit_cap" id="cap" value="{{ a.credit_cap }}" inputmode="numeric"></label>
+    <label>Baseline probes (worldwide)<input name="baseline_probes" id="bp" value="{{ a.baseline_probes }}" inputmode="numeric"></label>
+    <label>Probes per upstream transit carrier<input name="carrier_probes" id="cp" value="{{ a.carrier_probes }}" inputmode="numeric"></label>
+    <span></span>
+
+    <label><input type="checkbox" name="baseline_ping" id="bping" value="1" {{ 'checked' if a.baseline_ping }}> Baseline ping</label>
+    <label>Ping every (minutes)<input name="ping_minutes" id="pm" value="{{ a.ping_minutes }}" inputmode="numeric"></label>
+    <label><input type="checkbox" name="baseline_trace" id="btr" value="1" {{ 'checked' if a.baseline_trace }}> Baseline traceroute</label>
+    <label>Traceroute every (minutes)<input name="trace_minutes" id="tm" value="{{ a.trace_minutes }}" inputmode="numeric"></label>
+
+    <label><input type="checkbox" name="outage_trace" id="otr" value="1" {{ 'checked' if a.outage_trace }}> Traceroute burst on outages and upstream shifts</label>
+    <label>Probes per burst<input name="outage_probes" id="op" value="{{ a.outage_probes }}" inputmode="numeric"></label>
+
+    <label class="span2">Probes you host <span class="muted">(IDs, optional; their Atlas status is shown under Software probe)</span>
+      <input name="my_probes" value="{{ a.my_probes|join(', ') }}" placeholder="e.g. 1012345"></label>
+
+    <div class="span2 muted" id="est" style="font-size:13px"></div>
+    <div class="span2 toolbar" style="margin:0"><button class="primary" type="submit">Save</button>
+      <button type="submit" formaction="/settings/atlas/test" onclick="setTimeout(() => { this.disabled = true; this.textContent = 'Testing… (up to a minute)'; })">Test connection</button>
+      <span class="muted" style="font-size:12px">Tests the key typed above, or the saved one, with one real ping from one probe (about 6 credits). Saves nothing.</span></div>
+  </form>
+  <p class="muted" style="font-size:12px;margin-bottom:0">Carrier probes are picked from inside the networks your upstreams buy transit from or peer with (the left-hand side of the dashboard tree),
+  so you can see e.g. "everything entering through carrier X is losing packets". Changing probes or intervals replaces the running baseline measurements.
+  If a measurement would push the day's committed credits over the cap, it isn't started.</p>
+</div>
+<div class="panel" id="probe">
+  <h2>Earn credits: host a probe</h2>
+  <p style="margin-top:0">Atlas measurements are paid for with credits, and hosting a probe is how you earn them: a connected probe earns about
+  <strong>21,600 credits a day</strong>, more than the default settings here spend (~9,600). Credits go to the Atlas account the probe is registered to,
+  so the probe can run anywhere: this server, another Linux box, a Raspberry Pi, or a hardware probe. It needs a stable connection and little else
+  (a few MB of RAM and roughly 5-10 kbit/s).</p>
+
+  <h3 style="font-size:14px;margin:16px 0 6px">On this server</h3>
+  {% if probe.installed %}
+  <dl class="kv">
+    <dt>Service</dt><dd>ripe-atlas · {% if probe.running %}<span class="badge b-ok">{{ probe.active }}</span>{% else %}<span class="badge b-critical">{{ probe.active }}</span>{% endif %}{% if probe.since %} <span class="muted">since {{ probe.since }}</span>{% endif %}</dd>
+    {% if probe.pubkey %}<dt>Public key</dt><dd><textarea readonly rows="3" style="width:100%;font-family:ui-monospace,monospace;font-size:11px" onclick="this.select()">{{ probe.pubkey }}</textarea>
+      <span class="muted" style="font-size:12px">Register it once at <a href="https://atlas.ripe.net/register/swprobe" target="_blank" rel="noopener">atlas.ripe.net/register/swprobe</a> with your ASN (AS{{ cfg.asn }}), then add the probe ID above.</span></dd>{% endif %}
+    <dt>Manage</dt><dd>Run on the server (bgpcanary deliberately can't control system services):
+      <pre style="margin:6px 0 0;white-space:pre-wrap">sudo systemctl restart ripe-atlas                        # restart the probe
+sudo systemctl status ripe-atlas                         # status / recent log
+sudo /opt/bgpcanary/deploy/install.sh --atlas-probe-only    # upgrade to the latest probe release
+sudo vi /etc/ripe-atlas/config.txt                       # probe options (ports, RXTXRPT), then restart</pre></dd>
+  </dl>
+  {% else %}
+  <p class="muted" style="margin-top:0">No software probe is installed here. bgpcanary's installer can add one (it verifies RIPE's package checksum and moves the probe off
+  port 8080, which bgpcanary uses). Run this on the server:</p>
+  <pre style="white-space:pre-wrap">sudo /opt/bgpcanary/deploy/install.sh --atlas-probe-only</pre>
+  <p class="muted" style="font-size:12px">It prints the probe's public key when it finishes; reload this page and it shows here too. On a new server, add
+  <code>--atlas-probe</code> to the normal install command to do both at once.</p>
+  {% endif %}
+
+  {% if my_probes %}
+  <h3 style="font-size:14px;margin:16px 0 6px">Your probes on Atlas</h3>
+  <table>
+    <tr><th>Probe</th><th>Status</th><th>Network</th><th>Description</th></tr>
+    {% for p in my_probes %}
+    <tr><td><a href="https://atlas.ripe.net/probes/{{ p.id }}/" target="_blank" rel="noopener">#{{ p.id }}</a></td>
+      <td>{% if p.error %}<span class="muted">{{ p.error }}</span>{% elif p.status %}<span class="badge {{ 'b-ok' if p.status.name == 'Connected' else 'b-warning' }}">{{ p.status.name }}</span>{% if p.status_since %} <span class="muted">since <time data-ts="{{ p.status_since }}"></time></span>{% endif %}{% endif %}</td>
+      <td>{% if p.asn_v4 %}AS{{ p.asn_v4 }}{% endif %} {{ p.country_code or '' }}</td><td>{{ p.description or '' }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <h3 style="font-size:14px;margin:16px 0 6px">Somewhere else</h3>
+  <ul style="margin:0;padding-left:20px;line-height:1.7">
+    <li><strong>Another Linux machine</strong> (Debian 11-13, Raspberry Pi OS 12-13 on arm64, Rocky/RHEL/Oracle 8-10): follow the install steps in
+      <a href="https://github.com/RIPE-NCC/ripe-atlas-software-probe#installation" target="_blank" rel="noopener">RIPE's software probe README</a>, then register its key the same way.</li>
+    <li><strong>A hardware probe</strong>: RIPE ships small probes for free; <a href="https://atlas.ripe.net/apply/" target="_blank" rel="noopener">apply here</a>. Plug it into any network with DHCP.</li>
+    <li><strong>An anchor</strong> (a larger, dedicated server) earns more and is also a measurement target; see <a href="https://atlas.ripe.net/docs/howtos/anchors" target="_blank" rel="noopener">anchors</a>.</li>
+    <li><strong>Credits from someone else</strong>: any Atlas user can transfer credits to your account (My Atlas › Credits).</li>
+  </ul>
+  <p class="muted" style="font-size:12px;margin-bottom:0">Probes in your own network also make good vantage points, but measurements toward your space are most useful from <em>other</em> networks, which is what bgpcanary picks.
+  Credits start accruing once the probe has been connected for a while; a new account may wait up to a day.</p>
+</div>
+
+<script>
+function estimate() {
+  const v = id => parseInt(document.getElementById(id).value) || 0, c = id => document.getElementById(id).checked;
+  // the running baseline's real probe count while the probe settings are unchanged, else ~8 transit carriers
+  const n = {{ 'true' if est.real else 'false' }} && v("bp") === {{ a.baseline_probes|int }} && v("cp") === {{ a.carrier_probes|int }}
+    ? {{ est.probes }} : v("bp") + v("cp") * 8;
+  const lines = document.getElementById("tg").value.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+  const k = Math.max(1, lines.reduce((n, l) => n + (/^[^\s]+,/.test(l) ? l.split(",").filter(x => x.trim()).length : 1), 0) || {{ cfg.probe_targets|length or 1 }});
+  const ping = c("bping") ? k * n * 1440 / Math.max(1, v("pm")) * 3 : 0;
+  const tr = c("btr") ? k * n * 1440 / Math.max(1, v("tm")) * 30 : 0;
+  const burst = c("otr") ? v("op") * 60 : 0;
+  const f = x => Math.round(x).toLocaleString();
+  const cap = v("cap"), oneoff = {{ est.oneoff }}, over = c("en") && ping + tr + oneoff > cap;
+  const fit = Math.ceil((ping + tr + oneoff + burst * 2) / 5000) * 5000;
+  const el = document.getElementById("est");
+  el.innerHTML =
+    `Estimate: ~${n} probes × ${k} target${k > 1 ? "s" : ""} · ping <strong>${f(ping)}</strong>/day · traceroute <strong>${f(tr)}</strong>/day` +
+    ` = <strong>${f(ping + tr)}</strong> credits/day, plus <strong>${f(burst)}</strong> per outage burst` +
+    (oneoff ? ` (one-off tests used ${f(oneoff)} in the last 24 h, which also counts toward the cap)` : "") + "." +
+    (over ? `<br><strong>Over the daily cap of ${f(cap)}.</strong> Targets that don't fit wait until you raise the cap to ${f(fit)} or more (or measure fewer targets or less often).` : "");
+  el.style.color = over ? "var(--crit)" : "";
+}
+estimate();
+</script>
+{% endblock %}

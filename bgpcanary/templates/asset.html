@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ d.name }} · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1><a href="/registry" style="color:var(--muted)">Registry</a> / <span class="mono">{{ d.name }}</span>
+  {% if d.source %}<span class="badge b-info">{{ d.source }}</span>{% endif %}</h1>
+
+<div class="grid g2">
+  <div class="panel">
+    <h2>Summary</h2>
+    <dl class="kv">
+      <dt>Description</dt><dd>{{ d.descr or '—' }}</dd>
+      <dt>Maintainer</dt><dd class="mono">{{ d.mnt or '—' }}</dd>
+      <dt>Created</dt><dd>{{ d.created[:10] if d.created else '—' }}</dd>
+      <dt>Last modified</dt><dd>{{ d.modified[:10] if d.modified else '—' }}</dd>
+      <dt>Direct members</dt><dd>{{ d.direct|length }} ({{ d.direct_sets|length }} nested as-set{{ 's' if d.direct_sets|length != 1 }})</dd>
+      <dt>Expands to</dt><dd>{{ d.expanded|length }} ASNs</dd>
+      <dt>Includes {{ mine }}</dt><dd>{% if d.includes_me %}<span class="badge b-ok">yes</span>{% else %}<span class="badge b-warning">no</span>{% endif %}</dd>
+      {% if d.chain %}<dt>How {{ mine }} gets in</dt>
+        <dd class="mono">{% for c in d.chain %}{% if not loop.last %}<a href="/registry/asset/{{ c|urlencode }}">{{ c }}</a> → {% else %}<strong>{{ c }}</strong>{% endif %}{% endfor %}</dd>{% endif %}
+      {% if d.upstreams_in %}<dt>Your upstreams in it</dt><dd>{{ d.upstreams_in|join(', ') }}</dd>{% endif %}
+    </dl>
+    <p class="muted" style="font-size:12px;margin-bottom:0">The direct members and the registry object come from {{ d.source or 'the first registry that has it' }}. The expansion follows nested sets across all registries mirrored by whois.radb.net, the way bgpq4-style filter tools do. Cached for an hour; fetched <time data-ts="{{ d.fetched }}"></time>.</p>
+  </div>
+  <div class="panel scroll">
+    <h2>Direct members ({{ d.direct|length }})</h2>
+    <table>
+      {% for m in d.direct %}
+      <tr><td class="mono">{% if ':' in m or m.upper().startswith('AS-') %}<a href="/registry/asset/{{ m|urlencode }}">{{ m }}</a> <span class="badge b-info">as-set</span>
+        {% else %}{% if m == mine %}<strong>{{ m }}</strong> <span class="badge b-ok">you</span>{% elif m in ups %}<strong>{{ m }}</strong> <span class="badge b-info">your upstream</span>{% else %}{{ m }}{% endif %}{% endif %}</td>
+        <td class="muted">{{ names.get(m[2:]|int, '') if m[2:].isdigit() else '' }}</td></tr>
+      {% else %}<tr><td class="muted">No members.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="panel scroll">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Full expansion: {{ d.expanded|length }} ASNs</h2>
+    <input id="flt" placeholder="Filter (ASN or name)" oninput="filterRows(this.value)">
+  </div>
+  <table id="exp">
+    <tr><th>ASN</th><th>Name</th></tr>
+    {% for m in d.expanded %}
+    <tr {% if m == mine %}style="background:var(--ok-bg)"{% elif m in ups %}style="background:var(--info-bg)"{% endif %}>
+      <td class="mono"><a href="https://bgp.tools/as/{{ m[2:] }}" target="_blank" rel="noopener">{{ m }}</a>{% if m == mine %} <span class="badge b-ok">you</span>{% elif m in ups %} <span class="badge b-info">your upstream</span>{% endif %}</td>
+      <td class="muted">{{ names.get(m[2:]|int, '') }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Registry object</h2>
+  <pre>{{ d.text }}</pre>
+</div>
+<script>
+function filterRows(q) {
+  q = q.trim().toLowerCase();
+  document.querySelectorAll("#exp tr").forEach((tr, i) => { if (i) tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none"; });
+}
+</script>
+{% endblock %}

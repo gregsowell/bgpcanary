@@ -27,7 +27,7 @@ raw_retention_days = 365     # raw BGP updates; buckets/events are kept forever
 [web]
 listen_host = "127.0.0.1"
 listen_port = 8080
-site_name = "BGP Monitor"
+site_name = "BGP Canary"
 base_url = "https://__FQDN__"   # used for links in alerts
 secret_key = "__SECRET__"
 

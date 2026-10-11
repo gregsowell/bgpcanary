@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-11
+
+### Added
+- A small "Support The Brothers WISP on Patreon" line under the header (dismissible for 90 days per browser), a bold "Project Support" link in the navigation, and a support section on the About page.
+
+### Changed
+- The default site name (shown in the header and alert subjects) is now "BGP Canary". Existing installs keep whatever name they have; change it under Settings › Monitored network.
+
 ## [1.0.0] - 2026-10-09
 
 First public release.
@@ -29,5 +37,6 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/gregsowell/bgpcanary/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/gregsowell/bgpcanary/releases/tag/v1.0.0

@@ -11,7 +11,7 @@
 <div class="panel">
   <form method="post" action="/settings/monitor" class="formgrid" autocomplete="off">
     <label>Your ASN<input name="asn" value="{{ m.asn or '' }}" placeholder="e.g. 64500" required inputmode="numeric"></label>
-    <label>Site name (header, alerts)<input name="site_name" value="{{ m.site_name }}" placeholder="BGP Monitor · AS64500"></label>
+    <label>Site name (header, alerts)<input name="site_name" value="{{ m.site_name }}" placeholder="BGP Canary · AS64500"></label>
     <label class="span2">Prefixes you announce: IPv4 and/or IPv6, one per line
       <textarea name="prefixes" rows="5" placeholder="192.0.2.0/24&#10;2001:db8::/48" required>{{ m.prefixes|join('\n') }}</textarea>
       <span style="font-size:12px">Each prefix is watched separately: visibility, outages, hijacks, more-specific and covering announcements, Route Views snapshots, registry and RPKI checks. Monitoring both an aggregate and the more-specifics you announce inside it is fine. Prefixes you add get their history loaded in the background. Removing a prefix stops monitoring it, but its history and events are kept.</span>

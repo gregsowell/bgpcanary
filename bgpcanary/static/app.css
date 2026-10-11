@@ -26,9 +26,16 @@ header .brand:hover { text-decoration: none; }
 header nav { display: flex; gap: 4px; overflow-x: auto; flex: 1; }
 header nav a { color: var(--muted); padding: 6px 10px; border-radius: 6px; white-space: nowrap; }
 header nav a.active, header nav a:hover { color: var(--text); background: var(--code-bg); text-decoration: none; }
+header nav a.nav-support { font-weight: 700; color: var(--text); }
 header .me { color: var(--muted); white-space: nowrap; font-size: 13px; }
 .wrap { max-width: 1320px; margin: 0 auto; padding: 0 16px; }
 main.wrap { padding-top: 20px; padding-bottom: 40px; }
+/* "Support The Brothers WISP on Patreon": one quiet line under the header, dismissible */
+.support-strip { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 10px; padding-bottom: 0;
+                 font-size: 12px; color: var(--muted); }
+.support-strip + main.wrap { padding-top: 8px; }
+.support-strip button { border: 0; background: none; padding: 0 4px; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer; }
+.support-strip button:hover { color: var(--text); }
 h1 { font-size: 20px; margin: 0 0 16px; font-weight: 650; }
 h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
 .grid { display: grid; gap: 16px; }

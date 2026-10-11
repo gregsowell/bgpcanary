@@ -91,6 +91,11 @@ rate limits are respected, and the RIPEstat requests identify themselves. Please
 | [RIPE Atlas](https://atlas.ripe.net/) (optional) | Ping and traceroute from probes worldwide; needs your own API key and credits |
 | [Team Cymru](https://www.team-cymru.com/ip-asn-mapping) | IP-to-ASN lookups for traceroute hops |
 
+## Support
+
+bgpcanary is made by [The Brothers WISP](https://thebrotherswisp.com). If it helps your network, please
+support us on [Patreon](https://www.patreon.com/thebrotherswisp).
+
 ## License
 
 bgpcanary is **source-available** under the [Functional Source License 1.1 with an Apache 2.0 future license](LICENSE.md) (FSL-1.1-ALv2):

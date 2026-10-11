@@ -947,7 +947,7 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
         except ValueError:
             return back(f"Probe target {x} isn't an IP address")
     data = {"asn": int(a), "prefixes": pfx, "expected_upstreams": ups, "owned_space": owned,
-            "probe_targets": targets, "site_name": site_name.strip() or f"BGP Monitor · AS{a}"}
+            "probe_targets": targets, "site_name": site_name.strip() or f"BGP Canary · AS{a}"}
     old = config.monitor_settings_dict(cfg)
     db.kv_set(svc.aconn, config.MONITOR_KV, data)
     svc.aconn.commit()

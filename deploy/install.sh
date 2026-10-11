@@ -133,7 +133,7 @@ if [ ! -f "$ETC/config.toml" ]; then
       -e "s|^expected_upstreams = \[\]|expected_upstreams = $(toml_list "${UPSTREAMS[@]}")|" \
       -e "s|^probe_targets = \[\]|probe_targets = $(toml_strs "${PROBES[@]}")|" \
       "$SRC/deploy/config.example.toml" > "$ETC/config.toml"
-  [ "$ASN" != 0 ] && sed -i "s|^site_name = \"BGP Monitor\"|site_name = \"BGP Monitor · AS$ASN\"|" "$ETC/config.toml"
+  [ "$ASN" != 0 ] && sed -i "s|^site_name = \"BGP Canary\"|site_name = \"BGP Canary · AS$ASN\"|" "$ETC/config.toml"
   echo "    created $ETC/config.toml"
 fi
 chown root:bgpcanary "$ETC/config.toml"

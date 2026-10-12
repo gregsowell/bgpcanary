@@ -22,7 +22,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bgpcanary.web")
 HERE = os.path.dirname(__file__)
 
-cfg = config.load()
+try:
+    cfg = config.load()
+except config.ConfigError as ex:   # shown by `journalctl -u bgpcanary` instead of a traceback
+    log.critical("%s", ex)
+    raise SystemExit(2)
 svc = Service(cfg)
 throttle = auth.Throttle()
 templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))

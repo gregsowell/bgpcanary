@@ -17,6 +17,18 @@ curl -s http://127.0.0.1:8080/healthz      # {"ok": true, "version": ...} when t
   - check that DNS points at the server.
 - **Certificate warning:** expected with the self-signed certificate. See [INSTALL.md](INSTALL.md#using-a-real-certificate).
 
+## "Config file ... has a syntax error"
+
+`/etc/bgpcanary/config.toml` was edited and isn't valid any more. The message shows the lines around the
+problem. The mistake is usually on the line shown *or just above it*, because a list or text that isn't closed is
+only noticed later. Common fixes:
+
+- Lists need square brackets and commas: `owned_space = ["198.51.100.0/22", "203.0.113.0/24"]`, `expected_upstreams = [64501, 64502]`
+- Text needs straight double quotes `"..."`, not curly “quotes” from a word processor.
+
+Edit it with `sudo nano /etc/bgpcanary/config.toml`, then `sudo systemctl restart bgpcanary`. Almost every setting
+can be changed in the web UI instead (Settings), which avoids editing this file at all.
+
 ## I can't log in
 
 - **Forgot the admin password, or locked out:** `sudo bgpcanary-admin useradd admin` asks for a new password and sets it. (Add `--must-change` to force another change at the next login.) Editing `/etc/bgpcanary/initial-admin-password` does *not* change the password; that file is only a record of the one the installer generated.

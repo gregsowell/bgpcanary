@@ -22,9 +22,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --fqdn) FQDN="$2"; shift 2 ;;
     --asn) ASN="${2#AS}"; ASN="${ASN#as}"; shift 2 ;;
-    --prefix) PREFIXES+=("$2"); shift 2 ;;
-    --upstream) UPSTREAMS+=("${2#AS}"); shift 2 ;;
-    --probe) PROBES+=("$2"); shift 2 ;;
+    --prefix) for v in ${2//,/ }; do PREFIXES+=("$v"); done; shift 2 ;;
+    --upstream) for v in ${2//,/ }; do v="${v#AS}"; UPSTREAMS+=("${v#as}"); done; shift 2 ;;
+    --probe) for v in ${2//,/ }; do PROBES+=("$v"); done; shift 2 ;;
     --atlas-probe) ATLAS_PROBE=1; shift ;;
     --atlas-probe-only) echo "==> RIPE Atlas software probe"; exec bash "$(dirname "$0")/atlas-probe.sh" ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
@@ -39,6 +39,9 @@ case "$EL" in
   *) echo "bgpcanary supports Rocky Linux, AlmaLinux and RHEL 9 or 10 (this is ${PRETTY_NAME:-unknown})."; exit 1 ;;
 esac
 VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$SRC/bgpcanary/__init__.py")
+for a in "$ASN" "${UPSTREAMS[@]}"; do
+  [[ "$a" =~ ^[0-9]+$ ]] || { echo "Not an AS number: '$a' (use digits, e.g. --asn 64500 --upstream 64501)"; exit 1; }
+done
 echo "bgpcanary $VERSION installer on $PRETTY_NAME"
 
 # ---------------------------------------------------------------- upgrade from the pre-1.0 name (bgpmon)
@@ -79,6 +82,35 @@ PY=python3
 PKGS=("$PY" nginx policycoreutils-python-utils openssl sqlite dejavu-sans-fonts tar)
 command -v curl >/dev/null || PKGS+=(curl)   # EL9 minimal ships curl-minimal, which conflicts with the curl package
 dnf -y -q install "${PKGS[@]}" >/dev/null
+
+# Check prefixes / probe addresses, and an existing config file, before changing anything (stdlib only)
+"$PY" - "${PREFIXES[@]}" -- "${PROBES[@]}" <<'PYCHECK' || exit 1
+import ipaddress, sys
+args = sys.argv[1:]
+cut = args.index("--")
+for p in args[:cut]:
+    try:
+        ipaddress.ip_network(p, strict=False)
+    except ValueError:
+        sys.exit(f"Not a valid prefix: '{p}' (e.g. --prefix 192.0.2.0/24 --prefix 2001:db8::/48)")
+for a in args[cut + 1:]:
+    try:
+        ipaddress.ip_address(a)
+    except ValueError:
+        sys.exit(f"Not a valid IP address for --probe: '{a}' (e.g. --probe 192.0.2.1)")
+PYCHECK
+check_config() {   # prints a readable error and fails if the config file isn't valid
+  "$PY" -c 'import sys; sys.path.insert(0, sys.argv[2]); from bgpcanary import config
+try:
+    config.load(sys.argv[1])
+except config.ConfigError as ex:
+    sys.exit(str(ex))' "$1" "$SRC"
+}
+if [ -f "$ETC/config.toml" ] && ! check_config "$ETC/config.toml"; then
+  echo
+  echo "Nothing was changed. Fix $ETC/config.toml (see above), then run this again."
+  exit 1
+fi
 
 echo "==> user and directories"
 id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
@@ -134,6 +166,11 @@ if [ ! -f "$ETC/config.toml" ]; then
       -e "s|^probe_targets = \[\]|probe_targets = $(toml_strs "${PROBES[@]}")|" \
       "$SRC/deploy/config.example.toml" > "$ETC/config.toml"
   [ "$ASN" != 0 ] && sed -i "s|^site_name = \"BGP Canary\"|site_name = \"BGP Canary · AS$ASN\"|" "$ETC/config.toml"
+  if ! check_config "$ETC/config.toml"; then
+    mv "$ETC/config.toml" "$ETC/config.toml.invalid"
+    echo "The generated config was invalid (saved as $ETC/config.toml.invalid). Please report this as a bug."
+    exit 1
+  fi
   echo "    created $ETC/config.toml"
 fi
 chown root:bgpcanary "$ETC/config.toml"

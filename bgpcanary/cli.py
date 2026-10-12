@@ -25,7 +25,10 @@ def main():
     sub.add_parser("ensure-admin", help="create the default 'admin' account if no users exist (prints its password)")
     args = ap.parse_args()
 
-    cfg = config.load(args.config)
+    try:
+        cfg = config.load(args.config)
+    except config.ConfigError as ex:
+        sys.exit(str(ex))
     db.init(cfg.db_path)
     conn = db.connect(cfg.db_path)
     config.apply_alert_settings(cfg, db.kv_get(conn, config.ALERT_KV))

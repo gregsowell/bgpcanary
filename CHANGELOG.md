@@ -6,6 +6,15 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-11
+
+### Fixed
+- A syntax error in `/etc/bgpcanary/config.toml` (for example a list missing its `]`) now produces a clear message that shows the lines involved and how to fix them, from `bgpcanary-admin`, the installer and the service log, instead of a Python traceback.
+- Re-running the installer or `bgpcanary-update` with a broken config file now stops before changing anything, instead of restarting the service into an error.
+
+### Changed
+- The installer accepts lists separated by commas or spaces (`--prefix "192.0.2.0/24, 2001:db8::/48"`, `--upstream "64501 64502"`) and rejects invalid ASNs, prefixes and probe addresses up front.
+
 ## [1.1.1] - 2026-10-11
 
 ### Fixed
@@ -43,7 +52,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/gregsowell/bgpcanary/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/gregsowell/bgpcanary/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/gregsowell/bgpcanary/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/gregsowell/bgpcanary/releases/tag/v1.0.0

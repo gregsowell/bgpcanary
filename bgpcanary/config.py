@@ -361,9 +361,40 @@ def apply_alert_settings(cfg, data: dict | None) -> None:
                                    enabled=bool(w.get("enabled", True))) for w in data["webhooks"] if w.get("url")]
 
 
+class ConfigError(Exception):
+    """The config file is missing or not valid TOML; the message says where and how to fix it."""
+
+
+def _read(path):
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        raise ConfigError(f"Config file {path} not found. Re-run the installer to recreate it.") from None
+    except tomllib.TOMLDecodeError as ex:
+        m = re.search(r"at line (\d+), column (\d+)", str(ex))
+        where, shown = "", ""
+        if m:
+            n = int(m.group(1))
+            where = f", line {n}"
+            try:
+                lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+                # show a few lines before too: an unclosed [ or " is reported where the parser gives up
+                shown = "\n\n" + "\n".join(f"    {i:>4} | {lines[i - 1].rstrip()}"
+                                             for i in range(max(1, n - 3), min(n, len(lines)) + 1)) + "\n" + \
+                        "The mistake is on that line or just above it (e.g. a [ or \" that isn't closed).\n"
+            except OSError:
+                pass
+        why = re.sub(r"\s*\(at line.*\)$", "", str(ex))
+        raise ConfigError(
+            f"Config file {path} has a syntax error{where}: {why}.{shown}\n"
+            "Lists need square brackets and commas, e.g. owned_space = [\"198.51.100.0/22\", \"203.0.113.0/24\"]; "
+            "text needs straight double quotes. Fix it with: sudo nano " + path + "\n"
+            "(Most settings can be changed in the web UI instead; values saved there override this file.)") from None
+
+
 def load(path: str = DEFAULT_PATH) -> Config:
-    with open(path, "rb") as f:
-        raw = tomllib.load(f)
+    raw = _read(path)
     mon = raw.get("monitor", {})
     web = raw.get("web", {})
     det = raw.get("detection", {})

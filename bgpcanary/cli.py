@@ -8,6 +8,16 @@ import time
 from . import alerts, auth, config, db
 
 
+def _password(prompt):
+    """Prompt without echo at a terminal; read a plain line when the password is piped in (scripts)."""
+    if sys.stdin.isatty():
+        return getpass.getpass(prompt)
+    line = sys.stdin.readline()
+    if not line:
+        sys.exit("no password given on standard input")
+    return line.rstrip("\r\n")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="bgpcanary-admin")
     ap.add_argument("--config", default=config.DEFAULT_PATH)
@@ -39,10 +49,10 @@ def main():
         print(__version__)
         return
     if args.cmd == "useradd":
-        pw = getpass.getpass("Password: ")
+        pw = _password("Password: ")
         if len(pw) < 10:
             sys.exit("password must be at least 10 characters")
-        if pw != getpass.getpass("Confirm: "):
+        if pw != _password("Confirm: "):
             sys.exit("passwords do not match")
         if not auth.USERNAME_RE.match(args.username):
             sys.exit("usernames are 2-64 characters: letters, digits, . _ - @")
@@ -65,8 +75,13 @@ def main():
     elif args.cmd == "test-alert":
         ev = {"id": None, "kind": "test", "severity": "info", "prefix": ", ".join(cfg.prefixes),
               "start_ts": time.time(), "end_ts": None, "title": "Test alert from bgpcanary CLI"}
-        for ch, ok, err in asyncio.run(alerts.send(cfg, conn, ev, "test")) or [("none configured", False, "")]:
+        results = asyncio.run(alerts.send(cfg, conn, ev, "test"))
+        if not results:
+            sys.exit("No alert channels are enabled. Set up email or a webhook under Settings › Alerts, then try again.")
+        for ch, ok, err in results:
             print(f"{ch}: {'OK' if ok else 'FAILED ' + (err or '')}")
+        if not all(ok for _ch, ok, _err in results):
+            sys.exit(1)
 
 
 if __name__ == "__main__":

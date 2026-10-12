@@ -38,7 +38,8 @@ done
 [ "$(id -u)" = 0 ] || [ "$MODE" = check ] || { echo "Run as root: sudo bgpcanary-update"; exit 1; }
 CUR=$(current)
 
-PORT=$(sed -n 's/^listen_port *= *\([0-9]*\).*/\1/p' "$ETC/config.toml" 2>/dev/null | head -1)
+# (the config is readable only by root and the service; --check runs without sudo, so a failed read is fine)
+PORT=$(sed -n 's/^listen_port *= *\([0-9]*\).*/\1/p' "$ETC/config.toml" 2>/dev/null | head -1 || true)
 healthy() {   # wait up to a minute for the new version to answer
   for _ in $(seq 30); do
     v=$(curl -s --max-time 2 "http://127.0.0.1:${PORT:-8080}/healthz" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')

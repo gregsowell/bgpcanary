@@ -6,6 +6,13 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-10-12
+
+### Fixed
+- `bgpcanary-admin test-alert` with no alert channels enabled now says so and how to add one, instead of printing `none configured: FAILED`; it also exits with an error when any channel fails, so scripts can tell.
+- `bgpcanary-update --check` run without sudo quietly exited with an error; it now does the check.
+- `bgpcanary-admin useradd` with the password piped in (from a script) no longer prints a warning about the password being shown.
+
 ## [1.1.2] - 2026-10-11
 
 ### Fixed
@@ -52,7 +59,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/gregsowell/bgpcanary/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/gregsowell/bgpcanary/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/gregsowell/bgpcanary/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/gregsowell/bgpcanary/compare/v1.0.0...v1.1.0

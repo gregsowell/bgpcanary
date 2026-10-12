@@ -76,7 +76,10 @@ class NeedSetup(Exception):
     pass
 
 
-SETUP_PATHS = ("/settings/monitor", "/restarting", "/account/password", "/logout", "/users", "/settings/alerts")
+# Pages usable before the ASN/prefixes are set up. Include the targets of their forms: the first-login
+# password change posts to /settings/password, and leaving it out made that change impossible on fresh installs.
+SETUP_PATHS = ("/settings/monitor", "/restarting", "/account/password", "/settings/password", "/logout", "/users",
+               "/settings/alerts")
 
 
 @app.exception_handler(NeedLogin)

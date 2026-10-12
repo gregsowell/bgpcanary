@@ -188,7 +188,10 @@ CREDS=$(/usr/bin/bgpcanary-admin ensure-admin)
 if [ -n "$CREDS" ]; then
   umask 077
   { echo "bgpcanary initial admin login (created $(date -Is)). You must change the password at first login."
-    echo "$CREDS"; } > "$ETC/initial-admin-password"
+    echo "$CREDS"
+    echo
+    echo "This file is only a record of the generated password: editing it does NOT change the password."
+    echo "To set a new admin password: sudo bgpcanary-admin useradd admin"; } > "$ETC/initial-admin-password"
   chmod 600 "$ETC/initial-admin-password"
   echo
   echo "  Web login created:"

@@ -6,6 +6,12 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-11
+
+### Fixed
+- On a fresh install (before the ASN and prefixes were set up), the required first-login password change never saved and the page kept coming back. Existing installs that already completed setup weren't affected.
+- The installer's `initial-admin-password` file now says that editing it doesn't change the password, and how to set a new one.
+
 ## [1.1.0] - 2026-10-11
 
 ### Added
@@ -37,6 +43,7 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/gregsowell/bgpcanary/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/gregsowell/bgpcanary/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/gregsowell/bgpcanary/releases/tag/v1.0.0

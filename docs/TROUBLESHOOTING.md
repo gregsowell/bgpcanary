@@ -19,7 +19,8 @@ curl -s http://127.0.0.1:8080/healthz      # {"ok": true, "version": ...} when t
 
 ## I can't log in
 
-- **Forgot the admin password:** `sudo bgpcanary-admin useradd admin --must-change` sets a new one.
+- **Forgot the admin password, or locked out:** `sudo bgpcanary-admin useradd admin` asks for a new password and sets it. (Add `--must-change` to force another change at the next login.) Editing `/etc/bgpcanary/initial-admin-password` does *not* change the password; that file is only a record of the one the installer generated.
+- **The "choose a new password" page keeps coming back (1.0.0 and 1.1.0 only):** a bug on fresh installs where the ASN isn't set up yet. Update to 1.1.1 or later (`sudo bgpcanary-update`), or set the password from the command line as above.
 - **"Too many attempts":** logins are throttled after repeated failures. Wait a few minutes.
 
 ## No data / "RIS Live disconnected"

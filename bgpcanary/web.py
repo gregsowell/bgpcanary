@@ -473,7 +473,7 @@ async def upstream_neighbors(data):
                 d = await ripe.stat("asn-neighbours", svc.sourceapp, resource=f"AS{u}")
                 lst = [{"asn": n["asn"], "power": n.get("power", 0)} for n in d.get("neighbours", [])
                        if n.get("type") in ("left", "uncertain") and n["asn"] != cfg.asn]
-                hit = (time.time(), sorted(lst, key=lambda n: -n["power"]))
+                hit = (time.time(), tree.top_neighbors(lst, key=lambda n: n["asn"]))
                 _NBR_CACHE[u] = hit
             except Exception as ex:
                 log.warning("asn-neighbours AS%s failed: %s", u, ex)

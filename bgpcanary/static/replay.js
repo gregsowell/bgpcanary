@@ -489,7 +489,9 @@
         rp.rowH = Math.max(12, (avail / 0.6 - fixed) / Math.max(rp.rows, 3));
         k = Math.max(0.6, Math.min(1, avail / rp.size(W).H));
       }
-      const LW = W / k, { H } = rp.size(LW), dpr = window.devicePixelRatio || 1;
+      const LW = W / k, { H } = rp.size(LW);
+      // browsers draw nothing on a canvas over ~32k px a side or ~16M px in all (Safari): use a lower resolution instead
+      const dpr = Math.min(window.devicePixelRatio || 1, 32000 / H, 32000 / LW, Math.sqrt(16e6 / (LW * H)));
       canvas.width = Math.round(LW * dpr); canvas.height = Math.round(H * dpr);
       canvas.style.width = W + "px"; canvas.style.height = Math.round(H * k) + "px";
       const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -557,7 +559,7 @@
       const nm = h.n.others ? `${h.n.others} smaller branches` : `AS${h.n.asn} ${data.names[h.n.asn] || ""}`;
       const ref = rp.baseMode === "start" ? "at window start" : "at comparison point";
       const pin = rp.pinned && rp.pinned.get(h.k);
-      const role = pin && pin.of ? `\nNeighbour of AS${pin.of} in the global table (${pin.power} RIS adjacencies)` :
+      const role = pin && pin.of ? `\nNeighbour of AS${pin.of} in the global table${pin.power ? ` (${pin.power} RIS adjacencies)` : ""}` :
         pin && pin.upstream ? "\nYour direct upstream" : "";
       const peak = rp.maxC.get(h.k) || 0;
       const never = pin && !h.c && !h.b ? (peak ? `\nNot carrying you now (carried up to ${peak} peers earlier in this window)`

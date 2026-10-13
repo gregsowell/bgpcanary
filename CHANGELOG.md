@@ -6,6 +6,12 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-10-13
+
+### Fixed
+- Connectivity trees were a very long, empty scroll when an upstream has thousands of neighbours (for example Hurricane Electric, AS6939, with over 8,000): every neighbour got its own row and the tree became too tall for the browser to draw. Each upstream now always shows up to 20 neighbours, major transit networks first; any other neighbour still appears when it carries your routes, and the rest are folded into "+N more". This also keeps alert-email tree images, the Registry page and RIPE Atlas probe selection to a sensible size.
+- Very tall trees are drawn at a lower resolution instead of not at all.
+
 ## [1.1.3] - 2026-10-12
 
 ### Fixed
@@ -59,7 +65,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/gregsowell/bgpcanary/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/gregsowell/bgpcanary/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/gregsowell/bgpcanary/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/gregsowell/bgpcanary/compare/v1.1.0...v1.1.1

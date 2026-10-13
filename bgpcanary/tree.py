@@ -26,6 +26,22 @@ FONT_DIRS = ["/usr/share/fonts/dejavu-sans-fonts", "/usr/share/fonts/dejavu", "/
              "/usr/share/fonts/TTF"]
 _fonts = {}
 _NBR = {}   # upstream -> (ts, [(asn, power)])
+# A big upstream has thousands of neighbours (Hurricane Electric: 8000+), which made trees too tall to draw.
+# Keep MAX_NEIGHBORS of them, major transit networks first (RIPEstat no longer reports a size per neighbour);
+# the rest still appear in trees when they carry your routes, just not as always-shown branches.
+MAX_NEIGHBORS = 20
+MAJOR_TRANSIT = [3356, 1299, 174, 2914, 6762, 6453, 3257, 6461, 3491, 5511, 701, 7018, 6830, 12956, 1239,
+                 6939, 9002, 4637, 7922, 3320, 2828, 209, 7473, 4826, 6057, 37100, 7713, 4766, 2516, 9498]
+
+
+def top_neighbors(lst, key=lambda n: n):
+    """The neighbours worth always showing: major transit networks first, then in the order RIPEstat gave."""
+    rank, seen, out = {a: i for i, a in enumerate(MAJOR_TRANSIT)}, set(), []
+    for n in sorted(lst, key=lambda n: rank.get(key(n), len(rank))):
+        if key(n) not in seen:   # RIPEstat can list a neighbour as both "left" and "uncertain"
+            seen.add(key(n))
+            out.append(n)
+    return out[:MAX_NEIGHBORS]
 
 
 def font(size, bold=False):
@@ -54,9 +70,9 @@ async def upstream_neighbors(sourceapp, upstreams):
         if not hit or time.time() - hit[0] > 6 * 3600:
             try:
                 d = await ripe.stat("asn-neighbours", sourceapp, resource=f"AS{u}")
-                lst = sorted(((n["asn"], n.get("power", 0)) for n in d.get("neighbours", [])
-                              if n.get("type") in ("left", "uncertain")), key=lambda x: -x[1])
-                hit = (time.time(), lst)
+                lst = [(n["asn"], n.get("power", 0)) for n in d.get("neighbours", [])
+                       if n.get("type") in ("left", "uncertain")]
+                hit = (time.time(), top_neighbors(lst, key=lambda x: x[0]))
                 _NBR[u] = hit
             except Exception as ex:
                 log.warning("asn-neighbours AS%s: %s", u, ex)

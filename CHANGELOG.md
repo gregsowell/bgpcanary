@@ -7,7 +7,7 @@ anything, and major releases may need you to read the notes before upgrading.
 ## [Unreleased]
 
 ### Changed
-- The dashboard has one **Connectivity tree** that shows all your prefixes by default, with a checkbox per prefix (and "All") to focus on one or a few. With 2 to 6 prefixes ticked each gets its own colored strand, as the old "Compare prefixes" tree did; with more than 6 they are combined into one strand. This replaces the separate "Compare prefixes" tree and the per-prefix trees. The tree has its own time range buttons.
+- The dashboard has one **Connectivity tree** that shows all your prefixes by default, with a checkbox per prefix (and "All") to focus on one or a few. Ticked prefixes each get their own colored strand, as the old "Compare prefixes" tree did, up to 6 by default; with more than 6 prefixes, a "Separate strands for up to" setting raises that to 8, 10 or 12 (remembered per browser), and beyond it they are combined into one strand. The per-prefix labels above the tree wrap onto more lines when they don't fit. This replaces the separate "Compare prefixes" tree and the per-prefix trees. The tree has its own time range buttons.
 
 ## [1.1.7] - 2026-10-14
 

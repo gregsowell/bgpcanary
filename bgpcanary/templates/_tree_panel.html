@@ -14,6 +14,11 @@
     <span class="muted" style="font-size:13px">Prefixes:</span>
     <label><input type="checkbox" data-tree-all checked> <strong>All</strong></label>
     {% for s in summ %}<label><input type="checkbox" data-tree-prefix value="{{ s.prefix }}" checked> {{ s.prefix }}</label>{% endfor %}
+    {% if summ|length > 6 %}
+    <span style="flex:1"></span>
+    <label class="muted" title="Above this many ticked prefixes, the tree combines them into one strand. More strands are harder to tell apart.">Separate strands for up to
+      <select data-tree-strands>{% for n in [6, 8, 10, 12] %}<option value="{{ n }}" {{ 'selected' if n == 6 }}>{{ n }}</option>{% endfor %}</select> prefixes</label>
+    {% endif %}
   </div>
   {% endif %}
   <div class="toolbar">
@@ -25,6 +30,6 @@
   </div>
   {% include "_tree_body.html" %}
   <p class="muted" style="margin:4px 0 0;font-size:12px">The tree starts at your AS and follows each RIS peer's AS path outward; the slider starts at "now", and while it sits there the tree refreshes every minute.
-  {% if summ|length > 1 %}All prefixes are shown by default; untick some to focus on one or a few. With 2 to 6 prefixes ticked, each branch carries one strand per prefix in that prefix's color, and a <strong>dashed strand</strong> means that prefix is <em>missing</em> on a branch that carries the others (the node turns orange), the typical sign of a filter that knows one of your prefixes but not another. With more than 6 ticked, they are combined into a single strand.{% endif %}
+  {% if summ|length > 1 %}All prefixes are shown by default; untick some to focus on one or a few. With 2 or more prefixes ticked, each branch carries one strand per prefix in that prefix's color, and a <strong>dashed strand</strong> means that prefix is <em>missing</em> on a branch that carries the others (the node turns orange), the typical sign of a filter that knows one of your prefixes but not another.{% if summ|length > 6 %} When more prefixes are ticked than the "Separate strands" setting (6 unless you change it, up to 12), they are combined into a single strand.{% endif %}{% endif %}
   Colors compare each branch with the start of the window, or with the healthiest point if you choose that: green is a new branch, orange lost more than half its peers, red dashed dropped out. The second layer lists each upstream's main transits and peers from the global table; red dotted branches marked "not carrying you" reach your upstream's own routes but none of yours.</p>
 </div>

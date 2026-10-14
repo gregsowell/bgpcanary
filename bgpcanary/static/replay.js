@@ -23,8 +23,9 @@
     return (d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`) + " ago";
   };
 
-  // one color per prefix when several are compared in one tree
-  const PCOL = ["#2463eb", "#e8710a", "#12a36b", "#9b4dca", "#d23f8a", "#0f9bb5"];
+  // one color per prefix when several share one tree (up to 12 strands; more are combined into one)
+  const PCOL = ["#2463eb", "#e8710a", "#12a36b", "#9b4dca", "#d23f8a", "#0f9bb5",
+                "#b8860b", "#5c6bc0", "#6d4c41", "#00796b", "#7cb342", "#455a64"];
 
   function theme() {
     return {
@@ -219,7 +220,24 @@
     // ---- drawing ---------------------------------------------------------------------
     size(W) {
       const rowH = this.rowH || 20;   // "Fit to screen" packs rows tighter
-      return { W, H: 86 + Math.max(this.rows, 3) * rowH + 24 + 70, rowH };
+      const extra = (this.chips(W).lines - 1) * 20;
+      return { W, H: 86 + extra + Math.max(this.rows, 3) * rowH + 24 + 70, rowH, extra };
+    }
+    // header chips (one per prefix), wrapped onto more lines when they don't fit across
+    chips(W) {
+      if (!this.pp) return { at: [], lines: 1 };
+      const m = Replay.measure || (Replay.measure = document.createElement("canvas").getContext("2d"));
+      let x = 230, line = 0;
+      const at = this.D.prefixes.map((p, i) => {
+        m.font = "600 13px system-ui, sans-serif"; const wa = m.measureText(p).width;
+        m.font = "13px system-ui, sans-serif"; const wb = m.measureText(`${this.ptot[i]}/${this.ptot[i]}`).width;
+        const w = 17 + wa + 6 + wb + 22;
+        if (x > 230 && x + w > W - 16) { line++; x = 230; }
+        const c = [x, line];
+        x += w;
+        return c;
+      });
+      return { at, lines: line + 1 };
     }
     phase() {
       const ev = this.ev;
@@ -232,7 +250,7 @@
     }
     draw(ctx, W, opts = {}) {
       const th = theme();
-      const { H, rowH } = this.size(W);
+      const { H, rowH, extra } = this.size(W);
       const counts = this.countsFor(this.cur, this.dchains);
       const total = Math.max(this.total0, 1);
       const vis = this.visible();
@@ -246,14 +264,16 @@
       ctx.fillText(fmt(this.t), 16, 42);
       if (this.pp) {
         // one chip per prefix: color, prefix, how many RIS peers see it at the selected time
-        let x = 230;
+        const { at } = this.chips(W);
         this.D.prefixes.forEach((p, i) => {
           const v = this.visibleP(i), pc = Math.round(100 * v / this.ptot[i]);
-          ctx.fillStyle = PCOL[i % PCOL.length]; ctx.fillRect(x, 36, 12, 12);
+          let [x, line] = at[i];
+          const y = 42 + line * 20;
+          ctx.fillStyle = PCOL[i % PCOL.length]; ctx.fillRect(x, y - 6, 12, 12);
           ctx.font = "600 13px system-ui, sans-serif"; ctx.fillStyle = th.text;
-          const a = `${p}`; ctx.fillText(a, x + 17, 42); x += 17 + ctx.measureText(a).width + 6;
+          const a = `${p}`; ctx.fillText(a, x + 17, y); x += 17 + ctx.measureText(a).width + 6;
           ctx.font = "13px system-ui, sans-serif"; ctx.fillStyle = pc < 50 ? th.crit : pc < 80 ? th.warn : th.muted;
-          const b = `${v}/${this.ptot[i]}`; ctx.fillText(b, x, 42); x += ctx.measureText(b).width + 22;
+          ctx.fillText(`${v}/${this.ptot[i]}`, x, y);
         });
       }
       const pct = Math.round(100 * vis / total);
@@ -281,15 +301,15 @@
         lx -= 16;
       }
       // tree geometry
-      const top = 86, labelW = 240, left = 24;
+      const top = 86 + extra, labelW = 240, left = 24;
       const colW = (W - left - labelW) / Math.max(this.depth, 1);
       const pos = k => { const n = this.shown.get(k); return [left + n.level * colW, top + n.row * rowH + rowH / 2]; };
       // column headings, so it's clear which layer is which (e.g. vs bgp.tools' upstream list)
       const COLS = ["You", "Your upstreams", "Their transits & peers", "Next hop out", "Further out", "Further out", "Further out"];
       ctx.font = "600 11px system-ui, sans-serif"; ctx.fillStyle = th.muted;
-      for (let l = 0; l <= this.depth; l++) ctx.fillText(COLS[l].toUpperCase(), left + l * colW - (l ? 4 : 0), 68);
+      for (let l = 0; l <= this.depth; l++) ctx.fillText(COLS[l].toUpperCase(), left + l * colW - (l ? 4 : 0), 68 + extra);
       ctx.strokeStyle = th.border; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(16, 77); ctx.lineTo(W - 16, 77); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(16, 77 + extra); ctx.lineTo(W - 16, 77 + extra); ctx.stroke();
       const stateOf = k => {
         const c = counts.get(k) || 0, b = this.base.get(k) || 0;
         if (c > 0 && b > 0) return c < b * 0.5 ? ["degraded", th.warn] : ["live", th.accent];

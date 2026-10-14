@@ -538,6 +538,9 @@ async def api_window_replay(request: Request, prefix: str = None, start: float =
     return await upstream_neighbors(out)
 
 
+MAX_STRANDS = 12   # strand colors in replay.js
+
+
 def merge_replays(parts):
     """Combine per-prefix replay payloads into one: peers are tagged with their prefix (peer_prefix), paths
     are de-duplicated, updates are merged in time order. The tree then draws one strand per prefix."""
@@ -566,10 +569,10 @@ def merge_replays(parts):
 @app.get("/api/replay/compare")
 async def api_compare_replay(request: Request, prefixes: str, start: float = None, end: float = None,
                              combine: int = 0):
-    """Path-tree data for several prefixes at once (dashboard tree). Up to 6 get one colored strand each;
-    combine=1 merges any number into a single strand (there are only 6 strand colors)."""
+    """Path-tree data for several prefixes at once (dashboard tree). Up to MAX_STRANDS get a colored strand each;
+    combine=1 merges any number into a single strand (the dashboard does that past its strand setting)."""
     user(request)
-    want = [p for p in dict.fromkeys(prefixes.split(",")) if p in cfg.prefixes][:50 if combine else 6]
+    want = [p for p in dict.fromkeys(prefixes.split(",")) if p in cfg.prefixes][:50 if combine else MAX_STRANDS]
     if not want:
         raise HTTPException(400, "no monitored prefixes given")
     end = min(end or time.time(), time.time())

@@ -20,7 +20,7 @@ Adding a prefix loads up to 90 days of its history in the background.
 ## Alerts (Settings › Alert channels)
 
 - **Email:** any SMTP server: Microsoft 365, Google Workspace (app password), or an internal relay on port 25. Use *Send test email* to check.
-- **Webhooks:** Slack incoming webhooks, or generic JSON for Teams (via Power Automate), PagerDuty-style receivers or your own scripts.
+- **Webhooks:** Slack incoming webhooks, Microsoft Teams (a channel's "Send webhook alerts to a channel" workflow), or generic JSON for PagerDuty-style receivers or your own scripts. Settings › Alerts has step-by-step instructions for getting each URL.
 - **What to alert on:** every alert type, each with its own **Notify** choice (All / Warning and up / Critical only / Off) and its own thresholds. Events are always recorded on the Events page; this only controls notifications.
 - **Site URL for alert links:** set it so alerts link back to the event page.
 

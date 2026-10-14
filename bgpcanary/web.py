@@ -1191,8 +1191,8 @@ async def alert_settings_email(request: Request, enabled: str = Form(""), smtp_h
 
 
 def _check_hook(name, fmt, url, require_url=True):
-    if fmt not in ("slack", "json"):
-        return "Format must be slack or json"
+    if fmt not in ("slack", "teams", "json"):
+        return "Format must be slack, teams or json"
     if (url or require_url) and not re.match(r"^https?://[^\s/]+/\S*$", url or ""):
         return "The webhook URL must start with https://"
     if len(name) > 40:

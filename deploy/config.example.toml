@@ -83,7 +83,7 @@ password = ""
 from = "bgpcanary@example.com"
 to = ["noc@example.com"]
 
-# One [[alerts.webhooks]] block per destination. format = "slack" or "json"
+# One [[alerts.webhooks]] block per destination. format = "slack", "teams" (Microsoft Teams workflow) or "json"
 # [[alerts.webhooks]]
 # name = "slack-noc"
 # format = "slack"

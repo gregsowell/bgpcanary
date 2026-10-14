@@ -24,7 +24,7 @@ class EmailCfg:
 @dataclass
 class WebhookCfg:
     url: str
-    format: str = "slack"  # slack | json
+    format: str = "slack"  # slack | teams | json
     name: str = ""
     enabled: bool = True
 

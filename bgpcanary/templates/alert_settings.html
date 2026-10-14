@@ -116,7 +116,7 @@
       <form method="post" action="/settings/alerts/webhooks/{{ h.i }}/update" id="wh{{ h.i }}"></form>
       <td><input form="wh{{ h.i }}" type="checkbox" name="enabled" value="1" {{ 'checked' if h.enabled }} title="Send alerts to this webhook"></td>
       <td><input form="wh{{ h.i }}" name="name" value="{{ h.name }}" style="width:140px"></td>
-      <td><select form="wh{{ h.i }}" name="format"><option value="slack" {{ 'selected' if h.format == 'slack' }}>Slack</option><option value="json" {{ 'selected' if h.format == 'json' }}>JSON</option></select></td>
+      <td><select form="wh{{ h.i }}" name="format"><option value="slack" {{ 'selected' if h.format == 'slack' }}>Slack</option><option value="teams" {{ 'selected' if h.format == 'teams' }}>Teams</option><option value="json" {{ 'selected' if h.format == 'json' }}>JSON</option></select></td>
       <td><span class="mono muted">{{ h.masked }}</span><br><input form="wh{{ h.i }}" name="url" placeholder="paste a new URL to replace it" style="width:280px" autocomplete="off"></td>
       <td style="white-space:nowrap">
         <button form="wh{{ h.i }}" type="submit">Save</button>
@@ -129,8 +129,8 @@
   <h2 style="margin-top:18px">Add a webhook</h2>
   <form method="post" action="/settings/alerts/webhooks/add" class="toolbar" autocomplete="off">
     <input name="name" placeholder="Name, e.g. slack-noc" style="width:160px">
-    <select name="format"><option value="slack">Slack</option><option value="json">JSON (generic)</option></select>
-    <input name="url" placeholder="https://hooks.slack.com/services/..." required style="flex:1;min-width:280px">
+    <select name="format"><option value="slack">Slack</option><option value="teams">Microsoft Teams</option><option value="json">JSON (generic)</option></select>
+    <input name="url" placeholder="the webhook URL from Slack, Teams or your receiver" required style="flex:1;min-width:280px">
     <button class="primary" type="submit">Add</button>
   </form>
   <details><summary class="muted">How to get a Slack webhook URL</summary>
@@ -139,7 +139,18 @@
       <li>Open <strong>Incoming Webhooks</strong>, switch it <strong>On</strong>, then click <strong>Add New Webhook to Workspace</strong>.</li>
       <li>Pick the channel, click <strong>Allow</strong>, then copy the URL into the form above and click <strong>Test</strong>.</li>
     </ol>
-    <p class="muted" style="font-size:13px">The <strong>JSON</strong> format posts <code>{phase, state, subject, text, link, event{…}}</code>. Use it for Teams (through a Power Automate "When a HTTP request is received" flow), PagerDuty-style receivers, or your own scripts.</p>
+  </details>
+  <details><summary class="muted">How to get a Microsoft Teams webhook URL</summary>
+    <ol class="muted" style="font-size:13px">
+      <li>In Teams, open the channel, click <strong>⋯</strong> (More options) next to its name and choose <strong>Workflows</strong>.</li>
+      <li>Pick the template <strong>Send webhook alerts to a channel</strong>, name it (e.g. "bgpcanary"), and click <strong>Next</strong>.</li>
+      <li>Check the team and channel, click <strong>Add workflow</strong>, then copy the URL it shows.</li>
+      <li>Add it above with the format <strong>Microsoft Teams</strong> and click <strong>Test</strong>. Alerts arrive as cards posted by the Workflows app.</li>
+    </ol>
+    <p class="muted" style="font-size:13px">Older "Incoming Webhook" connector URLs (<code>…webhook.office.com…</code>) also work with this format until Microsoft retires them.</p>
+  </details>
+  <details><summary class="muted">The generic JSON format</summary>
+    <p class="muted" style="font-size:13px">The <strong>JSON</strong> format posts <code>{phase, state, subject, text, link, event{…}}</code>. Use it for PagerDuty-style receivers, automation tools, or your own scripts.</p>
   </details>
 </div>
 <script>

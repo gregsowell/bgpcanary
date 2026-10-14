@@ -20,7 +20,7 @@ networks.
   - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't.
   - A time slider, playback and GIF export.
   - Side-by-side comparison of several prefixes.
-- **Detection and alerts** (email, Slack or any webhook), each type switchable with its own thresholds:
+- **Detection and alerts** (email, Slack, Microsoft Teams or any webhook), each type switchable with its own thresholds:
   - outages and brief dips;
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;
   - missing or unexpected upstreams;

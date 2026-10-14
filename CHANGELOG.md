@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-10-13
+
+### Added
+- Microsoft Teams webhooks: choose the **Microsoft Teams** format under Settings › Alerts › Webhooks and paste the URL from a channel's "Send webhook alerts to a channel" workflow. Alerts arrive as cards with a colored status line, the event details and an "Open in bgpcanary" button. Step-by-step instructions are on the settings page.
+
+### Changed
+- The help for the generic JSON format no longer points Teams users to a hand-built Power Automate flow.
+
 ## [1.1.4] - 2026-10-13
 
 ### Fixed
@@ -65,7 +73,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.4...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.5...HEAD
+[1.1.5]: https://github.com/gregsowell/bgpcanary/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/gregsowell/bgpcanary/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/gregsowell/bgpcanary/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/gregsowell/bgpcanary/compare/v1.1.1...v1.1.2

@@ -1,4 +1,4 @@
-"""Email + webhook (Slack / generic JSON) alerting."""
+"""Email + webhook (Slack / Microsoft Teams / generic JSON) alerting."""
 import asyncio
 import html
 import json
@@ -130,6 +130,30 @@ def _slack_payload(ev, phase, subject, fields, link, state):
     return {"text": f"{state}: {ev['title']}", "blocks": blocks}
 
 
+TEAMS_COLOR = {"critical": "Attention", "warning": "Warning", "info": "Accent", "resolved": "Good"}
+
+
+def _teams_payload(ev, phase, subject, fields, link, state):
+    """An Adaptive Card, as the Teams "Send webhook alerts to a channel" workflow expects."""
+    if ev["severity"] == "info":
+        sev = "info"
+    else:
+        sev = "resolved" if phase == "close" else ev["severity"]
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "type": "AdaptiveCard", "version": "1.4",
+        "msteams": {"width": "Full"},
+        "body": [
+            {"type": "TextBlock", "text": state, "weight": "Bolder", "size": "Small", "color": TEAMS_COLOR.get(sev, "Accent")},
+            {"type": "TextBlock", "text": ev["title"], "weight": "Bolder", "size": "Medium", "wrap": True},
+            {"type": "FactSet", "facts": [{"title": str(k), "value": str(v)} for k, v in fields]},
+        ],
+    }
+    if link:
+        card["actions"] = [{"type": "Action.OpenUrl", "title": "Open in bgpcanary", "url": link}]
+    return {"type": "message", "summary": subject,
+            "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "contentUrl": None, "content": card}]}
+
+
 async def send(cfg, conn, ev, phase, only=None, images=()):
     """Send an alert on all enabled channels (or just `only`: "email" or "webhook:<index>").
     `ev` is a dict (event row); `images` = [(cid, png_bytes, caption)] embedded in the email.
@@ -158,6 +182,8 @@ async def send(cfg, conn, ev, phase, only=None, images=()):
             try:
                 if wh.format == "slack":
                     payload = _slack_payload(ev, phase, subject, fields, link, state)
+                elif wh.format == "teams":
+                    payload = _teams_payload(ev, phase, subject, fields, link, state)
                 else:
                     payload = {"phase": phase, "state": state, "subject": subject, "text": text, "link": link,
                                "event": {k: ev.get(k) for k in ("id", "kind", "severity", "prefix", "start_ts",

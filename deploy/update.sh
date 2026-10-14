@@ -7,7 +7,7 @@
 #   sudo bgpcanary-update --from DIR|FILE  install from a local source directory or .tar.gz (no download)
 #   sudo bgpcanary-update --rollback       undo the last update: previous code + the database from before it
 #
-# Every update first saves the database and configuration to /var/lib/bgpcanary/backups/, then runs the new
+# Every update first saves the database and configuration to /var/backups/bgpcanary/, then runs the new
 # release's installer (which keeps your settings, data, users and certificate) and checks the service is healthy.
 set -euo pipefail
 # The installer replaces this very file; run from a private copy so bash never reads a half-replaced script.
@@ -20,7 +20,6 @@ trap 'rm -f "$BGPCANARY_UPDATE_COPY"' EXIT
 APP=/opt/bgpcanary
 DATA=/var/lib/bgpcanary
 ETC=/etc/bgpcanary
-BK="$DATA/backups"
 current() { sed -n 's/^__version__ = "\(.*\)"/\1/p' "$APP/bgpcanary/__init__.py" 2>/dev/null; }
 REPO=$(sed -n 's/^REPO = "\([^"]*\)".*/\1/p' "$APP/bgpcanary/__init__.py" 2>/dev/null)
 REPO=${REPO:-gregsowell/bgpcanary}
@@ -37,6 +36,27 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" = 0 ] || [ "$MODE" = check ] || { echo "Run as root: sudo bgpcanary-update"; exit 1; }
 CUR=$(current)
+
+# Backups live in a directory only root can write. The service account owns $DATA, so anything root did in
+# there (writing, chown, pruning) could be pointed at other files by a compromised service. Here the database
+# is read as the service user (so it can only ever yield what the service could read anyway) and root only
+# writes into $BK.
+BK=/var/backups/bgpcanary
+backup_db() {   # backup_db NAME.db : a consistent copy of the database into $BK/NAME.db
+  local tmp out="$BK/$1"
+  install -d -o root -g root -m 700 "$BK"
+  tmp=$(runuser -u bgpcanary -- mktemp -p "$DATA" .backup.XXXXXX) || return 1
+  if runuser -u bgpcanary -- sqlite3 -init /dev/null "$DATA/bgpcanary.db" ".backup '$tmp'" >/dev/null &&
+     (umask 077; runuser -u bgpcanary -- cat "$tmp" > "$out.part") && mv -f "$out.part" "$out"; then
+    runuser -u bgpcanary -- rm -f "$tmp"; echo "    $out"
+  else
+    runuser -u bgpcanary -- rm -f "$tmp"; rm -f "$out.part"; return 1
+  fi
+}
+keep_newest() {   # keep_newest N PATTERN : delete all but the newest N files in $BK matching PATTERN
+  find "$BK" -maxdepth 1 -type f -name "$2" -printf '%T@ %p\n' 2>/dev/null | sort -rn | tail -n +"$(($1 + 1))" \
+    | cut -d' ' -f2- | while IFS= read -r f; do rm -f -- "$f"; done
+}
 
 # (the config is readable only by root and the service; --check runs without sudo, so a failed read is fine)
 PORT=$(sed -n 's/^listen_port *= *\([0-9]*\).*/\1/p' "$ETC/config.toml" 2>/dev/null | head -1 || true)
@@ -60,7 +80,8 @@ newer() {   # is $1 a newer version than $2? (sort -V understands 1.10.0 > 1.9.0
 
 if [ "$MODE" = rollback ]; then
   [ -d "$APP/bgpcanary.old" ] || { echo "Nothing to roll back to (no previous version kept)."; exit 1; }
-  DB=$(ls -1t "$BK"/before-update-*.db 2>/dev/null | head -1 || true)
+  DB=$(find "$BK" -maxdepth 1 -type f -name 'before-update-*.db' -printf '%T@ %p\n' 2>/dev/null | sort -rn \
+       | awk 'NR == 1 { sub(/^[^ ]+ /, ""); print }')
   echo "Rolling back from $CUR to $(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$APP/bgpcanary.old/__init__.py")"
   [ -n "$DB" ] && echo "and restoring the database saved before the update: $DB"
   read -r -p "Continue? [y/N] " a; [ "$a" = y ] || [ "$a" = Y ] || exit 1
@@ -68,10 +89,11 @@ if [ "$MODE" = rollback ]; then
   mv "$APP/bgpcanary" "$APP/bgpcanary.rolledback.$(date +%s)"
   mv "$APP/bgpcanary.old" "$APP/bgpcanary"
   if [ -n "$DB" ]; then
-    cp -a "$DATA/bgpcanary.db" "$BK/rolled-back-from-$CUR-$(date +%Y%m%d-%H%M%S).db"
-    rm -f "$DATA/bgpcanary.db-wal" "$DATA/bgpcanary.db-shm"
-    cp -a "$DB" "$DATA/bgpcanary.db"
-    chown bgpcanary:bgpcanary "$DATA/bgpcanary.db"
+    backup_db "rolled-back-from-$CUR-$(date +%Y%m%d-%H%M%S).db" || true
+    # written by the service user: root never writes into $DATA, which that account controls
+    runuser -u bgpcanary -- rm -f "$DATA/bgpcanary.db-wal" "$DATA/bgpcanary.db-shm" "$DATA/bgpcanary.db.restore"
+    runuser -u bgpcanary -- sh -c 'umask 027; cat > "$1"' sh "$DATA/bgpcanary.db.restore" < "$DB"
+    runuser -u bgpcanary -- mv -f "$DATA/bgpcanary.db.restore" "$DATA/bgpcanary.db"
   fi
   systemctl start bgpcanary
   v=$(healthy) && echo "Rolled back: bgpcanary $v is running." || { echo "The service didn't come back; see: journalctl -u bgpcanary -n 50"; exit 1; }
@@ -102,14 +124,11 @@ fi
 NEW=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$SRC/bgpcanary/__init__.py")
 
 echo "==> backing up the database and configuration ($CUR)"
-install -d -o bgpcanary -g bgpcanary -m 750 "$BK"
 STAMP=$(date +%Y%m%d-%H%M%S)
-sqlite3 "$DATA/bgpcanary.db" ".backup '$BK/before-update-$CUR-$STAMP.db'"
-tar -czf "$BK/config-$CUR-$STAMP.tar.gz" -C / "${ETC#/}" 2>/dev/null || true
-chown bgpcanary:bgpcanary "$BK"/before-update-*.db
-ls -1t "$BK"/before-update-*.db | tail -n +4 | xargs -r rm -f   # keep the newest 3
-ls -1t "$BK"/config-*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
-echo "    $BK/before-update-$CUR-$STAMP.db"
+backup_db "before-update-$CUR-$STAMP.db" || { echo "Couldn't back up the database; nothing was changed."; exit 1; }
+(umask 077; tar -czf "$BK/config-$CUR-$STAMP.tar.gz" -C / "${ETC#/}" 2>/dev/null) || true
+keep_newest 3 'before-update-*.db'
+keep_newest 5 'config-*.tar.gz'
 
 echo "==> installing bgpcanary $NEW (was $CUR)"
 bash "$SRC/deploy/install.sh"

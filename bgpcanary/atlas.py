@@ -120,6 +120,8 @@ def check_target(t):
     t = (t or "").strip()
     try:
         a = ipaddress.ip_address(t)
+        if getattr(a, "scope_id", None):
+            raise ValueError(f"'{t}' has a zone suffix")
     except ValueError:
         if HOSTNAME.match(t):
             return t.rstrip(".").lower()

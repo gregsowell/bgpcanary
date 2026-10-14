@@ -35,6 +35,29 @@ can be changed in the web UI instead (Settings), which avoids editing this file 
 - **The "choose a new password" page keeps coming back (1.0.0 and 1.1.0 only):** a bug on fresh installs where the ASN isn't set up yet. Update to 1.1.1 or later (`sudo bgpcanary-update`), or set the password from the command line as above.
 - **"Too many attempts":** logins are throttled after repeated failures. Wait a few minutes.
 
+## "Too many failed attempts" when signing in
+
+Login attempts are limited per address (5 per 15 minutes) and per account (20 per 15 minutes from browsers
+that haven't signed in to that account before). A browser that has signed in to the account before keeps
+working even while someone else is guessing at it. To clear every limit at once:
+
+```bash
+sudo systemctl restart bgpcanary
+```
+
+## "Refused: this request didn't come from this site's own pages"
+
+Changes (form submissions) are only accepted from bgpcanary's own address. If you reach it through another
+proxy or a different name than the one in your browser's address bar, set the Site URL to that address, in
+Settings › Alert channels or in `/etc/bgpcanary/config.toml`:
+
+```toml
+[web]
+base_url = "https://bgp.example.com"
+```
+
+Then `sudo systemctl restart bgpcanary`.
+
 ## No data / "RIS Live disconnected"
 
 - The server needs outbound HTTPS to `ris-live.ripe.net`. Test it:

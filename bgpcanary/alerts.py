@@ -3,10 +3,12 @@ import asyncio
 import html
 import json
 import logging
+import re
 import smtplib
 import ssl
 import time
 from email.message import EmailMessage
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -14,6 +16,34 @@ log = logging.getLogger("bgpcanary.alerts")
 
 EMOJI = {"critical": ":red_circle:", "warning": ":large_orange_circle:", "info": ":information_source:",
          "resolved": ":large_green_circle:"}
+
+
+_URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.I)
+
+
+def _mask_one(m):
+    try:
+        p = urlsplit(m.group(0))
+        host = p.hostname or "?"
+        return f"{p.scheme}://{'[' + host + ']' if ':' in host else host}/…"
+    except ValueError:
+        return "<URL>"
+
+
+def mask_urls(text):
+    """Keep only the scheme and host name of any URL in `text`: webhook URLs carry their secret in the path, and a
+    URL can carry user:password@ too."""
+    return _URL_RE.sub(_mask_one, str(text or ""))
+
+
+def safe_error(e, url=""):
+    """A webhook error message without the webhook URL."""
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"HTTP {e.response.status_code} {e.response.reason_phrase}".strip()
+    msg = str(e) or type(e).__name__
+    if url:
+        msg = msg.replace(url, "<webhook URL>")
+    return mask_urls(msg)
 
 
 def _fmt_ts(ts):
@@ -192,8 +222,11 @@ async def send(cfg, conn, ev, phase, only=None, images=()):
                 r.raise_for_status()
                 results.append((name, True, None))
             except Exception as e:
-                log.warning("%s alert failed: %s", name, e)
-                results.append((name, False, str(e)))
+                # The URL is the secret (Slack / Teams paths, sig= tokens) and httpx puts it in its error text:
+                # keep it out of the alert log (which viewers can read) and the journal.
+                err = safe_error(e, wh.url)
+                log.warning("%s alert failed: %s", name, err)
+                results.append((name, False, err))
     if conn is not None:
         for ch, ok, err in results:
             conn.execute("INSERT INTO alert_log(ts,event_id,channel,ok,error) VALUES(?,?,?,?,?)",

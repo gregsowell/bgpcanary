@@ -32,6 +32,27 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$(id -u)" = 0 ] || { echo "Run as root: sudo $0 $*"; exit 1; }
+
+# Backups live in a directory only root can write. The service account owns $DATA, so anything root did in
+# there (writing, chown, pruning) could be pointed at other files by a compromised service. Here the database
+# is read as the service user (so it can only ever yield what the service could read anyway) and root only
+# writes into $BK.
+BK=/var/backups/bgpcanary
+backup_db() {   # backup_db NAME.db : a consistent copy of the database into $BK/NAME.db
+  local tmp out="$BK/$1"
+  install -d -o root -g root -m 700 "$BK"
+  tmp=$(runuser -u bgpcanary -- mktemp -p "$DATA" .backup.XXXXXX) || return 1
+  if runuser -u bgpcanary -- sqlite3 -init /dev/null "$DATA/bgpcanary.db" ".backup '$tmp'" >/dev/null &&
+     (umask 077; runuser -u bgpcanary -- cat "$tmp" > "$out.part") && mv -f "$out.part" "$out"; then
+    runuser -u bgpcanary -- rm -f "$tmp"; echo "    $out"
+  else
+    runuser -u bgpcanary -- rm -f "$tmp"; rm -f "$out.part"; return 1
+  fi
+}
+keep_newest() {   # keep_newest N PATTERN : delete all but the newest N files in $BK matching PATTERN
+  find "$BK" -maxdepth 1 -type f -name "$2" -printf '%T@ %p\n' 2>/dev/null | sort -rn | tail -n +"$(($1 + 1))" \
+    | cut -d' ' -f2- | while IFS= read -r f; do rm -f -- "$f"; done
+}
 . /etc/os-release
 EL="${PLATFORM_ID#platform:}"
 case "$EL" in
@@ -114,15 +135,33 @@ fi
 
 echo "==> user and directories"
 id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
-install -d -o bgpcanary -g bgpcanary -m 750 "$DATA" "$DATA/backups"
+install -d -o bgpcanary -g bgpcanary -m 750 "$DATA"
 install -d -o root -g bgpcanary -m 750 "$ETC"
+install -d -o root -g root -m 700 "$BK"
 install -d -m 755 "$APP"
+if [ -d "$DATA/backups" ] && [ ! -L "$DATA/backups" ]; then
+  # before 1.2.2 backups were kept in $DATA/backups: move them to $BK (read as the service user, as above)
+  echo "==> moving backups to $BK"
+  # NUL-separated "mtime name" pairs; only the names bgpcanary itself used are taken, and each copy keeps its
+  # original time, so pruning and --rollback still pick backups by age
+  (cd / && runuser -u bgpcanary -- find "$DATA/backups" -maxdepth 1 -type f \
+      \( -name 'before-*.db' -o -name 'rolled-back-*.db' -o -name 'config-*.tar.gz' \) -printf '%T@ %f\0') |
+    while IFS= read -r -d '' line; do
+      t="${line%% *}"; f="${line#* }"; t="${t%.*}"
+      [[ "$t" =~ ^[0-9]+$ && "$f" =~ ^(before|rolled-back|config)-[A-Za-z0-9._-]+\.(db|tar\.gz)$ ]] || continue
+      if (umask 077; runuser -u bgpcanary -- cat "$DATA/backups/$f" > "$BK/$f"); then
+        touch -d "@$t" "$BK/$f"
+      else
+        rm -f "$BK/$f"
+      fi
+    done
+  runuser -u bgpcanary -- rm -rf "$DATA/backups"
+fi
 
 if [ -s "$DATA/bgpcanary.db" ]; then
   echo "==> backing up the database before upgrading"
-  B="$DATA/backups/before-$VERSION-$(date +%Y%m%d-%H%M%S).db"
-  sqlite3 "$DATA/bgpcanary.db" ".backup '$B'" && chown bgpcanary:bgpcanary "$B" && echo "    $B"
-  ls -1t "$DATA"/backups/before-*.db 2>/dev/null | tail -n +4 | xargs -r rm -f   # keep the newest 3
+  backup_db "before-$VERSION-$(date +%Y%m%d-%H%M%S).db" || echo "    (backup failed; continuing)"
+  keep_newest 3 'before-*.db'
 fi
 
 echo "==> code"
@@ -132,7 +171,7 @@ find "$APP/bgpcanary.new" -name '__pycache__' -prune -exec rm -rf {} +
 if [ -d "$APP/bgpcanary/static/vendor" ]; then cp -r "$APP/bgpcanary/static/vendor" "$APP/bgpcanary.new/static/"; fi
 rm -rf "$APP/bgpcanary.old"; [ -d "$APP/bgpcanary" ] && mv "$APP/bgpcanary" "$APP/bgpcanary.old"
 mv "$APP/bgpcanary.new" "$APP/bgpcanary"
-install -m 644 "$SRC/requirements.txt" "$APP/requirements.txt"
+[ "$SRC" = "$APP" ] || install -m 644 "$SRC/requirements.txt" "$APP/requirements.txt"   # (re-running the installed copy: same file)
 install -d -m 755 "$APP/deploy"   # kept so the update / uninstall / probe commands work later
 if [ "$SRC" != "$APP" ]; then
   for f in install.sh update.sh uninstall.sh atlas-probe.sh; do install -m 755 "$SRC/deploy/$f" "$APP/deploy/"; done
@@ -140,12 +179,19 @@ if [ "$SRC" != "$APP" ]; then
 fi
 
 mkdir -p "$APP/bgpcanary/static/vendor"
-if [ ! -s "$APP/bgpcanary/static/vendor/chart.umd.min.js" ]; then
-  curl -fsSL "$CHARTJS_URL" -o "$APP/bgpcanary/static/vendor/chart.umd.min.js"
-fi
-for f in gif.js gif.worker.js; do   # GIF encoder for the path-tree replay export (worker must be same-origin)
-  [ -s "$APP/bgpcanary/static/vendor/$f" ] || curl -fsSL "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/$f" -o "$APP/bgpcanary/static/vendor/$f"
-done
+vendor() {   # vendor FILE URL SHA256 : download a front-end library once and check it's exactly the expected file
+  local dst="$APP/bgpcanary/static/vendor/$1"
+  if [ -s "$dst" ] && echo "$3  $dst" | sha256sum -c --status; then return 0; fi
+  curl -fsSL "$2" -o "$dst.part" || { rm -f "$dst.part"; echo "Couldn't download $2"; exit 1; }
+  if ! echo "$3  $dst.part" | sha256sum -c --status; then
+    rm -f "$dst.part"; echo "$2 doesn't match its expected checksum; refusing to install it."; exit 1
+  fi
+  mv -f "$dst.part" "$dst"
+}
+vendor chart.umd.min.js "$CHARTJS_URL" 81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f
+# GIF encoder for the path-tree replay export (the worker must be same-origin)
+vendor gif.js https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js a8b111071bb3b123c302e6182c01d6b3550f93a4b627398b07c46875d84090bb
+vendor gif.worker.js https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js ca9e3048557ec05d619e18b83403cd3669c88939e5fa2d6034ce7625d445970d
 
 echo "==> python environment"
 # (re)create the venv if missing or built with an older Python than the one required
@@ -153,8 +199,9 @@ if [ ! -x "$APP/venv/bin/python" ] || ! "$APP/venv/bin/python" -c 'import sys; s
   rm -rf "$APP/venv"
   "$PY" -m venv "$APP/venv"
 fi
-"$APP/venv/bin/pip" install -q --upgrade pip
-"$APP/venv/bin/pip" install -q -r "$APP/requirements.txt"
+# exact versions, only files whose hashes are in requirements.txt, and only pre-built wheels (no build step that
+# could fetch unpinned build tools)
+"$APP/venv/bin/pip" install -q --disable-pip-version-check --require-hashes --only-binary :all: -r "$APP/requirements.txt"
 
 echo "==> config"
 if [ ! -f "$ETC/config.toml" ]; then
@@ -236,6 +283,13 @@ if [ -n "$CREDS" ]; then
   echo "  (also saved to $ETC/initial-admin-password; you must change the password at first login)"
 else
   echo "    users already exist; no default account created"
+  # the generated password stops working once it's changed: don't leave it lying around after that
+  # (only when the user list could be read: if that fails, keep the file)
+  if [ -f "$ETC/initial-admin-password" ] && USERS=$(/usr/bin/bgpcanary-admin users) && [ -n "$USERS" ] \
+     && ! grep -q "(must change password)" <<<"$USERS"; then
+    rm -f "$ETC/initial-admin-password"
+    echo "    removed $ETC/initial-admin-password (its temporary password has been changed)"
+  fi
 fi
 if [ "$ATLAS_PROBE" = 1 ]; then
   echo "==> RIPE Atlas software probe"

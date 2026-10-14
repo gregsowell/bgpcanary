@@ -577,6 +577,11 @@ class Service:
 
     async def run_probe(self, kind, target, trigger="manual", event_id=None, server=None):
         server = server or self.probe_server
+        try:
+            target = config.plain_ip(target)   # e.g. an older saved setting: refuse it here, not at the collector
+        except ValueError:
+            log.warning("%s skipped: %r isn't a plain IP address", kind, str(target)[:80])
+            return None
         ok, why = self.rv_allowed(server, trigger)
         if not ok:
             log.info("%s %s via %s skipped: %s", kind, target, server, why)

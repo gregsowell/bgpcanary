@@ -99,7 +99,7 @@ sudo journalctl -u bgpcanary -f                          # live log
 |---|---|
 | Program | `/opt/bgpcanary` (code, Python environment, deploy scripts) |
 | Database | `/var/lib/bgpcanary/bgpcanary.db` (SQLite) |
-| Backups | `/var/lib/bgpcanary/backups/` |
+| Backups | `/var/backups/bgpcanary/` (root only; before 1.2.2: `/var/lib/bgpcanary/backups/`) |
 | Settings file | `/etc/bgpcanary/config.toml` |
 | First admin password | `/etc/bgpcanary/initial-admin-password` |
 | Web server config | `/etc/nginx/conf.d/bgpcanary.conf` |

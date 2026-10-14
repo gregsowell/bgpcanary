@@ -4,14 +4,16 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from itsdangerous import BadData, URLSafeTimedSerializer
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import REPO, __version__, alerts, atlas, auth, config, db, evidence, paths, registry, ripe, transit, tree, updates
@@ -48,6 +50,7 @@ def fmt_dur(s):
 
 templates.env.filters["dur"] = fmt_dur
 templates.env.filters["fromjson"] = lambda s: json.loads(s) if s else {}
+templates.env.filters["mask_urls"] = alerts.mask_urls   # older alert-log rows may still hold a webhook URL
 
 
 @asynccontextmanager
@@ -62,6 +65,58 @@ app.add_middleware(SessionMiddleware, secret_key=cfg.secret_key, session_cookie=
                    max_age=7 * 86400, same_site="strict",
                    https_only=os.environ.get("BGPCANARY_INSECURE_COOKIES") != "1")
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
+
+
+def _origin(url):
+    """(scheme, host, port) of an http(s) URL, the default port filled in; ValueError if it isn't one."""
+    p = urlsplit(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        raise ValueError(url)
+    return p.scheme, p.hostname.lower(), p.port or (443 if p.scheme == "https" else 80)
+
+
+def _our_origins(request):
+    """Where this site's own pages are: the address the browser used (scheme from the proxy, Host as the browser sent
+    it), any X-Forwarded-Host from a proxy in front, and the configured Site URL."""
+    out, scheme = set(), request.url.scheme   # (uvicorn applies X-Forwarded-Proto from nginx)
+    for h in (request.headers.get("host"), request.headers.get("x-forwarded-host")):
+        if h:
+            try:
+                out.add(_origin(f"{scheme}://{h.split(',')[0].strip()}"))
+            except ValueError:
+                pass
+    if cfg.base_url:
+        try:
+            out.add(_origin(cfg.base_url))
+        except ValueError:
+            pass
+    return out
+
+
+@app.middleware("http")
+async def same_origin_writes(request: Request, call_next):
+    """CSRF protection on top of SameSite=Strict cookies. A browser always says where a POST comes from (Origin, or at
+    least Referer); only this site's own origin (scheme, host and port) may change anything, so a form on another
+    site, a sibling subdomain or another port of this host is refused. A POST that carries a session cookie but
+    neither header isn't trusted either. Scripts without a session (e.g. curl) pass.
+    A proxy that rewrites Host can make real pages look foreign: set the Site URL ([web] base_url) to the address
+    people use."""
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        src = request.headers.get("origin") or request.headers.get("referer")
+        if src is None:
+            ok = "bgpcanary" not in request.cookies
+        else:
+            try:
+                ok = src != "null" and _origin(src) in _our_origins(request)
+            except ValueError:   # malformed: refused, cleanly
+                ok = False
+        if not ok:
+            log.warning("refused a cross-site %s %s (from %s)", request.method, request.url.path,
+                        (src or "no Origin/Referer")[:100])
+            return PlainTextResponse("Refused: this request didn't come from this site's own pages. If you use a "
+                                     "different address or a proxy, set the Site URL ([web] base_url) to it.",
+                                     status_code=403)
+    return await call_next(request)
 
 
 class NeedLogin(Exception):
@@ -82,7 +137,8 @@ class NeedSetup(Exception):
 
 # Pages usable before the ASN/prefixes are set up. Include the targets of their forms: the first-login
 # password change posts to /settings/password, and leaving it out made that change impossible on fresh installs.
-SETUP_PATHS = ("/settings/monitor", "/restarting", "/account/password", "/settings/password", "/logout", "/users",
+SETUP_PATHS = ("/settings/monitor", "/restarting", "/account/password", "/settings/password", "/settings/signout-others",
+               "/logout", "/users",
                "/settings/alerts")
 
 
@@ -125,7 +181,8 @@ def user(request: Request, allow_must_change=False):
     if not u:
         raise NeedLogin()
     row = auth.get_user(svc.aconn, u)
-    if not row:
+    if not row or request.session.get("v", 0) != row["session_ver"]:
+        # deleted, or signed out everywhere by a password / role change since this session started
         request.session.clear()
         raise NeedLogin()
     request.state.role = row["role"]
@@ -142,6 +199,14 @@ def admin(request: Request):
     if request.state.role != "admin":
         raise AdminOnly()
     return u
+
+
+def keep_session(request, username):
+    """After changing your own password or role, stay signed in here (other sessions are signed out)."""
+    if request.session.get("user") == username:
+        row = auth.get_user(svc.aconn, username)
+        if row:
+            request.session["v"] = row["session_ver"]
 
 
 def rconn():
@@ -171,28 +236,80 @@ async def login_form(request: Request, next: str = "/"):
     return render(request, "login.html", next=next, error=None)
 
 
+_login_slots = asyncio.Semaphore(4)   # password hashing is deliberately expensive: a few at a time
+_login_waiting = 0                    # ...and only so many may queue for it; the rest are turned away at once
+LOGIN_QUEUE_MAX = 32
+
+# "Known device" cookie: set when a browser signs in, it exempts that browser from the per-account login limit
+# (see auth.Throttle), so someone guessing at a known username can't lock its owner out. It isn't a credential:
+# it only changes which attempt budget a login uses. Signed with the secret key; sent only to /login.
+DEVICE_COOKIE, DEVICE_MAX_AGE = "bgpcanary_device", 180 * 86400
+_devices = URLSafeTimedSerializer(cfg.secret_key, salt="bgpcanary-known-device")
+
+
+def known_device(request, username):
+    raw = request.cookies.get(DEVICE_COOKIE) or ""
+    if not raw or len(raw) > 512:
+        return None
+    try:
+        d = _devices.loads(raw, max_age=DEVICE_MAX_AGE)
+    except BadData:
+        return None
+    if isinstance(d, dict) and d.get("u") == username and isinstance(d.get("id"), str):
+        return d["id"][:32]
+    return None
+
+
+_refusals = {}   # message -> (time, page)
+
+
+def login_refusal(request, message, status):
+    """The login page with `message`, rendered at most every 10 s and reused: under a flood of attempts, turning
+    each one away costs next to nothing, so the monitoring keeps running."""
+    hit = _refusals.get(message)
+    if not hit or time.time() - hit[0] > 10:
+        hit = (time.time(), render(request, "login.html", next="/", error=message).body)
+        _refusals[message] = hit
+    return HTMLResponse(hit[1], status_code=status, headers={"Retry-After": "10"})
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("/")):
+    global _login_waiting
     ip = request.headers.get("x-real-ip") or request.client.host
-    if throttle.blocked(ip):
-        return render(request, "login.html", next=next, error="Too many failed attempts. Try again later.")
-    conn = rconn()
-    ok = await asyncio.to_thread(auth.check_user, conn, username, password)
-    conn.close()
+    if _login_waiting >= LOGIN_QUEUE_MAX:
+        return login_refusal(request, "The server is busy. Try again in a moment.", 503)
+    device = known_device(request, username)
+    if len(username) > 64 or len(password) > 1024 or not throttle.attempt(ip, username, device):
+        if throttle.first_refusal(ip, username):   # once per window, so a flood can't fill the journal
+            log.warning("login refused for %r from %s (too many attempts)", username[:64], ip)
+        return login_refusal(request, "Too many failed attempts. Try again later.", 429)
+    _login_waiting += 1
+    try:
+        async with _login_slots:
+            conn = rconn()
+            try:
+                ok = await asyncio.to_thread(auth.check_user, conn, username, password)
+            finally:
+                conn.close()
+    finally:
+        _login_waiting -= 1
     if not ok:
-        throttle.fail(ip)
-        log.warning("failed login for %r from %s", username, ip)
+        log.warning("failed login for %r from %s", username[:64], ip)
         await asyncio.sleep(1)
         return render(request, "login.html", next=next, error="Invalid username or password.")
-    throttle.reset(ip)
+    throttle.success(ip, username, device)
+    row = auth.get_user(svc.aconn, username)
     request.session.clear()
     request.session["user"] = username
+    request.session["v"] = row["session_ver"] if row else 0
     if not next.startswith("/") or next.startswith("//"):
         next = "/"
-    row = auth.get_user(svc.aconn, username)
-    if row and row["must_change"]:
-        return RedirectResponse("/account/password", status_code=303)
-    return RedirectResponse(next, status_code=303)
+    resp = RedirectResponse("/account/password" if row and row["must_change"] else next, status_code=303)
+    resp.set_cookie(DEVICE_COOKIE, _devices.dumps({"u": username, "id": device or secrets.token_urlsafe(12)}),
+                    max_age=DEVICE_MAX_AGE, path="/login", httponly=True, samesite="strict",
+                    secure=os.environ.get("BGPCANARY_INSECURE_COOKIES") != "1")
+    return resp
 
 
 @app.get("/logout")
@@ -799,9 +916,8 @@ async def snapshot_page(request: Request, sid: int):
 @app.post("/actions/probe")
 async def action_probe(request: Request, kind: str = Form(...), target: str = Form(...)):
     admin(request)
-    import ipaddress
     try:
-        ipaddress.ip_address(target)
+        target = config.plain_ip(target)   # only the normalized address goes to the Route Views session
     except ValueError:
         raise HTTPException(400, "target must be an IP address")
     if kind not in ("ping", "traceroute"):
@@ -1069,7 +1185,7 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
     targets = []
     for x in _parse_list(probe_targets):
         try:
-            targets.append(str(ipaddress.ip_address(x)))
+            targets.append(config.plain_ip(x))
         except ValueError:
             return back(f"Probe target {x} isn't an IP address")
     data = {"asn": int(a), "prefixes": pfx, "expected_upstreams": ups, "owned_space": owned,
@@ -1206,7 +1322,11 @@ def _alert_types(form=None):
 
 
 @app.get("/settings/alerts", response_class=HTMLResponse)
-async def alert_settings_page(request: Request, msg: str = "", err: int = 0, form=None):
+async def alert_settings_page(request: Request, msg: str = "", err: int = 0):
+    return await _alert_settings(request, msg, err)
+
+
+async def _alert_settings(request, msg="", err=0, form=None):
     admin(request)
     d = config.alert_settings_dict(cfg)
     hooks = [{"i": i, "name": w["name"], "format": w["format"], "enabled": w["enabled"], "masked": _mask_url(w["url"])}
@@ -1239,7 +1359,7 @@ async def alert_settings_types(request: Request):
     if tuning.get("recover_threshold_pct", 100) < tuning.get("outage_threshold_pct", 0):
         problems.append("The recovery level must be at or above the outage threshold")
     if problems:   # show the form again with everything that was typed
-        return await alert_settings_page(request, "Not saved: " + "; ".join(problems), 1, form=f)
+        return await _alert_settings(request, "Not saved: " + "; ".join(problems), 1, form=f)
     d = config.alert_settings_dict(cfg)
     d["kinds"] = kinds
     _save_alert_settings(d, who, "alert types: " + ", ".join(f"{k}={v}" for k, v in kinds.items()))
@@ -1410,10 +1530,21 @@ async def change_password(request: Request, current: str = Form(...), new: str =
     if new == current:
         return RedirectResponse(f"{back}?msg=" + quote("Choose a password different from the current one"),
                                 status_code=303)
-    auth.set_user(svc.aconn, u, new)   # keeps role; clears must_change
+    auth.set_user(svc.aconn, u, new)   # keeps role; clears must_change; signs out other sessions
+    keep_session(request, u)
     if back == "/account/password":
         return RedirectResponse("/", status_code=303)
     return RedirectResponse("/settings?msg=" + quote("Password changed"), status_code=303)
+
+
+@app.post("/settings/signout-others")
+async def signout_others(request: Request):
+    """Sign this account out of every other browser (e.g. after using a shared computer)."""
+    u = user(request, allow_must_change=True)
+    auth.sign_out_everywhere(svc.aconn, u)
+    keep_session(request, u)
+    log.info("user %s signed out their other sessions", u)
+    return RedirectResponse("/settings?msg=" + quote("Signed out everywhere else"), status_code=303)
 
 
 # ---------------------------------------------------------------------- user management (admins)
@@ -1455,6 +1586,7 @@ async def users_role(request: Request, username: str, role: str = Form(...)):
     if target["role"] == "admin" and role != "admin" and auth.admin_count(svc.aconn) <= 1:
         return _users_redirect("Can't demote the last admin. Make another user an admin first.", True)
     auth.set_role(svc.aconn, username, role)
+    keep_session(request, username)
     log.info("user %s set role of %s to %s", me, username, role)
     return _users_redirect(f"{username} is now {'an admin' if role == 'admin' else 'a viewer (read-only)'}")
 
@@ -1467,6 +1599,7 @@ async def users_reset(request: Request, username: str, password: str = Form(...)
     if len(password) < auth.MIN_PASSWORD:
         return _users_redirect(f"Passwords must be at least {auth.MIN_PASSWORD} characters", True)
     auth.set_user(svc.aconn, username, password, must_change=1 if must_change else 0)
+    keep_session(request, username)
     log.info("user %s reset the password of %s", me, username)
     return _users_redirect(f"Password reset for {username}" + (" (must change at next login)" if must_change else ""))
 

@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import socket
+import threading
 import time
 
 import httpx
@@ -395,6 +396,7 @@ class RegistryWatch:
 
 # ---------------------------------------------------------------------- as-set details (Registry page links)
 _ASSET_CACHE = {}   # (name, source) -> (ts, detail)
+_ASSET_LOCK = threading.Lock()   # lookups run in worker threads
 
 
 def _irrd_multi(commands):
@@ -422,7 +424,8 @@ def asset_detail(name, source, my_asn, upstreams=(), max_lookups=80):
     members, the full recursive expansion, and the chain of nested sets through which `my_asn` is included."""
     name, source = name.upper(), (source or "").upper()
     key = (name, source)
-    hit = _ASSET_CACHE.get(key)
+    with _ASSET_LOCK:
+        hit = _ASSET_CACHE.get(key)
     if hit and time.time() - hit[0] < 3600:
         return hit[1]
     src_cmd = [f"!s{source}"] if source else []
@@ -460,5 +463,9 @@ def asset_detail(name, source, my_asn, upstreams=(), max_lookups=80):
         "upstreams_in": [f"AS{u}" for u in upstreams if f"AS{u}" in expanded],
         "fetched": time.time(),
     }
-    _ASSET_CACHE[key] = (time.time(), detail)
+    with _ASSET_LOCK:
+        if len(_ASSET_CACHE) >= 500:   # bounded: drop the oldest lookups
+            for k in sorted(_ASSET_CACHE, key=lambda k: _ASSET_CACHE[k][0])[:100]:
+                _ASSET_CACHE.pop(k, None)
+        _ASSET_CACHE[key] = (time.time(), detail)
     return detail

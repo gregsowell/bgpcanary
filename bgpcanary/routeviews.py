@@ -3,7 +3,7 @@ import asyncio
 import logging
 import re
 
-from . import paths
+from . import config, paths
 
 log = logging.getLogger("bgpcanary.routeviews")
 
@@ -184,6 +184,7 @@ async def show_bgp_many(host, prefixes):
 
 
 async def ping(host, target):
+    target = config.plain_ip(target)   # only ever a plain address on the collector's command line (ValueError if not)
     async with lock_for(host):
         async with Session(host) as s:
             raw = await s.cmd(f"ping {target}", timeout=60)
@@ -192,6 +193,7 @@ async def ping(host, target):
 
 async def traceroute(host, target, max_dark_hops=4):
     """Runs traceroute; aborts (Ctrl-^) after `max_dark_hops` consecutive all-'*' hops."""
+    target = config.plain_ip(target)
     state = {"aborted": False}
 
     async def watch(sess):

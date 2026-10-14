@@ -393,10 +393,25 @@ def _read(path):
             "(Most settings can be changed in the web UI instead; values saved there override this file.)") from None
 
 
+def plain_ip(text):
+    """A plain IPv4/IPv6 address, normalized (e.g. '2001:DB8::01' -> '2001:db8::1'); ValueError otherwise.
+    Rejects IPv6 zone suffixes ('fe80::1%eth0'), which ipaddress accepts but which aren't just an address."""
+    a = ipaddress.ip_address(str(text).strip())
+    if getattr(a, "scope_id", None):
+        raise ValueError(f"{text!r} has a zone suffix")
+    return str(a)
+
+
 def load(path: str = DEFAULT_PATH) -> Config:
     raw = _read(path)
     mon = raw.get("monitor", {})
     web = raw.get("web", {})
+    # signs the login cookies: the example file's placeholder (or anything short) would let anyone forge them
+    sk = str(web.get("secret_key", ""))
+    if sk == "__SECRET__" or len(sk) < 32:
+        what = "the example placeholder" if sk == "__SECRET__" else "missing or too short"
+        raise ConfigError(f"Config file {path}: [web] secret_key is {what}. Set it to a long random value, "
+                          "e.g. the output of: openssl rand -hex 32\n(Changing it signs everyone out.)")
     det = raw.get("detection", {})
     rv = raw.get("routeviews", {})
     al = raw.get("alerts", {})

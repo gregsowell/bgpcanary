@@ -25,16 +25,20 @@ This is the checklist for publishing a release. Users get it with `sudo bgpcanar
 
 ## Checklist
 
-1. **Test on a real server.** Use a test VM, not production:
+1. **Dependencies:** `requirements.txt` pins exact versions with hashes, and the installer refuses anything else.
+   To pick up newer libraries, install from `requirements.in` on a test server, test, then regenerate the lock
+   from that server:
+   `ssh testhost '/opt/bgpcanary/venv/bin/pip freeze' > /tmp/freeze.txt && python3 deploy/lock-requirements.py /tmp/freeze.txt > requirements.txt`.
+2. **Test on a real server.** Use a test VM, not production:
    - `deploy/push.sh user@testhost` installs your working tree there;
    - also test the upgrade path: install the *previous* release, then `sudo bgpcanary-update --from /path/to/new/source`.
-2. **Update [CHANGELOG.md](../CHANGELOG.md):**
+3. **Update [CHANGELOG.md](../CHANGELOG.md):**
    - rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`;
    - add a fresh empty `## [Unreleased]` above it;
    - write the notes for users ("Fixed: alert emails had no link when…"), not for developers;
    - update the comparison links at the bottom.
-3. **Bump the version** in `bgpcanary/__init__.py`: `__version__ = "X.Y.Z"`.
-4. **Commit, tag and push:**
+4. **Bump the version** in `bgpcanary/__init__.py`: `__version__ = "X.Y.Z"`.
+5. **Commit, tag and push:**
 
    ```bash
    git add -A
@@ -43,7 +47,7 @@ This is the checklist for publishing a release. Users get it with `sudo bgpcanar
    git push && git push --tags
    ```
 
-5. **Check the result:**
+6. **Check the result:**
    - the *Actions* tab shows the release workflow succeeded;
    - the *Releases* page shows **vX.Y.Z** with your notes;
    - on your own server, `sudo bgpcanary-update --check` reports it, and `sudo bgpcanary-update` installs it.

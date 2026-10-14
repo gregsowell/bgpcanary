@@ -121,7 +121,7 @@
       <td style="white-space:nowrap">
         <button form="wh{{ h.i }}" type="submit">Save</button>
         <form method="post" action="/settings/alerts/test" class="inline"><input type="hidden" name="channel" value="webhook:{{ h.i }}"><button type="submit">Test</button></form>
-        <form method="post" action="/settings/alerts/webhooks/{{ h.i }}/delete" class="inline" onsubmit="return confirm('Delete webhook {{ h.name or h.format }}?')"><button type="submit">Delete</button></form>
+        <form method="post" action="/settings/alerts/webhooks/{{ h.i }}/delete" class="inline" onsubmit='return confirm({{ ("Delete webhook " ~ (h.name or h.format) ~ "?")|tojson }})'><button type="submit">Delete</button></form>
       </td>
     </tr>
     {% else %}<tr><td colspan="5" class="muted">No webhooks yet.</td></tr>{% endfor %}

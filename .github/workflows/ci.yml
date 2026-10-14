@@ -7,8 +7,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97   # v7
         with:
           python-version: "3.11"   # the oldest Python bgpcanary supports (it needs tomllib)
       - name: Install dependencies
@@ -22,7 +22,7 @@ jobs:
           python - <<'EOF'
           import glob, jinja2, os
           env = jinja2.Environment(loader=jinja2.FileSystemLoader("bgpcanary/templates"))
-          env.filters.update(dur=lambda x: x, fromjson=lambda x: x)
+          env.filters.update(dur=lambda x: x, fromjson=lambda x: x, mask_urls=lambda x: x)
           for t in sorted(glob.glob("bgpcanary/templates/*.html")):
               env.get_template(os.path.basename(t))
           print("templates ok")

@@ -29,7 +29,7 @@
           </form>
         </td>
         <td>{% if u.username != me %}
-          <form method="post" action="/users/{{ u.username|urlencode }}/delete" class="inline" onsubmit="return confirm('Delete {{ u.username }}? This cannot be undone.')">
+          <form method="post" action="/users/{{ u.username|urlencode }}/delete" class="inline" onsubmit='return confirm({{ ("Delete " ~ u.username ~ "? This cannot be undone.")|tojson }})'>
             <button type="submit">Delete</button>
           </form>{% endif %}</td>
       </tr>

@@ -116,7 +116,7 @@
     <table>
       <tr><th>Time</th><th>Channel</th><th>Result</th><th>Event</th></tr>
       {% for a in log_rows %}
-      <tr><td><time data-ts="{{ a.ts }}" data-sec="1"></time></td><td>{{ a.channel }}</td><td>{% if a.ok %}<span class="badge b-ok">sent</span>{% else %}<span class="badge b-critical">failed</span> <span class="muted">{{ a.error }}</span>{% endif %}</td>
+      <tr><td><time data-ts="{{ a.ts }}" data-sec="1"></time></td><td>{{ a.channel }}</td><td>{% if a.ok %}<span class="badge b-ok">sent</span>{% else %}<span class="badge b-critical">failed</span> <span class="muted">{{ a.error|mask_urls }}</span>{% endif %}</td>
         <td>{% if a.event_id %}<a href="/events/{{ a.event_id }}">{{ a.title }}</a>{% else %}test{% endif %}</td></tr>
       {% else %}<tr><td colspan="4" class="muted">No alerts sent yet.</td></tr>{% endfor %}
     </table>

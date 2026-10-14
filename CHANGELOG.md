@@ -6,6 +6,38 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-14
+
+### Security
+Fixes from an independent security review.
+- **Backups moved to `/var/backups/bgpcanary` (root only).** They used to live in `/var/lib/bgpcanary/backups`, a directory the service account controls, where `bgpcanary-update`, `--rollback` and the installer worked as root. If the service account were ever compromised, it could have used that to reach other files on the server. The database is now read and restored as the service user, and root only writes into its own directory. Existing backups are moved automatically and keep their dates. (The update to 1.2.2 itself is still run by your installed updater. To use the new one for this update too, see [Upgrading](docs/UPGRADING.md#updating-to-122).)
+- **Webhook URLs no longer appear in error messages.** A failed webhook's error text could include its URL (which is the secret for Slack and Teams), and it was visible to read-only users under Settings and on event pages. Errors now show only the HTTP status, and URLs already in the alert log are masked.
+- **Changing a password signs that account out everywhere else.** So do an admin's password reset and role changes. There's also a new "Sign out everywhere else" button on the Change password page. A deleted account's old sessions don't carry over to a new account with the same name.
+- **Stronger login throttling:**
+  - attempts are counted before the password is checked, so sending many at once doesn't get around the limit;
+  - IPv6 clients are counted per /64;
+  - each account has its own limit (20 failures per 15 minutes), against guessing from many addresses. Browsers that have signed in to the account before ("known devices", remembered with a cookie) have their own budget instead, so someone guessing at a known username can't lock its owner out;
+  - logins wait for a few password checks at a time, and are turned away when too many are waiting, so a flood can't stall the monitoring;
+  - nginx also rate-limits login POSTs.
+  If you're ever locked out, `sudo systemctl restart bgpcanary` clears the limits.
+- **Requests from other sites are refused.** A change (a form POST) is only accepted from this site's own origin (scheme, host name and port), so forms on other sites, sibling subdomains or other ports of the same host are rejected. This adds to the SameSite cookies. If you reach bgpcanary through another proxy that rewrites the host name, set the Site URL (`[web] base_url`) to the address you use.
+- **The service refuses to start with the example config's placeholder `secret_key`,** or one shorter than 32 characters, which would let anyone forge login cookies. Installer-generated keys are not affected.
+- **Hardening:**
+  - stricter systemd sandbox for the service;
+  - a Content-Security-Policy, and the nginx version is hidden;
+  - Route Views ping/traceroute targets must be plain IP addresses, and Atlas targets can't carry IPv6 zone suffixes;
+  - the front-end libraries are checked against fixed SHA-256 checksums when installed;
+  - Python dependencies are pinned to exact, hash-checked versions and installed from pre-built packages only;
+  - GitHub Actions are pinned to commits;
+  - `/etc/bgpcanary/initial-admin-password` is removed by the next install or update once its temporary password has been changed;
+  - the RIPE Atlas probe installer no longer writes into the data directory as root;
+  - URLs in logged errors are reduced to scheme and host name (credentials included);
+  - the as-set lookup cache is bounded and thread-safe;
+  - repeated refused logins are logged once per 15 minutes, not per attempt.
+
+### Fixed
+- Opening `/settings/alerts?form=…` returned an error page.
+
 ## [1.2.1] - 2026-10-14
 
 ### Fixed
@@ -108,7 +140,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/gregsowell/bgpcanary/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/gregsowell/bgpcanary/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/gregsowell/bgpcanary/compare/v1.1.8...v1.2.0
 [1.1.8]: https://github.com/gregsowell/bgpcanary/compare/v1.1.7...v1.1.8

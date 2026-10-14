@@ -175,6 +175,14 @@ def init(path: str) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")  # existing users = admins
     if "must_change" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0")
+    if "session_ver" not in cols:   # bumped on password / role changes: older sessions stop working
+        conn.execute("ALTER TABLE users ADD COLUMN session_ver INTEGER NOT NULL DEFAULT 0")
+    # Before 1.2.2 a failed webhook's error text could include its (secret) URL: keep only scheme + host.
+    from .alerts import mask_urls
+    for r in conn.execute("SELECT id, error FROM alert_log WHERE error LIKE '%http%://%'").fetchall():
+        masked = mask_urls(r["error"])
+        if masked != r["error"]:
+            conn.execute("UPDATE alert_log SET error=? WHERE id=?", (masked, r["id"]))
     conn.commit()
     conn.close()
 

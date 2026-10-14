@@ -24,7 +24,7 @@
   <div class="panel">
     <h2>Alerts sent</h2>
     <table>
-      {% for a in alerts %}<tr><td><time data-ts="{{ a.ts }}" data-sec="1"></time></td><td>{{ a.channel }}</td><td>{% if a.ok %}<span class="badge b-ok">sent</span>{% else %}<span class="badge b-critical">failed</span> <span class="muted">{{ a.error }}</span>{% endif %}</td></tr>
+      {% for a in alerts %}<tr><td><time data-ts="{{ a.ts }}" data-sec="1"></time></td><td>{{ a.channel }}</td><td>{% if a.ok %}<span class="badge b-ok">sent</span>{% else %}<span class="badge b-critical">failed</span> <span class="muted">{{ a.error|mask_urls }}</span>{% endif %}</td></tr>
       {% else %}<tr><td class="muted">{% if ev.historical %}Events found during backfill don't send alerts.{% else %}None. Notifications for this alert type may be off or limited to higher severities (Settings › Alert channels › What to alert on).{% endif %}</td></tr>{% endfor %}
     </table>
   </div>

@@ -57,8 +57,10 @@ systemctl restart ripe-atlas.service
 sleep 3
 systemctl is-active -q ripe-atlas.service && echo "    ripe-atlas probe is running" || echo "    WARNING: ripe-atlas probe is not running (journalctl -u ripe-atlas)"
 # /etc/ripe-atlas is private to the probe; give bgpcanary a copy of the public key to show in Settings
-if [ -d /var/lib/bgpcanary ]; then
-  install -o bgpcanary -g bgpcanary -m 644 /etc/ripe-atlas/probe_key.pub /var/lib/bgpcanary/atlas-probe-key.pub
+# (written by the service user: root doesn't write into /var/lib/bgpcanary, which that account controls)
+if [ -d /var/lib/bgpcanary ] && id bgpcanary &>/dev/null; then
+  runuser -u bgpcanary -- sh -c 'umask 022; cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh /var/lib/bgpcanary/atlas-probe-key.pub \
+    < /etc/ripe-atlas/probe_key.pub || echo "    (couldn't copy the probe's public key for the Settings page)"
 fi
 echo
 echo "  Probe public key (register it at https://atlas.ripe.net/register/swprobe):"

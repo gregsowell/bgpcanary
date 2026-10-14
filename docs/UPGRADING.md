@@ -22,7 +22,7 @@ sudo bgpcanary-update
 
 That's all. It:
 1. finds the latest release on GitHub;
-2. **backs up** the database to `/var/lib/bgpcanary/backups/before-update-<version>-<date>.db`, and the settings in `/etc/bgpcanary` to a `.tar.gz` next to it;
+2. **backs up** the database to `/var/backups/bgpcanary/before-update-<version>-<date>.db`, and the settings in `/etc/bgpcanary` to a `.tar.gz` next to it;
 3. downloads and installs the new release. Your configuration, data, users, alert settings and certificate are kept, and any database changes the new version needs happen automatically when it starts;
 4. waits for the service to report the new version, and tells you if it doesn't.
 
@@ -49,13 +49,26 @@ sudo bgpcanary-update --rollback
 ```
 
 This restores the previous version's code **and** the database from just before the update. Anything recorded
-since the update is set aside, not deleted, in `/var/lib/bgpcanary/backups/rolled-back-from-*.db`. Only the most recent update can be rolled back this way.
+since the update is set aside, not deleted, in `/var/backups/bgpcanary/rolled-back-from-*.db`. Only the most recent update can be rolled back this way.
 To go further back, use `--version` with the older release number. Please also
 [open an issue](https://github.com/gregsowell/bgpcanary/issues) describing what went wrong.
 
+## Updating to 1.2.2
+
+1.2.2 moves backups to `/var/backups/bgpcanary` and changes how updates handle them (see the
+[changelog](../CHANGELOG.md)). The normal `sudo bgpcanary-update` works. That update is still run by the
+updater from your current version, and only the next one uses the new updater. The difference only matters if
+the `bgpcanary` service account could already have been compromised. To have 1.2.2's own updater do this
+update as well:
+
+```bash
+curl -fsSL https://github.com/gregsowell/bgpcanary/archive/refs/tags/v1.2.2.tar.gz | tar -xz -C /tmp
+sudo bash /tmp/bgpcanary-1.2.2/deploy/update.sh --from /tmp/bgpcanary-1.2.2
+```
+
 ## Backups
 
-- Updates keep the **last three** database backups and five settings archives in `/var/lib/bgpcanary/backups/`.
+- Updates keep the **last three** database backups and five settings archives in `/var/backups/bgpcanary/`.
 - For your own regular backups, copy the database safely while it's running:
 
   ```bash

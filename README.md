@@ -18,7 +18,7 @@ networks.
 - **Live visibility:** how many of RIPE RIS's ~330 peers see each prefix, in 30-second steps, with 90 days of history loaded on day one.
 - **Connectivity tree:**
   - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't.
-  - A time slider, playback and GIF export.
+  - All your prefixes in one tree by default (one colored strand each), or tick just the ones you want.
   - Side-by-side comparison of several prefixes.
 - **Detection and alerts** (email, Slack, Microsoft Teams or any webhook), each type switchable with its own thresholds:
   - outages and brief dips;

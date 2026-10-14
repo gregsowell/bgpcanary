@@ -602,9 +602,10 @@
         let g = rp;
         if (a > data.start + 1 || b < data.end - 1) {
           gs.textContent = "Loading range…";
-          const qs = new URLSearchParams(data.prefixes ? { prefixes: data.prefixes.join(","), start: a, end: b }
-                                                        : { prefix: data.prefix, start: a, end: b });
-          const r = await fetch((data.prefixes ? "/api/replay/compare?" : "/api/replay?") + qs);
+          const many = data.prefixes || data.combined;
+          const qs = new URLSearchParams(many ? { prefixes: many.join(","), start: a, end: b, combine: data.combined ? 1 : 0 }
+                                              : { prefix: data.prefix, start: a, end: b });
+          const r = await fetch((many ? "/api/replay/compare?" : "/api/replay?") + qs);
           if (!r.ok) throw "could not load the selected range";
           const d2 = await r.json();
           if (rp.ev) { d2.event = rp.ev; d2.events = [rp.ev]; }
@@ -631,7 +632,7 @@
         const link = document.createElement("a");
         const d = new Date(a * 1000), stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
         link.href = URL.createObjectURL(blob);
-        link.download = rp.ev ? `bgpcanary-event-${rp.ev.id}-${stamp}.gif` : data.prefixes ? `bgpcanary-compare-${stamp}.gif` : `bgpcanary-paths-${stamp}.gif`;
+        link.download = rp.ev ? `bgpcanary-event-${rp.ev.id}-${stamp}.gif` : data.prefixes || data.combined ? `bgpcanary-compare-${stamp}.gif` : `bgpcanary-paths-${stamp}.gif`;
         document.body.appendChild(link); link.click(); link.remove();
         gs.textContent = `Saved ${(blob.size / 1048576).toFixed(1)} MB GIF`;
       } catch (e) {

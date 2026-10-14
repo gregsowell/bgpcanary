@@ -65,6 +65,7 @@ button, .btn { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px
 button:hover, .btn:hover { border-color: var(--accent); text-decoration: none; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.tree-prefixes label { display: inline-flex; gap: 4px; align-items: center; color: var(--text); }
 input, select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
 form.inline { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .chart { position: relative; height: 300px; }

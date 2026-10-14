@@ -1,33 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-{% if summ|length > 1 %}
-<details class="panel" id="tree-cmp" open>
-  <summary><h2 style="margin:0;display:inline">Compare prefixes</h2> <span class="muted" style="font-size:13px">· one tree, one colored strand per prefix (click to fold)</span></summary>
-  <div class="toolbar" style="margin-top:12px">
-    <span class="cmp-range">
-      {% for label, secs in [('6h', 21600), ('24h', 86400), ('7d', 604800), ('30d', 2592000)] %}
-      <button type="button" data-secs="{{ secs }}">{{ label }}</button>
-      {% endfor %}
-    </span>
-    {% include "_tree_controls.html" %}
-  </div>
-  <div class="toolbar">
-    <span class="muted" style="font-size:13px">Prefixes:</span>
-    {% for s in summ %}<label style="display:inline-flex;gap:4px;align-items:center;color:var(--text)"><input type="checkbox" data-cmp-prefix value="{{ s.prefix }}" {{ 'checked' if loop.index <= 6 }}>
-      {{ s.prefix }}</label>{% endfor %}
-    <span style="flex:1"></span>
-    <button data-rp="play" type="button">▶ Play</button>
-    <button data-rp="jump-start" type="button">Window start</button>
-    <button data-rp="jump-drop" type="button">Lowest point</button>
-    <button data-rp="jump-end" type="button">Now</button>
-    <span class="muted" data-rp="status"></span>
-  </div>
-  {% include "_tree_body.html" %}
-  <p class="muted" style="margin:4px 0 0;font-size:12px">Each branch carries one strand per ticked prefix, in that prefix's color, thicker when more RIS peers see it that way.
-  A <strong>dashed strand</strong> means that prefix is <em>missing</em> on a branch that carries the others, and the node turns orange, the typical sign of a filter
-  that knows one of your prefixes but not another. The numbers next to each network are its peer counts per prefix, in the same order and colors as the header. Up to 6 prefixes at a time.</p>
-</details>
-{% endif %}
 {% for s in summ %}
 <div class="grid g4">
   <div class="panel stat">
@@ -69,22 +41,9 @@
   <p class="muted" style="margin:8px 0 0;font-size:12px">Shaded areas are events: red is critical, orange is warning, blue is a brief dip. Each point is the lowest value in its time bucket, so short drops stay visible when you zoom out.</p>
 </div>
 
-<div class="panel" id="tree-{{ loop.index }}">
-  <div class="toolbar">
-    <h2 style="margin:0;flex:1">Connectivity tree · {{ s.prefix }}</h2>
-    <label>Compare with <select data-rp="base"><option value="start" selected>window start</option><option value="best">healthiest point</option></select></label>
-    {% include "_tree_controls.html" %}
-  </div>
-  <div class="toolbar">
-    <button data-rp="play" type="button">▶ Play</button>
-    <button data-rp="jump-start" type="button">Window start</button>
-    <button data-rp="jump-drop" type="button">Lowest point</button>
-    <button data-rp="jump-end" type="button">Now</button>
-    <span class="muted" data-rp="status"></span>
-  </div>
-  {% include "_tree_body.html" %}
-  <p class="muted" style="margin:4px 0 0;font-size:12px">The slider covers the same window as the range buttons above and starts at "now". While it sits at "now" the tree refreshes every minute. Colors compare each branch with the start of the window, or with the healthiest point if you choose that: green is a new branch, orange lost more than half its peers, red dashed dropped out. Drag the slider or click the timeline strip to look back. The second layer always lists all of each upstream's own transits and peers from the global table. Red dotted branches marked "not carrying you" are neighbors that reach your upstream's own routes but none of yours.</p>
-</div>
+{% if loop.first %}
+{% include "_tree_panel.html" %}
+{% endif %}
 
 {% if loop.first %}
 <div class="grid g2">
@@ -176,47 +135,46 @@
 <script>document.addEventListener("DOMContentLoaded", () => initAtlasSummary({{ atlas_targets|tojson }}, 24));</script>{% endif %}
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  // Compare prefixes: several prefixes merged into one tree
-  const cmp = document.getElementById("tree-cmp");
-  if (cmp) {
-    const tree = initTree(cmp, { followNow: true, base: "start" });
-    const status = cmp.querySelector('[data-rp="status"]');
+  // Connectivity tree: all prefixes by default; tick fewer to focus. 1 prefix = its own tree, 2-6 = one colored
+  // strand each, more than 6 = combined into one strand (there are only 6 strand colors).
+  const panel = document.getElementById("tree");
+  if (panel) {
+    const tree = initTree(panel, { followNow: true });
+    const status = panel.querySelector('[data-rp="status"]');
+    const all = panel.querySelector("[data-tree-all]");
+    const boxes = [...panel.querySelectorAll("[data-tree-prefix]")];
+    const allPrefixes = {{ summ|map(attribute='prefix')|list|tojson }};
     let secs = 86400;
-    try { secs = parseInt(localStorage.getItem("bgpcanary.cmpRange")) || 86400; } catch (e) {}
+    try { secs = parseInt(localStorage.getItem("bgpcanary.treeRange") || localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
     const load = periodic => {
-      if (!cmp.open) return;
-      const sel = [...cmp.querySelectorAll("[data-cmp-prefix]:checked")].map(x => x.value).slice(0, 6);
-      if (sel.length < 2) { status.textContent = "Tick at least two prefixes to compare."; return; }
+      const sel = boxes.length ? boxes.filter(x => x.checked).map(x => x.value) : allPrefixes;
+      if (all) { all.checked = sel.length === boxes.length; all.indeterminate = sel.length > 0 && sel.length < boxes.length; }
+      if (!sel.length) { status.textContent = "Tick at least one prefix."; return; }
+      // periodic refreshes only move the tree while it is showing "now", so scrubbing isn't interrupted
       if (periodic && !tree.isFollowing()) return;
-      const end = Date.now() / 1000;
-      tree.load("/api/replay/compare?" + new URLSearchParams({ prefixes: sel.join(","), start: Math.floor(end - secs), end: Math.floor(end) }), periodic);
+      const end = Math.floor(Date.now() / 1000), start = Math.floor(end - secs);
+      if (sel.length === 1) tree.load("/api/replay?" + new URLSearchParams({ prefix: sel[0], start, end }), periodic);
+      else tree.load("/api/replay/compare?" + new URLSearchParams({ prefixes: sel.join(","), start, end, combine: sel.length > 6 ? 1 : 0 }), periodic);
     };
-    cmp.querySelectorAll(".cmp-range button").forEach(b => {
+    if (all) all.onchange = () => { boxes.forEach(x => x.checked = all.checked); load(); };
+    boxes.forEach(x => x.onchange = () => load());
+    panel.querySelectorAll(".tree-range button").forEach(b => {
       b.classList.toggle("on", parseInt(b.dataset.secs) === secs);
       b.onclick = () => {
         secs = parseInt(b.dataset.secs);
-        try { localStorage.setItem("bgpcanary.cmpRange", secs); } catch (e) {}
-        cmp.querySelectorAll(".cmp-range button").forEach(x => x.classList.toggle("on", x === b));
+        try { localStorage.setItem("bgpcanary.treeRange", secs); } catch (e) {}
+        panel.querySelectorAll(".tree-range button").forEach(x => x.classList.toggle("on", x === b));
         load();
       };
     });
-    cmp.querySelectorAll("[data-cmp-prefix]").forEach(x => x.onchange = () => load());
-    try { if (localStorage.getItem("bgpcanary.cmpOpen") === "0") cmp.open = false; } catch (e) {}
-    cmp.addEventListener("toggle", () => { try { localStorage.setItem("bgpcanary.cmpOpen", cmp.open ? "1" : "0"); } catch (e) {} if (cmp.open) load(); });
     load();
     setInterval(() => load(true), 60000);
   }
   document.querySelectorAll(".range").forEach((rg, i) => {
     const idx = i + 1, prefix = rg.dataset.prefix;
-    const tree = initTree(document.getElementById("tree-" + idx), { followNow: true });
-    const draw = (secs, periodic) => {
+    const draw = secs => {
       const end = Date.now() / 1000;
       renderCharts({ prefix, start: end - secs, end, visId: "vis-" + idx, chainId: "chain-" + idx, churnId: "churn-" + idx });
-      // periodic refreshes only move the tree while it is showing "now", so scrubbing isn't interrupted
-      if (!periodic || tree.isFollowing()) {
-        const q = new URLSearchParams({ prefix, start: Math.floor(end - secs), end: Math.floor(end) });
-        tree.load("/api/replay?" + q, periodic);
-      }
     };
     let cur = 86400;
     try { cur = parseInt(localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
@@ -230,7 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
       };
     });
     draw(cur);
-    setInterval(() => draw(cur, true), 60000);
+    setInterval(() => draw(cur), 60000);
   });
 });
 </script>

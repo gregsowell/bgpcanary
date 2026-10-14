@@ -564,10 +564,12 @@ def merge_replays(parts):
 
 
 @app.get("/api/replay/compare")
-async def api_compare_replay(request: Request, prefixes: str, start: float = None, end: float = None):
-    """Path-tree data for several prefixes at once (dashboard "Compare prefixes")."""
+async def api_compare_replay(request: Request, prefixes: str, start: float = None, end: float = None,
+                             combine: int = 0):
+    """Path-tree data for several prefixes at once (dashboard tree). Up to 6 get one colored strand each;
+    combine=1 merges any number into a single strand (there are only 6 strand colors)."""
     user(request)
-    want = [p for p in dict.fromkeys(prefixes.split(",")) if p in cfg.prefixes][:6]
+    want = [p for p in dict.fromkeys(prefixes.split(",")) if p in cfg.prefixes][:50 if combine else 6]
     if not want:
         raise HTTPException(400, "no monitored prefixes given")
     end = min(end or time.time(), time.time())
@@ -577,7 +579,12 @@ async def api_compare_replay(request: Request, prefixes: str, start: float = Non
         parts = [await asyncio.to_thread(replay_payload, conn, p, start, end) for p in want]
     finally:
         conn.close()
-    return await upstream_neighbors(merge_replays(parts))
+    out = merge_replays(parts)
+    if combine:   # one strand: every (peer, prefix) pair counts as a path, no per-prefix colors
+        del out["peer_prefix"], out["prefixes"]
+        out["prefix"] = f"{len(want)} prefixes combined"
+        out["combined"] = want
+    return await upstream_neighbors(out)
 
 
 @app.get("/paths", response_class=HTMLResponse)

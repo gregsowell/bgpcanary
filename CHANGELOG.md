@@ -15,7 +15,7 @@ anything, and major releases may need you to read the notes before upgrading.
 ### Added
 - Screenshots in the README.
 
-## [1.2.0] - 2026-10-15
+## [1.2.0] - 2026-10-14
 
 ### Changed
 - **The dashboard follows a prefix picker** at the top of the page (shown when you monitor more than one prefix). It starts on **All**; tick some prefixes, or click "only" next to one, to see just those. The choice is in the page address (for example `/?prefix=192.0.2.0/24`), so a view can be bookmarked or shared.

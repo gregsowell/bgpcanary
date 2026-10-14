@@ -6,6 +6,8 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-10-14
+
 ### Security
 - **Signing out now ends the session on the server,** so a copy of the session cookie stops working too. Sessions are tracked server-side: a password change, an admin's reset, a role change, "Sign out everywhere else" and deleting the account all end them, sessions not used for 7 days end, and everyone signs in again at least every 30 days. **After updating, everyone signs in once more** (cookies from earlier versions aren't accepted).
 - **Webhook failures are recorded without anything from the webhook URL:** the HTTP status, or the kind of failure with a cleaned-up detail. This applies to the alert log, the settings and event pages, and the logs, however bgpcanary is run.
@@ -151,7 +153,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/gregsowell/bgpcanary/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/gregsowell/bgpcanary/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/gregsowell/bgpcanary/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/gregsowell/bgpcanary/compare/v1.1.8...v1.2.0

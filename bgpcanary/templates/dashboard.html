@@ -1,6 +1,79 @@
 {% extends "base.html" %}
 {% block content %}
-{% for s in summ %}
+{% set multi = sel|length > 1 %}
+{% set ranges = [('6h', 21600), ('24h', 86400), ('7d', 604800), ('30d', 2592000), ('90d', 7776000)] %}
+{% if all_prefixes|length > 1 %}
+<form class="panel toolbar prefix-picker" method="get" action="/" id="prefix-picker">
+  <strong style="font-size:13px">Prefixes</strong>
+  <label><input type="checkbox" data-pick-all {{ 'checked' if every }}> All</label>
+  {% for p in all_prefixes %}
+  <span class="pick"><label><input type="checkbox" name="prefix" value="{{ p }}" {{ 'checked' if p in sel }}> {{ p }}</label><a href="/?prefix={{ p|urlencode }}" title="Show only {{ p }}">only</a></span>
+  {% endfor %}
+</form>
+{% endif %}
+
+{% if multi %}
+{# ---------------------------------------------------------------- several prefixes: one combined view #}
+{% set c = combined %}
+{% set worst_state = summ[0].state if summ else 'starting' %}
+<div class="grid g4">
+  <div class="panel stat">
+    <div class="label">{{ sel|length }} prefixes · AS{{ cfg.asn }}</div>
+    <div class="value"><span class="badge b-{{ worst_state }}" style="font-size:16px">{{ c.ok }}/{{ sel|length }} OK</span></div>
+    <div class="sub">{% if status.ws_connected %}RIS Live connected{% else %}RIS Live disconnected{% endif %}{% if status.last_msg %} · last msg <time data-ts="{{ status.last_msg }}" data-sec="1"></time>{% endif %}</div>
+  </div>
+  <div class="panel stat">
+    <div class="label">Lowest visibility now</div>
+    {% if c.worst %}
+    <div class="value">{{ '%.1f'|format(c.worst.pct) }}%</div>
+    <div class="sub"><a href="/?prefix={{ c.worst.prefix|urlencode }}">{{ c.worst.prefix }}</a> · {{ c.worst.visible }} of {{ '%.0f'|format(c.worst.baseline) }} RIS peers</div>
+    {% else %}<div class="value">—</div><div class="sub">building baseline…</div>{% endif %}
+  </div>
+  <div class="panel stat">
+    <div class="label">Upstream{{ 's' if c.upstreams|length > 1 }} <span style="text-transform:none">(paths, all selected prefixes)</span></div>
+    <div class="value" style="font-size:18px">
+      {% for u, n in c.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span><br>{% else %}—{% endfor %}
+      {% for u in c.missing %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }}</span> <span class="badge b-warning">not seen</span><br>{% endfor %}
+    </div>
+  </div>
+  <div class="panel stat">
+    <div class="label">Route Views</div>
+    {% if rv %}
+    <div class="value">{{ rv.n_paths }} <span class="muted" style="font-size:14px">paths</span></div>
+    <div class="sub"><a href="/paths">{{ rv.ok }}/{{ rv.servers }} collectors</a> · <time data-ts="{{ rv.ts }}"></time></div>
+    {% else %}<div class="value">—</div><div class="sub">no snapshot yet</div>{% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Prefixes <span class="muted" style="font-size:13px;font-weight:400">· problems first, then lowest visibility</span></h2>
+  <div class="scroll"><table>
+    <tr><th>Prefix</th><th>State</th><th class="right">RIS peers</th><th class="right">Of baseline</th><th>Upstreams (paths)</th><th></th></tr>
+    {% for s in summ %}
+    <tr><td class="mono">{{ s.prefix }}</td>
+      <td><span class="badge b-{{ s.state }}">{{ s.state }}</span></td>
+      <td class="right">{{ s.visible }}{% if s.baseline %} <span class="muted">/ {{ '%.0f'|format(s.baseline) }}</span>{% endif %}</td>
+      <td class="right">{% if s.pct is not none %}{{ '%.1f'|format(s.pct) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% for u, n in s.upstreams %}AS{{ u }} <span class="muted">({{ n }})</span>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}
+        {% for u in s.missing %} <span class="badge b-warning" title="Expected upstream not seen for this prefix">AS{{ u }} not seen</span>{% endfor %}</td>
+      <td><a href="/?prefix={{ s.prefix|urlencode }}">Details →</a></td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="panel">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Visibility · {{ sel|length }} prefixes <span class="muted" style="font-size:13px;font-weight:400">· % of each prefix's own baseline</span></h2>
+    <span class="range">{% for label, secs in ranges %}<button type="button" data-secs="{{ secs }}" class="{{ 'on' if secs == 86400 }}">{{ label }}</button>{% endfor %}</span>
+  </div>
+  <div class="chart"><canvas id="vis-1"></canvas></div>
+  <p class="muted" style="margin:8px 0 0;font-size:12px">One line per prefix, in the same colors as the connectivity tree, so prefixes with different reach compare fairly and a single one dropping stands out.
+    {% if sel|length > 12 %}The 12 that dipped lowest in the window get their own line; the dashed gray line is the lowest of the others at each moment. {% endif %}
+    Shaded areas are events: red is critical, orange is warning, blue is a brief dip. Each point is the lowest value in its time bucket. Click a name in the legend to hide or show it.</p>
+</div>
+{% else %}
+{# ---------------------------------------------------------------- one prefix #}
+{% set s = summ[0] %}
 <div class="grid g4">
   <div class="panel stat">
     <div class="label">{{ s.prefix }} · AS{{ cfg.asn }}</div>
@@ -31,21 +104,15 @@
 <div class="panel">
   <div class="toolbar">
     <h2 style="margin:0;flex:1">Visibility · {{ s.prefix }}</h2>
-    <span class="range" data-prefix="{{ s.prefix }}">
-      {% for label, secs in [('6h', 21600), ('24h', 86400), ('7d', 604800), ('30d', 2592000), ('90d', 7776000)] %}
-      <button type="button" data-secs="{{ secs }}" class="{{ 'on' if secs == 86400 }}">{{ label }}</button>
-      {% endfor %}
-    </span>
+    <span class="range">{% for label, secs in ranges %}<button type="button" data-secs="{{ secs }}" class="{{ 'on' if secs == 86400 }}">{{ label }}</button>{% endfor %}</span>
   </div>
-  <div class="chart"><canvas id="vis-{{ loop.index }}"></canvas></div>
+  <div class="chart"><canvas id="vis-1"></canvas></div>
   <p class="muted" style="margin:8px 0 0;font-size:12px">Shaded areas are events: red is critical, orange is warning, blue is a brief dip. Each point is the lowest value in its time bucket, so short drops stay visible when you zoom out.</p>
 </div>
-
-{% if loop.first %}
-{% include "_tree_panel.html" %}
 {% endif %}
 
-{% if loop.first %}
+{% include "_tree_panel.html" %}
+
 <div class="grid g2">
   <div class="panel">
     <h2>Recent brief dips</h2>
@@ -91,20 +158,33 @@
     <span class="muted">(traceroute maps, carrier breakdowns, per-carrier latency, one-off tests)</span></p>
 </div>
 {% endif %}
-{% endif %}
 
 <div class="grid g2">
   <div class="panel">
-    <h2>Upstream chains (paths per chain)</h2>
-    <div class="chart small"><canvas id="chain-{{ loop.index }}"></canvas></div>
+    <h2>Upstream chains (paths per chain{{ ', all selected prefixes' if multi }})</h2>
+    <div class="chart small"><canvas id="chain-1"></canvas></div>
   </div>
   <div class="panel">
-    <h2>Update churn</h2>
-    <div class="chart small"><canvas id="churn-{{ loop.index }}"></canvas></div>
+    <h2>Update churn{{ ' (all selected prefixes)' if multi }}</h2>
+    <div class="chart small"><canvas id="churn-1"></canvas></div>
   </div>
 </div>
 
 <details class="panel">
+  {% if multi %}
+  <summary><h2 style="display:inline;margin:0">Current upstream chains</h2> <span class="muted" style="font-size:13px">({{ combined.chains|length }} across {{ sel|length }} prefixes · click to expand)</span></summary>
+  <div class="scroll"><table>
+    <tr><th>Chain (transit → upstream)</th><th class="right">Peers</th><th class="right">Prefixes</th><th style="width:25%">Share</th></tr>
+    {% for c, n, k in combined.chains %}
+    <tr><td>{% for a in c.split() %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a> <span class="muted">{{ names.get(a|int, '') }}</span>{% if not loop.last %} → {% endif %}{% endfor %} → AS{{ cfg.asn }}</td>
+      <td class="right">{{ n }}</td>
+      <td class="right">{{ k }} of {{ sel|length }}</td>
+      <td><div class="bar"><span style="width:{{ (100 * n / combined.paths) if combined.paths else 0 }}%"></span></div></td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No paths yet.</td></tr>{% endfor %}
+  </table></div>
+  <p class="muted" style="font-size:12px;margin:8px 0 0">Peers are summed over the selected prefixes (a RIS peer that sees two of them through the same chain counts twice). "Prefixes" is how many of them use the chain at all.</p>
+  {% else %}
+  {% set s = summ[0] %}
   <summary><h2 style="display:inline;margin:0">Current upstream chains</h2> <span class="muted" style="font-size:13px">({{ s.chains|length }} · click to expand)</span></summary>
   <div class="scroll"><table>
     <tr><th>Chain (transit → upstream)</th><th class="right">Peers</th><th style="width:30%">Share</th></tr>
@@ -114,11 +194,11 @@
       <td><div class="bar"><span style="width:{{ (100 * n / s.visible) if s.visible else 0 }}%"></span></div></td></tr>
     {% else %}<tr><td colspan="3" class="muted">No paths yet.</td></tr>{% endfor %}
   </table></div>
+  {% endif %}
 </details>
-{% endfor %}
 
 <div class="panel" style="margin-top:16px">
-    <h2>Recent events</h2>
+    <h2>Recent events{% if not every %} <span class="muted" style="font-size:13px;font-weight:400">· the selected prefixes and network-wide</span>{% endif %}</h2>
     <div class="scroll"><table>
       <tr><th>Start</th><th>Severity</th><th>Event</th><th>Duration</th></tr>
       {% for e in events %}
@@ -135,67 +215,74 @@
 <script>document.addEventListener("DOMContentLoaded", () => initAtlasSummary({{ atlas_targets|tojson }}, 24));</script>{% endif %}
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  // Connectivity tree: all prefixes by default; tick fewer to focus. 1 prefix = its own tree, 2 up to the strand
-  // setting (default 6, up to 12 colors) = one colored strand each, more = combined into one strand.
-  const panel = document.getElementById("tree");
-  if (panel) {
-    const tree = initTree(panel, { followNow: true });
-    const status = panel.querySelector('[data-rp="status"]');
-    const all = panel.querySelector("[data-tree-all]");
-    const boxes = [...panel.querySelectorAll("[data-tree-prefix]")];
-    const allPrefixes = {{ summ|map(attribute='prefix')|list|tojson }};
-    const strandSel = panel.querySelector("[data-tree-strands]");
-    if (strandSel) {
-      try { strandSel.value = localStorage.getItem("bgpcanary.treeStrands") || "6"; } catch (e) {}
-      if (!strandSel.value) strandSel.value = "6";
-      strandSel.onchange = () => { try { localStorage.setItem("bgpcanary.treeStrands", strandSel.value); } catch (e) {} load(); };
-    }
-    let secs = 86400;
-    try { secs = parseInt(localStorage.getItem("bgpcanary.treeRange") || localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
-    const load = periodic => {
-      const sel = boxes.length ? boxes.filter(x => x.checked).map(x => x.value) : allPrefixes;
-      if (all) { all.checked = sel.length === boxes.length; all.indeterminate = sel.length > 0 && sel.length < boxes.length; }
-      if (!sel.length) { status.textContent = "Tick at least one prefix."; return; }
-      // periodic refreshes only move the tree while it is showing "now", so scrubbing isn't interrupted
-      if (periodic && !tree.isFollowing()) return;
-      const end = Math.floor(Date.now() / 1000), start = Math.floor(end - secs);
-      if (sel.length === 1) tree.load("/api/replay?" + new URLSearchParams({ prefix: sel[0], start, end }), periodic);
-      else tree.load("/api/replay/compare?" + new URLSearchParams({ prefixes: sel.join(","), start, end, combine: sel.length > (strandSel ? parseInt(strandSel.value) : 6) ? 1 : 0 }), periodic);
+  const sel = {{ sel|tojson }};
+  // Prefix picker: the whole page follows it. All = the plain dashboard address; otherwise ?prefix=a,b
+  const picker = document.getElementById("prefix-picker");
+  if (picker) {
+    const all = picker.querySelector("[data-pick-all]"), boxes = [...picker.querySelectorAll('input[name="prefix"]')];
+    all.indeterminate = !all.checked;
+    const go = () => {
+      const on = boxes.filter(b => b.checked).map(b => b.value);
+      location.href = on.length && on.length < boxes.length ? "/?prefix=" + encodeURIComponent(on.join(",")) : "/";
     };
-    if (all) all.onchange = () => { boxes.forEach(x => x.checked = all.checked); load(); };
-    boxes.forEach(x => x.onchange = () => load());
-    panel.querySelectorAll(".tree-range button").forEach(b => {
-      b.classList.toggle("on", parseInt(b.dataset.secs) === secs);
-      b.onclick = () => {
-        secs = parseInt(b.dataset.secs);
-        try { localStorage.setItem("bgpcanary.treeRange", secs); } catch (e) {}
-        panel.querySelectorAll(".tree-range button").forEach(x => x.classList.toggle("on", x === b));
-        load();
-      };
+    all.onchange = () => { if (all.checked) location.href = "/"; else all.checked = true; };
+    boxes.forEach(b => b.onchange = () => {
+      if (!boxes.some(x => x.checked)) { b.checked = true; return; }   // keep at least one
+      go();
     });
-    load();
-    setInterval(() => load(true), 60000);
   }
-  document.querySelectorAll(".range").forEach((rg, i) => {
-    const idx = i + 1, prefix = rg.dataset.prefix;
-    const draw = secs => {
-      const end = Date.now() / 1000;
-      renderCharts({ prefix, start: end - secs, end, visId: "vis-" + idx, chainId: "chain-" + idx, churnId: "churn-" + idx });
+
+  // Connectivity tree: the selected prefixes. 1 = its own tree; 2 up to the strand setting (default 6, up to
+  // 12 colors) = one colored strand each; more = combined into one strand.
+  const panel = document.getElementById("tree");
+  const tree = initTree(panel, { followNow: true });
+  const strandSel = panel.querySelector("[data-tree-strands]");
+  if (strandSel) {
+    try { strandSel.value = localStorage.getItem("bgpcanary.treeStrands") || "6"; } catch (e) {}
+    if (!strandSel.value) strandSel.value = "6";
+    strandSel.onchange = () => { try { localStorage.setItem("bgpcanary.treeStrands", strandSel.value); } catch (e) {} loadTree(); };
+  }
+  let treeSecs = 86400;
+  try { treeSecs = parseInt(localStorage.getItem("bgpcanary.treeRange") || localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
+  const loadTree = periodic => {
+    // periodic refreshes only move the tree while it is showing "now", so scrubbing isn't interrupted
+    if (periodic && !tree.isFollowing()) return;
+    const end = Math.floor(Date.now() / 1000), start = Math.floor(end - treeSecs);
+    if (sel.length === 1) tree.load("/api/replay?" + new URLSearchParams({ prefix: sel[0], start, end }), periodic);
+    else tree.load("/api/replay/compare?" + new URLSearchParams({ prefixes: sel.join(","), start, end, combine: sel.length > (strandSel ? parseInt(strandSel.value) : 6) ? 1 : 0 }), periodic);
+  };
+  panel.querySelectorAll(".tree-range button").forEach(b => {
+    b.classList.toggle("on", parseInt(b.dataset.secs) === treeSecs);
+    b.onclick = () => {
+      treeSecs = parseInt(b.dataset.secs);
+      try { localStorage.setItem("bgpcanary.treeRange", treeSecs); } catch (e) {}
+      panel.querySelectorAll(".tree-range button").forEach(x => x.classList.toggle("on", x === b));
+      loadTree();
     };
-    let cur = 86400;
-    try { cur = parseInt(localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
-    rg.querySelectorAll("button").forEach(b => {
-      b.classList.toggle("on", parseInt(b.dataset.secs) === cur);
-      b.onclick = () => {
-        cur = parseInt(b.dataset.secs);
-        try { localStorage.setItem("bgpcanary.range", cur); } catch (e) {}
-        rg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
-        draw(cur);
-      };
-    });
-    draw(cur);
-    setInterval(() => draw(cur), 60000);
   });
+  loadTree();
+  setInterval(() => loadTree(true), 60000);
+
+  // Visibility, chains and churn charts for the selection
+  const rg = document.querySelector(".range");
+  const draw = secs => {
+    const end = Date.now() / 1000, ids = { visId: "vis-1", chainId: "chain-1", churnId: "churn-1" };
+    if (sel.length === 1) renderCharts({ prefix: sel[0], start: end - secs, end, ...ids });
+    else renderMultiCharts({ prefixes: sel, start: end - secs, end, ...ids });
+  };
+  let cur = 86400;
+  try { cur = parseInt(localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
+  rg.querySelectorAll("button").forEach(b => {
+    b.classList.toggle("on", parseInt(b.dataset.secs) === cur);
+    b.onclick = () => {
+      cur = parseInt(b.dataset.secs);
+      try { localStorage.setItem("bgpcanary.range", cur); } catch (e) {}
+      rg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      draw(cur);
+    };
+  });
+  draw(cur);
+  setInterval(() => draw(cur), 60000);
 });
 </script>
 {% endblock %}

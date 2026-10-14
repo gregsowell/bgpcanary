@@ -227,28 +227,46 @@ def prefix_summary(conn):
     return out
 
 
+def selected_prefixes(request):
+    """Prefixes picked on the dashboard (?prefix=a&prefix=b or ?prefix=a,b); none or unknown = all of them."""
+    want = [x.strip() for v in request.query_params.getlist("prefix") for x in v.split(",") if x.strip()]
+    sel = [p for p in cfg.prefixes if p in want]
+    return sel or list(cfg.prefixes)
+
+
+STATE_ORDER = {"down": 0, "degraded": 1, "starting": 2, "ok": 3}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     user(request)
     conn = rconn()
-    summ = prefix_summary(conn)
+    sel = selected_prefixes(request)
+    every = len(sel) == len(cfg.prefixes)
+    summ_all = prefix_summary(conn)
+    summ = [s for s in summ_all if s["prefix"] in sel]
     asns = {cfg.asn, *cfg.expected_upstreams}
     for s in summ:
         for c, _ in s["chains"]:
             asns.update(int(x) for x in c.split())
-    events = conn.execute("SELECT * FROM events WHERE severity!='info' OR kind IN ('transit_filter','upstream_missing','filter_sim','irr_change','asset_change') "
-                          "ORDER BY start_ts DESC LIMIT 10").fetchall()
-    blips = conn.execute("SELECT * FROM events WHERE kind='blip' ORDER BY start_ts DESC LIMIT 5").fetchall()
+    # events for the selected prefixes plus network-wide ones (no prefix); all of them when everything is selected
+    where = "" if every else f"(prefix IN ({','.join('?' * len(sel))}) OR prefix IS NULL) AND "
+    args = [] if every else sel
+    events = conn.execute(f"SELECT * FROM events WHERE {where}(severity!='info' OR kind IN ('transit_filter',"
+                          "'upstream_missing','filter_sim','irr_change','asset_change')) ORDER BY start_ts DESC LIMIT 10",
+                          args).fetchall()
+    blips = conn.execute(f"SELECT * FROM events WHERE {where}kind='blip' ORDER BY start_ts DESC LIMIT 5", args).fetchall()
     probe = db.annotate_probes(conn, conn.execute("SELECT * FROM probes ORDER BY ts DESC LIMIT 4").fetchall())
-    rv_rows = conn.execute("SELECT id,ts,server,n_paths,error FROM rv_snapshots WHERE id IN "
-                           "(SELECT MAX(id) FROM rv_snapshots GROUP BY server, prefix)").fetchall()
+    rv_rows = [r for r in conn.execute("SELECT id,ts,server,prefix,n_paths,error FROM rv_snapshots WHERE id IN "
+                                       "(SELECT MAX(id) FROM rv_snapshots GROUP BY server, prefix)").fetchall()
+               if r["prefix"] in sel]
     rv = None
     if rv_rows:
         rv = {"n_paths": sum(r["n_paths"] or 0 for r in rv_rows), "servers": len(rv_rows),
               "ok": sum(1 for r in rv_rows if not r["error"]), "ts": max(r["ts"] for r in rv_rows)}
     # newest successful "show ip bgp" per collector, newest first, until there are 10+ paths (2-4 collectors)
     rv_latest = []
-    for p in cfg.prefixes:
+    for p in sel:
         got = []
         for r in conn.execute("SELECT s.* FROM rv_snapshots s JOIN (SELECT server, MAX(ts) ts FROM rv_snapshots "
                               "WHERE prefix=? AND (error IS NULL OR error='') AND raw!='' GROUP BY server) l "
@@ -261,7 +279,26 @@ async def dashboard(request: Request):
     has_atlas = conn.execute("SELECT 1 FROM atlas_msm WHERE purpose='baseline' LIMIT 1").fetchone() is not None
     nm = names(conn, asns)
     conn.close()
-    return render(request, "dashboard.html", summ=summ, events=events, blips=blips, probes=probe, rv=rv, names=nm,
+    # combined view (several prefixes): problems first, then lowest visibility
+    summ.sort(key=lambda s: (STATE_ORDER.get(s["state"], 9), s["pct"] if s["pct"] is not None else 999))
+    chains, ups = {}, {}
+    for s in summ:
+        for c, n in s["chains"]:
+            t = chains.setdefault(c, [0, 0])
+            t[0] += n
+            t[1] += 1
+        for u, n in s["upstreams"]:
+            ups[u] = ups.get(u, 0) + n
+    combined = {
+        "chains": sorted(((c, n, k) for c, (n, k) in chains.items()), key=lambda x: -x[1]),
+        "upstreams": sorted(ups.items(), key=lambda x: -x[1]),
+        "missing": [u for u in cfg.expected_upstreams if u not in ups],
+        "paths": sum(s["visible"] for s in summ),
+        "ok": sum(1 for s in summ if s["state"] == "ok"),
+        "worst": min((s for s in summ if s["pct"] is not None), key=lambda s: s["pct"], default=None),
+    }
+    return render(request, "dashboard.html", summ=summ, all_prefixes=[s["prefix"] for s in summ_all], sel=sel,
+                  every=every, combined=combined, events=events, blips=blips, probes=probe, rv=rv, names=nm,
                   rv_latest=rv_latest, atlas_targets=svc.atlas.targets() if has_atlas else [])
 
 
@@ -315,6 +352,78 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
             "ts": [p["ts"] for p in pts], "visible": [p["visible"] for p in pts], "min": [p["min"] for p in pts],
             "baseline": [p["baseline"] for p in pts], "updates": [p["updates"] for p in pts],
             "withdrawals": [p["withdrawals"] for p in pts], "chains": chain_series,
+            "chain_labels": {c: " → ".join(f"AS{x} {nm.get(int(x), '')}".strip() for x in c.split()) for c in top},
+            "events": events, "threshold_pct": cfg.outage_threshold_pct}
+
+
+@app.get("/api/series/multi")
+async def api_series_multi(request: Request, prefixes: str, start: float = None, end: float = None):
+    """Several prefixes on one time grid (dashboard combined view): visibility as % of each prefix's baseline
+    (one line each, up to MAX_STRANDS; the rest folded into the lowest of them), chains and churn summed."""
+    user(request)
+    want = [p for p in dict.fromkeys(prefixes.split(",")) if p in cfg.prefixes]
+    if not want:
+        raise HTTPException(400, "no monitored prefixes given")
+    end = end or time.time()
+    start = start or end - 86400
+    conn = rconn()
+    q = ",".join("?" * len(want))
+    rows = conn.execute(f"SELECT prefix,ts,visible,min_visible,baseline,chains,updates,withdrawals FROM buckets "
+                        f"WHERE prefix IN ({q}) AND ts>=? AND ts<=? ORDER BY ts", (*want, start, end)).fetchall()
+    # the same time slots for every prefix: about 1500 across the window, at least one bucket each
+    slot_s = max(cfg.bucket_seconds, (end - start) / 1500)
+    nslots = int((end - start) // slot_s) + 1
+    low = {p: [None] * nslots for p in want}   # lowest % of baseline in each slot
+    lowest_row = {}                            # (prefix, slot) -> bucket with the lowest visibility
+    upd, wd = [None] * nslots, [None] * nslots
+    vis = lambda r: r["min_visible"] if r["min_visible"] is not None else r["visible"]
+    for r in rows:
+        i = int((r["ts"] - start) // slot_s)
+        if not 0 <= i < nslots:
+            continue
+        if r["baseline"]:
+            pct = 100 * vis(r) / r["baseline"]
+            if low[r["prefix"]][i] is None or pct < low[r["prefix"]][i]:
+                low[r["prefix"]][i] = pct
+        k = (r["prefix"], i)
+        if k not in lowest_row or vis(r) < vis(lowest_row[k]):
+            lowest_row[k] = r
+        upd[i] = (upd[i] or 0) + (r["updates"] or 0)
+        wd[i] = (wd[i] or 0) + (r["withdrawals"] or 0)
+    chains = [dict() for _ in range(nslots)]
+    for (p, i), r in lowest_row.items():
+        for c, n in json.loads(r["chains"] or "{}").items():
+            chains[i][c] = chains[i].get(c, 0) + n
+    has = [upd[i] is not None for i in range(nslots)]   # slots with any data; the rest are gaps
+    # the prefixes that dipped lowest get their own line; any beyond MAX_STRANDS share a "lowest of the others" line
+    worst = {p: min((x for x in low[p] if x is not None), default=999) for p in want}
+    order = sorted(want, key=lambda p: worst[p])
+    shown, rest = order[:MAX_STRANDS], order[MAX_STRANDS:]
+    lines = [{"prefix": p, "pct": [round(x, 1) if x is not None else None for x in low[p]]} for p in shown]
+    others = None
+    if rest:
+        others = {"count": len(rest),
+                  "pct": [min((round(low[p][i], 1) for p in rest if low[p][i] is not None), default=None)
+                          for i in range(nslots)]}
+    totals = {}
+    for d in chains:
+        for c, n in d.items():
+            totals[c] = totals.get(c, 0) + n
+    top = [c for c, _ in sorted(totals.items(), key=lambda x: -x[1])[:6]]
+    chain_series = {c: [d.get(c, 0) if has[i] else None for i, d in enumerate(chains)] for c in top}
+    chain_series["other"] = [sum(n for c, n in d.items() if c not in top) if has[i] else None
+                             for i, d in enumerate(chains)]
+    every = len(want) == len(cfg.prefixes)
+    events = [dict(r) for r in conn.execute(
+        "SELECT id,kind,severity,start_ts,end_ts,title FROM events WHERE "
+        + ("" if every else f"(prefix IN ({q}) OR prefix IS NULL) AND ")
+        + "start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts",
+        (*([] if every else want), end, time.time(), start))]
+    nm = names(conn, {int(x) for c in top for x in c.split()})
+    conn.close()
+    return {"prefixes": want, "start": start, "end": end, "step": slot_s,
+            "ts": [start + i * slot_s for i in range(nslots)], "lines": lines, "others": others,
+            "updates": upd, "withdrawals": wd, "chains": chain_series,
             "chain_labels": {c: " → ".join(f"AS{x} {nm.get(int(x), '')}".strip() for x in c.split()) for c in top},
             "events": events, "threshold_pct": cfg.outage_threshold_pct}
 

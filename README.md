@@ -16,10 +16,10 @@ networks.
 ## What it does
 
 - **Live visibility:** how many of RIPE RIS's ~330 peers see each prefix, in 30-second steps, with 90 days of history loaded on day one.
+- **One dashboard for all your prefixes:** a combined view by default (a status table with problems first, one visibility line per prefix, combined upstream chains), or pick one or a few prefixes to see just those.
 - **Connectivity tree:**
   - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't.
-  - All your prefixes in one tree by default (one colored strand each), or tick just the ones you want.
-  - Side-by-side comparison of several prefixes.
+  - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
 - **Detection and alerts** (email, Slack, Microsoft Teams or any webhook), each type switchable with its own thresholds:
   - outages and brief dips;
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;

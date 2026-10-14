@@ -116,6 +116,64 @@
     });
     return d;
   };
+
+  // Several prefixes at once (dashboard combined view): one visibility line per prefix as % of its own
+  // baseline, in the same colors as the connectivity tree's strands; chains and churn summed.
+  const PCOL = ["#2463eb", "#e8710a", "#12a36b", "#9b4dca", "#d23f8a", "#0f9bb5",
+                "#b8860b", "#5c6bc0", "#6d4c41", "#00796b", "#7cb342", "#455a64"];   // same as replay.js
+  window.renderMultiCharts = async function (opts) {
+    const { prefixes, start, end, visId, chainId, churnId } = opts;
+    const q = new URLSearchParams({ prefixes: prefixes.join(","), start: Math.floor(start), end: Math.floor(end) });
+    const r = await fetch("/api/series/multi?" + q);
+    if (r.status === 401) { location.href = "/login"; return; }
+    const d = await r.json();
+    const xs = d.ts.map(t => t * 1000);
+    const pts = arr => arr.map((v, i) => ({ x: xs[i], y: v }));
+    const tooltip = { callbacks: { title: items => items.length ? fmtTs(items[0].parsed.x / 1000, true) : "" } };
+    const common = {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: css("--text"), boxWidth: 12 } }, tooltip, eventBands: { events: d.events } },
+    };
+    const mk = (id, cfg) => {
+      if (!id) return;
+      if (charts[id]) charts[id].destroy();
+      charts[id] = new Chart(document.getElementById(id), cfg);
+    };
+    const color = p => PCOL[prefixes.indexOf(p) % PCOL.length];
+    const sets = d.lines.map(l => ({ label: l.prefix, data: pts(l.pct), borderColor: color(l.prefix), pointRadius: 0, borderWidth: 1.5, stepped: true }));
+    if (d.others) sets.push({ label: `lowest of ${d.others.count} others`, data: pts(d.others.pct), borderColor: css("--muted"), pointRadius: 0, borderWidth: 1.5, stepped: true, borderDash: [4, 3] });
+    sets.push({ label: `Alert threshold (${d.threshold_pct}%)`, data: xs.map(x => ({ x, y: d.threshold_pct })), borderColor: css("--warn"), pointRadius: 0, borderWidth: 1, borderDash: [3, 3] });
+    const pctTip = { ...tooltip, callbacks: { ...tooltip.callbacks, label: c => c.parsed.y == null ? null : `${c.dataset.label}: ${c.parsed.y.toFixed(1)}%` } };
+    mk(visId, {
+      type: "line", plugins: [eventBands], data: { datasets: sets },
+      options: { ...common, plugins: { ...common.plugins, tooltip: pctTip },
+                 scales: { x: timeAxis(d.start, d.end), y: { min: 0, suggestedMax: 105, ticks: { color: css("--muted"), callback: v => v + "%" }, grid: { color: css("--border") } } } }
+    });
+    const keys = Object.keys(d.chains);
+    mk(chainId, {
+      type: "line", plugins: [eventBands],
+      data: {
+        datasets: keys.map((k, i) => ({
+          label: k === "other" ? "other" : (d.chain_labels[k] || k), data: pts(d.chains[k]),
+          borderColor: PALETTE[i % PALETTE.length], backgroundColor: PALETTE[i % PALETTE.length] + "55",
+          fill: true, pointRadius: 0, borderWidth: 1, stepped: true, hidden: k === "other" && d.chains[k].every(v => !v)
+        }))
+      },
+      options: { ...common, scales: { x: timeAxis(d.start, d.end), y: { stacked: true, beginAtZero: true, ticks: { color: css("--muted") }, grid: { color: css("--border") } } } }
+    });
+    mk(churnId, {
+      type: "bar", plugins: [eventBands],
+      data: {
+        datasets: [
+          { label: "Announcements", data: pts(d.updates), backgroundColor: PALETTE[0] },
+          { label: "Withdrawals", data: pts(d.withdrawals), backgroundColor: css("--crit") },
+        ]
+      },
+      options: { ...common, scales: { x: { ...timeAxis(d.start, d.end), stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { color: css("--muted") }, grid: { color: css("--border") } } } }
+    });
+    return d;
+  };
 })();
 
 // Tab icon + title follow outage state, so a background tab shows trouble (checked every minute).

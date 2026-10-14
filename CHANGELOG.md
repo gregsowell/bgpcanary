@@ -6,6 +6,15 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-15
+
+### Changed
+- **The dashboard follows a prefix picker** at the top of the page (shown when you monitor more than one prefix). It starts on **All**; tick some prefixes, or click "only" next to one, to see just those. The choice is in the page address (for example `/?prefix=192.0.2.0/24`), so a view can be bookmarked or shared.
+  - **One prefix:** the same detail as before (status, visibility, connectivity tree, upstream chains, churn), for that prefix only.
+  - **Several or all:** one combined view instead of a copy of every section per prefix: a status table with problems first, a single visibility chart with one line per prefix as a percentage of its own baseline (the 12 that dipped lowest get a line; any others share a "lowest of the others" line), a connectivity tree with one strand per prefix, upstream chains and churn summed, and the chains table combined with how many prefixes use each chain.
+  - Recent events, brief dips and Route Views tables show the selected prefixes (plus network-wide events).
+- The connectivity tree's own prefix checkboxes moved to the page-level picker. Visibility lines and tree strands use the same color for each prefix.
+
 ## [1.1.8] - 2026-10-14
 
 ### Changed
@@ -90,7 +99,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.8...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/gregsowell/bgpcanary/compare/v1.1.8...v1.2.0
 [1.1.8]: https://github.com/gregsowell/bgpcanary/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/gregsowell/bgpcanary/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/gregsowell/bgpcanary/compare/v1.1.5...v1.1.6

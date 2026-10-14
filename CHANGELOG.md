@@ -6,6 +6,8 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-14
+
 ### Fixed
 - On a new install the 90-day history load could stop partway with "history load failed; continuing live" in the log (`cannot start a transaction within a transaction`), leaving charts with only part of their history. It happened when another startup task (Route Views snapshot, AS name lookup, update check) wrote to the database at the same moment as the history load. Writes are now properly serialized. Installs that were affected keep the history they have and record everything from then on as usual.
 - Visibility charts shaded long-running informational notices (transit filter checks, filter simulations, chain changes) in blue, which could tint days of the chart. Only brief dips, warnings and critical events are shaded now, as the chart captions say.
@@ -106,7 +108,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/gregsowell/bgpcanary/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/gregsowell/bgpcanary/compare/v1.1.8...v1.2.0
 [1.1.8]: https://github.com/gregsowell/bgpcanary/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/gregsowell/bgpcanary/compare/v1.1.6...v1.1.7

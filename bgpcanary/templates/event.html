@@ -2,7 +2,7 @@
 {% block title %}Event {{ ev.id }} · {{ cfg.site_name }}{% endblock %}
 {% block content %}
 <h1><span class="badge b-{{ ev.severity }}">{{ ev.severity }}</span> {{ ev.title }}</h1>
-<div class="grid g2">
+<div class="grid g2 g-main">
   <div class="panel">
     <dl class="kv">
       <dt>Type</dt><dd>{{ ev.kind }}{% if ev.historical %} <span class="muted">(found during backfill)</span>{% endif %}</dd>

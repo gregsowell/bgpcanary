@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import re
 import socket
 import time
 
@@ -78,6 +79,10 @@ def _objects(text):
 
 def _first(v):
     return v[0] if isinstance(v, list) else (v or "")
+
+
+def _by(mnt):
+    return f" (maintainer {mnt})" if mnt else ""
 
 
 def _members(obj):
@@ -150,10 +155,20 @@ class RegistryWatch:
                     ours_ok.append(row)
                 if origin != f"AS{asn}" and rel in ("exact", "more-specific"):
                     sev = "warning"
-                    check("Conflicting route object", "fail",
-                          f"{src} has route {route} with origin {origin} (maintainer {row['mnt']}). Filters built from "
-                          f"{origin}'s records will treat this as {origin}'s space; it can block or wrongly permit your route. "
-                          f"Ask the maintainer to delete it.",
+                    if src == "RPKI":   # generated from a ROA: there's no maintainer, the ROA itself must change
+                        m = re.search(r"Trust Anchor:\s*(\S+)", o["_text"], re.I)
+                        ta = m.group(1) if m else ""
+                        msg = (f"RPKI ROA authorizes {origin} to originate {route}. The ROA"
+                               f"{f' (trust anchor {ta.upper()})' if ta else ''} is turned into this route object "
+                               f"automatically, so filters built from {origin}'s records accept {route} as {origin}'s "
+                               f"space. If {origin} shouldn't originate it any more (for example you moved it to your "
+                               f"own ASN), have the address holder remove that ROA in their RIR's RPKI portal; there is "
+                               f"no IRR object to delete. If {origin} is meant to announce it too, this is expected.")
+                    else:
+                        msg = (f"{src} has route {route} with origin {origin}{_by(row['mnt'])}. Filters built from "
+                               f"{origin}'s records will treat this as {origin}'s space; it can block or wrongly permit "
+                               f"your route. Ask the maintainer to delete it.")
+                    check("Conflicting route object", "fail", msg,
                           key=f"reg|conflict|{src}|{route}|{origin}", severity=sev, prefix=p,
                           detail={"object": o["_text"]})
             if ours_ok:
@@ -191,7 +206,7 @@ class RegistryWatch:
         else:
             for f in rep["foreign"]:
                 check("Route object claiming your ASN", "fail",
-                      f"{f['source']} has route {f['route']} with origin AS{asn} (maintainer {f['mnt']}), but it "
+                      f"{f['source']} has route {f['route']} with origin AS{asn}{_by(f['mnt'])}, but it "
                       f"isn't in your monitored or owned space. Someone can use it to get a hijack of {f['route']} "
                       f"past IRR filters using your ASN.",
                       key=f"reg|foreign|{f['source']}|{f['route']}", severity="warning", detail={"object": f["text"]})
@@ -303,7 +318,13 @@ class RegistryWatch:
                 current[c["key"]] = c
         open_now = {k: a for k, a in eng.anomalies.items() if k.startswith("reg|")}
         for key, c in current.items():
-            if key in open_now:
+            if key in open_now:   # still open: keep its wording current (it can change between releases)
+                row = eng.conn.execute("SELECT detail FROM events WHERE id=?", (open_now[key]["id"],)).fetchone()
+                d = json.loads(row[0] or "{}") if row else {}
+                if row and d.get("note") != c["msg"]:
+                    d["note"] = c["msg"]
+                    eng.conn.execute("UPDATE events SET detail=?, title=? WHERE id=?",
+                                     (json.dumps(d), c["msg"].split(". ")[0][:180], open_now[key]["id"]))
                 continue
             eid = eng._new_event(c["key"].split("|")[1] == "filter" and "filter_sim" or "registry", c["severity"],
                                  c["prefix"] or self.cfg.prefixes[0], now, c["msg"].split(". ")[0][:180],

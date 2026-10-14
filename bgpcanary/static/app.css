@@ -78,9 +78,10 @@ form.inline { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wr
 .login input { width: 100%; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .dot.ok { background: var(--ok); } .dot.bad { background: var(--crit); }
-dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
 dl.kv dt { color: var(--muted); }
-dl.kv dd { margin: 0; }
+dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+@media (min-width: 900px) { .g-main { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); } }   /* details wide, side panel narrow */
 @media (max-width: 640px) {
   .g2 { grid-template-columns: 1fr; }
   header .me { display: none; }

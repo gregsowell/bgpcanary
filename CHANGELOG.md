@@ -6,6 +6,12 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-10-14
+
+### Fixed
+- On an event page, long details or a registry object pushed the text past the panel and under "Alerts sent", cutting it off. The details panel now takes two thirds of the width, wraps long text, and scrolls a long registry object sideways instead of overflowing.
+- Conflicting route objects generated from RPKI ROAs showed "(maintainer )" and said to ask the maintainer to delete them. They now explain that the object comes from a ROA, which the address holder changes in their RIR's RPKI portal. Open registry events get the corrected wording at the next registry check.
+
 ## [1.1.5] - 2026-10-13
 
 ### Added
@@ -73,7 +79,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/gregsowell/bgpcanary/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/gregsowell/bgpcanary/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/gregsowell/bgpcanary/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/gregsowell/bgpcanary/compare/v1.1.2...v1.1.3

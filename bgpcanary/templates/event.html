@@ -62,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev
   {% include "_tree_body.html" %}
   <p class="muted" style="margin:4px 0 0;font-size:12px">The tree starts at your AS and follows each RIS peer's AS path outward. Line thickness is the number of peers using a branch at the selected time. Colors compare each branch with the healthiest moment before the event (the dotted green line on the timeline): orange means it lost more than half its peers, red dashed means it dropped out completely. Click the timeline strip or drag the slider to scrub through the event. Playback and GIF frames spend more time where updates are happening.</p>
 </div>
-<script src="/static/replay.js"></script>
+<script src="/static/replay.js?v={{ version }}"></script>
 <script>document.addEventListener("DOMContentLoaded", () => initReplay({{ ev.id }}));</script>
 {% endif %}
 

@@ -171,8 +171,8 @@
     <p><a href="/events">All events →</a></p>
 </div>
 
-<script src="/static/replay.js"></script>
-{% if atlas_targets %}<script src="/static/atlas.js"></script>
+<script src="/static/replay.js?v={{ version }}"></script>
+{% if atlas_targets %}<script src="/static/atlas.js?v={{ version }}"></script>
 <script>document.addEventListener("DOMContentLoaded", () => initAtlasSummary({{ atlas_targets|tojson }}, 24));</script>{% endif %}
 <script>
 document.addEventListener("DOMContentLoaded", () => {

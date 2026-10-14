@@ -15,7 +15,7 @@
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow-wrap: break-word; }   /* long as-set names, URLs... wrap instead of widening the page */
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 header { background: var(--panel); border-bottom: 1px solid var(--border); }

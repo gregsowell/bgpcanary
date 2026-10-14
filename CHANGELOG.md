@@ -6,6 +6,12 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-14
+
+### Fixed
+- Long unbroken text (for example a long as-set name in an event title or a "Related events" link) made the event page wider than the screen, especially on phones. It now wraps.
+- After an update, browsers could keep using the previous version's stylesheet and scripts until a hard refresh, so layout fixes didn't show. Each release now loads its own copies.
+
 ## [1.1.6] - 2026-10-14
 
 ### Fixed
@@ -79,7 +85,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.6...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.1.7...HEAD
+[1.1.7]: https://github.com/gregsowell/bgpcanary/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/gregsowell/bgpcanary/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/gregsowell/bgpcanary/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/gregsowell/bgpcanary/compare/v1.1.3...v1.1.4

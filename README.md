@@ -9,9 +9,11 @@ It's for networks with their own ASN: ISPs, hosting companies, enterprises, univ
 session and no access to your routers**: everything comes from public route collectors and measurement
 networks.
 
-<!-- Screenshots: add images to docs/images/ and reference them here, e.g.
-![Dashboard](docs/images/dashboard.png)
-![Connectivity tree during an outage](docs/images/tree.png) -->
+<p align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/tree-event-dark.webp"><img src="docs/images/tree-event-light.webp" alt="The connectivity tree replaying an outage: branches that dropped out turn red"></picture>
+  <br><em>The connectivity tree replaying a real outage: visibility fell to 4 of 332 RIS peers, and every branch that
+  dropped out is red. Drag the slider or press Play to watch it unfold.</em>
+</p>
 
 ## What it does
 
@@ -37,6 +39,17 @@ networks.
   - one-off tests to any address.
 - **Evidence for providers:** every event page collects the timeline, upstream mix, raw AS paths, Route Views output and Atlas results. One click turns it into a plain-text report to attach to a ticket.
 - **Multi-prefix and IPv6.** Viewer and admin roles. Everything configurable in the web UI.
+
+## Screenshots
+
+<table>
+<tr><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.webp"><img src="docs/images/dashboard-light.webp" alt="Dashboard"></picture><br><sub>Live visibility, upstreams and outages at a glance</sub></td><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/multi-dark.webp"><img src="docs/images/multi-light.webp" alt="Multi-prefix dashboard"></picture><br><sub>Several prefixes: problems first, one line each</sub></td></tr>
+<tr><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/event-dark.webp"><img src="docs/images/event-light.webp" alt="Event page"></picture><br><sub>Every event's evidence, ready for a provider ticket</sub></td><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/multi-tree-dark.webp"><img src="docs/images/multi-tree-light.webp" alt="Connectivity tree with several prefixes"></picture><br><sub>One strand per prefix, so a filter that drops just one stands out</sub></td></tr>
+<tr><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/atlas-dark.webp"><img src="docs/images/atlas-light.webp" alt="RIPE Atlas traceroute map"></picture><br><sub>RIPE Atlas: where traceroutes toward you go, and where they stop</sub></td><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/registry-dark.webp"><img src="docs/images/registry-light.webp" alt="Registry checks"></picture><br><sub>IRR, as-sets, RPKI and simulated upstream filters</sub></td></tr>
+<tr><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/tree-dark.webp"><img src="docs/images/tree-light.webp" alt="Connectivity tree"></picture><br><sub>Who carries you, and who doesn't</sub></td><td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/alerts-dark.webp"><img src="docs/images/alerts-light.webp" alt="Alert settings"></picture><br><sub>Every alert type with its own thresholds</sub></td></tr>
+</table>
+
+<sub>Shown in your GitHub theme (light or dark). The network's own ASN and prefix are blurred.</sub>
 
 ## Quick start
 

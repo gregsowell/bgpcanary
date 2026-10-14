@@ -6,6 +6,13 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+- On a new install the 90-day history load could stop partway with "history load failed; continuing live" in the log (`cannot start a transaction within a transaction`), leaving charts with only part of their history. It happened when another startup task (Route Views snapshot, AS name lookup, update check) wrote to the database at the same moment as the history load. Writes are now properly serialized. Installs that were affected keep the history they have and record everything from then on as usual.
+- Visibility charts shaded long-running informational notices (transit filter checks, filter simulations, chain changes) in blue, which could tint days of the chart. Only brief dips, warnings and critical events are shaded now, as the chart captions say.
+
+### Added
+- Screenshots in the README.
+
 ## [1.2.0] - 2026-10-15
 
 ### Changed

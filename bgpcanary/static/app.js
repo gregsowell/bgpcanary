@@ -29,6 +29,9 @@
       const { ctx, chartArea: a, scales: { x } } = chart;
       ctx.save();
       for (const e of evs) {
+        // informational notices (transit filter checks, chain changes...) are often open for days: only brief
+        // dips are shaded among the info events, as the chart captions say
+        if (e.severity === "info" && e.kind !== "blip") continue;
         const s = e.start_ts * 1000, en = (e.end_ts || Date.now() / 1000) * 1000;
         let x0 = x.getPixelForValue(s), x1 = x.getPixelForValue(en);
         if (x1 < a.left || x0 > a.right) continue;

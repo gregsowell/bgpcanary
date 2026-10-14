@@ -1,6 +1,7 @@
 """SQLite storage. Single-writer (the collector loop); web reads use separate connections."""
 import json
 import sqlite3
+import threading
 import time
 
 SCHEMA = """
@@ -125,8 +126,40 @@ CREATE TABLE IF NOT EXISTS alert_log (
 """
 
 
+class _Conn(sqlite3.Connection):
+    """A connection that's safe to share between the event loop and worker threads (the history backfill writes
+    from a thread while startup tasks write from the loop). sqlite3 checks "is a transaction open?" and then
+    issues BEGIN for each write; two threads doing that at once failed with "cannot start a transaction within
+    a transaction" and abandoned the backfill. Each statement and commit now runs under one lock, so the second
+    writer simply joins the open transaction."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._lock = threading.RLock()
+
+    def execute(self, *a, **k):
+        with self._lock:
+            return super().execute(*a, **k)
+
+    def executemany(self, *a, **k):
+        with self._lock:
+            return super().executemany(*a, **k)
+
+    def executescript(self, *a, **k):
+        with self._lock:
+            return super().executescript(*a, **k)
+
+    def commit(self):
+        with self._lock:
+            return super().commit()
+
+    def rollback(self):
+        with self._lock:
+            return super().rollback()
+
+
 def connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=False, factory=_Conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")

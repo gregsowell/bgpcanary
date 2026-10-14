@@ -1,5 +1,6 @@
 """Minimal async telnet client for Route Views route servers (login rviews)."""
 import asyncio
+import ipaddress
 import logging
 import re
 
@@ -13,13 +14,20 @@ LOGIN_RE = re.compile(rb"(?i)(username|login)\s*:\s*$")
 PASS_RE = re.compile(rb"(?i)password\s*:\s*$")
 PATH_RE = re.compile(r"^  ((?:\d+|\{[\d,]+\})(?: +(?:\d+|\{[\d,]+\}))*)(?:,.*|\s+\(.*)?\s*$")
 PING_RE = re.compile(r"Success rate is (\d+) percent \((\d+)/(\d+)\)(?:, round-trip min/avg/max = (\d+)/(\d+)/(\d+) ms)?")
-IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 AS_RE = re.compile(r"\[AS (\d+)\]")
 
 _locks: dict[str, asyncio.Lock] = {}
 # Route Views rate-limits telnet per source IP (per collector, per day: 100 connections, 500 KB down,
 # 100 KB up). Every session reports its usage here so the service can budget it.
 on_usage = None   # callable(host, bytes_in, bytes_out)
+
+
+def _line(text):
+    """`text` as exactly one command line for the router CLI. Anything but printable ASCII (line breaks, other
+    control characters) is refused here, whatever the caller validated: no value can ever start a second command."""
+    if not re.fullmatch(r"[ -~]*", text):
+        raise ValueError("refusing to send a Route Views command containing control or non-ASCII characters")
+    return text.encode("ascii") + b"\r\n"
 
 
 class RateLimited(Exception):
@@ -105,15 +113,16 @@ class Session:
     async def _login(self):
         out = await self._read_until([LOGIN_RE, PASS_RE, PROMPT_RE], self.timeout)
         if LOGIN_RE.search(out[-200:]):
-            self.w.write(self.user.encode() + b"\r\n")
+            self.w.write(_line(self.user))
             out = await self._read_until([PASS_RE, PROMPT_RE], self.timeout)
         if PASS_RE.search(out[-200:]):
-            self.w.write(self.password.encode() + b"\r\n")
+            self.w.write(_line(self.password))
             await self._read_until([PROMPT_RE], self.timeout)
 
     async def cmd(self, command, timeout=60, on_chunk=None):
-        self.bytes_out += len(command) + 2
-        self.w.write(command.encode() + b"\r\n")
+        data = _line(command)
+        self.bytes_out += len(data)
+        self.w.write(data)
         await self.w.drain()
         out = await self._read_until([PROMPT_RE], timeout, on_chunk)
         text = out.decode(errors="replace").replace("\r", "")
@@ -145,23 +154,41 @@ def parse_ping(text):
     return float(m.group(1)), (float(m.group(5)) if m.group(5) else None)
 
 
+def _hop_addresses(line):
+    """The IPv4/IPv6 addresses in one traceroute line, normalized. In the "name (address)" form the parenthesized
+    address comes first."""
+    paren, plain = [], []
+    for tok in line.split():
+        try:
+            a = ipaddress.ip_address(tok.strip("()[],"))
+        except ValueError:
+            continue
+        (paren if tok.startswith("(") else plain).append(a)
+    return paren + plain
+
+
 def parse_trace(text, target):
+    """(last hop address, its ASN, whether the target answered) from a Route Views traceroute, IPv4 or IPv6."""
+    try:
+        tgt = ipaddress.ip_address(str(target).strip())
+    except ValueError:
+        tgt = None
     last_ip, last_asn, reached = None, None, False
     for line in text.split("\n"):
         if line.startswith("Tracing") or "escape sequence" in line or "VRF info" in line:
             continue
-        ips = IP_RE.findall(line)
-        if ips:
-            paren = re.findall(r"\((\d{1,3}(?:\.\d{1,3}){3})\)", line)
-            last_ip = paren[0] if paren else ips[0]
+        addrs = _hop_addresses(line)
+        if addrs:
+            last_ip = str(addrs[0])
             a = AS_RE.findall(line)
             last_asn = int(a[-1]) if a else last_asn
-            if target in ips:
+            if tgt is not None and tgt in addrs:
                 reached = True
     return last_ip, last_asn, reached
 
 
 async def show_bgp(host, prefix):
+    prefix = config.normalize_prefix(prefix)   # only the plain prefix goes on the command line (ValueError if not)
     async with lock_for(host):
         async with Session(host) as s:
             v6 = ":" in prefix
@@ -174,6 +201,7 @@ async def show_bgp(host, prefix):
 async def show_bgp_many(host, prefixes):
     """One session, one compact `show ... | include` per prefix: {prefix: (raw, [paths])}."""
     out = {}
+    prefixes = [config.normalize_prefix(p) for p in prefixes]
     async with lock_for(host):
         async with Session(host) as s:
             for prefix in prefixes:

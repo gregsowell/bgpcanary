@@ -60,7 +60,7 @@ def main():
         r = auth.get_user(conn, args.username)
         print(f"user {args.username} saved (role: {r['role']})")
     elif args.cmd == "userdel":
-        conn.execute("DELETE FROM users WHERE username=?", (args.username,))
+        auth.delete_user(conn, args.username)   # (and its sessions)
         conn.commit()
         print("deleted")
     elif args.cmd == "users":

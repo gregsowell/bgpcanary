@@ -42,6 +42,7 @@ def set_user(conn, username, pw, role=None, must_change=0):
                  "session_ver=session_ver+1" + (", role=excluded.role" if role else ""),
                  (username, hash_password(pw), time.time(), role or "admin", must_change,
                   secrets.randbelow(2 ** 31) + 1))
+    conn.execute("DELETE FROM sessions WHERE username=?", (username,))
     conn.commit()
 
 
@@ -62,17 +63,61 @@ def set_role(conn, username, role):
     if role not in ROLES:
         raise ValueError("bad role")
     conn.execute("UPDATE users SET role=?, session_ver=session_ver+1 WHERE username=?", (role, username))
+    conn.execute("DELETE FROM sessions WHERE username=?", (username,))
     conn.commit()
 
 
 def sign_out_everywhere(conn, username):
     conn.execute("UPDATE users SET session_ver=session_ver+1 WHERE username=?", (username,))
+    conn.execute("DELETE FROM sessions WHERE username=?", (username,))
     conn.commit()
 
 
 def delete_user(conn, username):
     conn.execute("DELETE FROM users WHERE username=?", (username,))
+    conn.execute("DELETE FROM sessions WHERE username=?", (username,))
     conn.commit()
+
+
+# ---------------------------------------------------------------- server-side sessions
+SESSION_IDLE = 7 * 86400    # unused this long: signed out (the cookie's own lifetime)
+SESSION_MAX = 30 * 86400    # and everyone signs in again at least every 30 days
+_TOUCH_EVERY = 300          # "last seen" is written at most every 5 minutes per session
+
+
+def _sid_hash(sid):
+    return hashlib.sha256(sid.encode()).hexdigest()
+
+
+def new_session(conn, username, ip="", agent=""):
+    """Start a session for a successful login; returns the id to put in the (signed) cookie."""
+    sid = secrets.token_urlsafe(32)
+    now = time.time()
+    conn.execute("DELETE FROM sessions WHERE seen < ? OR created < ?", (now - SESSION_IDLE, now - SESSION_MAX))
+    conn.execute("INSERT INTO sessions(id, username, created, seen, ip, agent) VALUES(?,?,?,?,?,?)",
+                 (_sid_hash(sid), username, now, now, (ip or "")[:64], (agent or "")[:200]))
+    conn.commit()
+    return sid
+
+
+def session_valid(conn, username, sid):
+    """Is `sid` a live session of `username`? (Expired or ended sessions aren't.)"""
+    if not isinstance(sid, str) or not 20 <= len(sid) <= 100:
+        return False
+    h, now = _sid_hash(sid), time.time()
+    r = conn.execute("SELECT username, created, seen FROM sessions WHERE id=?", (h,)).fetchone()
+    if not r or r["username"] != username or r["seen"] < now - SESSION_IDLE or r["created"] < now - SESSION_MAX:
+        return False
+    if now - r["seen"] > _TOUCH_EVERY:
+        conn.execute("UPDATE sessions SET seen=? WHERE id=?", (now, h))
+        conn.commit()
+    return True
+
+
+def end_session(conn, sid):
+    if isinstance(sid, str) and sid:
+        conn.execute("DELETE FROM sessions WHERE id=?", (_sid_hash(sid),))
+        conn.commit()
 
 
 def ensure_default_admin(conn):

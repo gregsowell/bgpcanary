@@ -181,8 +181,10 @@ def user(request: Request, allow_must_change=False):
     if not u:
         raise NeedLogin()
     row = auth.get_user(svc.aconn, u)
-    if not row or request.session.get("v", 0) != row["session_ver"]:
-        # deleted, or signed out everywhere by a password / role change since this session started
+    if (not row or request.session.get("v", 0) != row["session_ver"]
+            or not auth.session_valid(svc.aconn, u, request.session.get("sid"))):
+        # deleted, signed out (here or everywhere), or a password / role change since this session started.
+        # Cookies from before 1.2.3 have no session id: they sign in once more.
         request.session.clear()
         raise NeedLogin()
     request.state.role = row["role"]
@@ -201,12 +203,23 @@ def admin(request: Request):
     return u
 
 
+def start_session(request, username):
+    """A new server-side session for this browser (a fresh id each time: nothing carries over from before)."""
+    row = auth.get_user(svc.aconn, username)
+    request.session.clear()
+    request.session["user"] = username
+    request.session["v"] = row["session_ver"] if row else 0
+    request.session["sid"] = auth.new_session(svc.aconn, username, request.headers.get("x-real-ip") or
+                                              (request.client.host if request.client else ""),
+                                              request.headers.get("user-agent", ""))
+    return row
+
+
 def keep_session(request, username):
-    """After changing your own password or role, stay signed in here (other sessions are signed out)."""
+    """After changing your own password or role (which ends all of the account's sessions), stay signed in here
+    with a new session; every other browser stays signed out."""
     if request.session.get("user") == username:
-        row = auth.get_user(svc.aconn, username)
-        if row:
-            request.session["v"] = row["session_ver"]
+        start_session(request, username)
 
 
 def rconn():
@@ -299,10 +312,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         await asyncio.sleep(1)
         return render(request, "login.html", next=next, error="Invalid username or password.")
     throttle.success(ip, username, device)
-    row = auth.get_user(svc.aconn, username)
-    request.session.clear()
-    request.session["user"] = username
-    request.session["v"] = row["session_ver"] if row else 0
+    row = start_session(request, username)
     if not next.startswith("/") or next.startswith("//"):
         next = "/"
     resp = RedirectResponse("/account/password" if row and row["must_change"] else next, status_code=303)
@@ -314,6 +324,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 @app.get("/logout")
 async def logout(request: Request):
+    auth.end_session(svc.aconn, request.session.get("sid"))   # ended on the server: a copied cookie stops working
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
@@ -324,7 +335,7 @@ def prefix_summary(conn):
     eng = svc.engine
     for p, m in eng.mons.items():
         v = eng.visible(p)
-        base = m.baseline()
+        base = m.current_baseline()
         chains = {}
         ups = {}
         for e in list(eng.rib.get(p, {}).values()):
@@ -1154,10 +1165,10 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
     pfx, problems = [], []
     for x in _parse_list(prefixes):
         try:
-            net = ipaddress.ip_network(x, strict=True)
+            net = config.plain_prefix(x, strict=True)
         except ValueError:
             try:
-                problems.append(f"{x} has host bits set - did you mean {ipaddress.ip_network(x, strict=False)}?")
+                problems.append(f"{x} has host bits set - did you mean {config.plain_prefix(x)}?")
             except ValueError:
                 problems.append(f"{x} isn't a valid prefix")
             continue
@@ -1179,7 +1190,7 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
     owned = []
     for x in _parse_list(owned_space):
         try:
-            owned.append(str(ipaddress.ip_network(x, strict=False)))
+            owned.append(config.normalize_prefix(x))
         except ValueError:
             return back(f"Owned space {x} isn't a valid prefix")
     targets = []
@@ -1908,6 +1919,7 @@ async def atlas_settings_save(request: Request):
     f = await request.form()
     s = atlas.settings(svc.aconn)
     was_on = atlas.enabled(svc.aconn)
+    old_key = s.get("api_key", "")   # what running measurements were made with
 
     async def again(msg):   # input error: show the form again with what was typed
         return await _atlas_settings(request, f"Not saved: {msg}", 1, form=f)
@@ -1943,6 +1955,10 @@ async def atlas_settings_save(request: Request):
         s["api_key"] = key
     if s["enabled"] and not s["api_key"]:
         return await again("add an API key to turn RIPE Atlas on.")
+    failed = []
+    if was_on and not s["enabled"]:
+        # stop them before the key is cleared or replaced: with the key they were made with
+        failed = await svc.atlas.disable(key=old_key or True)
     db.kv_set(svc.aconn, atlas.KV_SETTINGS, s)
     svc.aconn.commit()
     log.info("user %s changed RIPE Atlas settings (enabled=%s)", me, s["enabled"])
@@ -1950,8 +1966,14 @@ async def atlas_settings_save(request: Request):
         await svc.atlas.credits(force=True)
     err = False
     if was_on and not atlas.enabled(svc.aconn):
-        await svc.atlas.disable()
-        msg = "RIPE Atlas turned off. The periodic measurements were stopped; stored results are kept."
+        if failed:
+            msg = (f"RIPE Atlas turned off, but Atlas didn't confirm stopping {len(failed)} periodic measurement(s) "
+                   f"({', '.join('#' + str(m) for m in failed)}). They keep using credits until they're stopped: "
+                   + ("bgpcanary retries every few minutes with the saved key, or stop them on atlas.ripe.net."
+                      if s["api_key"] else "with the key cleared, stop them on atlas.ripe.net (links below)."))
+            err = True
+        else:
+            msg = "RIPE Atlas turned off. The periodic measurements were stopped; stored results are kept."
     elif atlas.enabled(svc.aconn):
         try:
             await svc.atlas.ensure_baseline()

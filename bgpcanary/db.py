@@ -110,6 +110,18 @@ CREATE TABLE IF NOT EXISTS users (
     must_change INTEGER NOT NULL DEFAULT 0   -- 1 = must set a new password at next login
 );
 
+-- Signed-in browsers. The cookie carries a random session id; only its SHA-256 is stored, and a session is valid
+-- only while its row exists, so signing out (or a password change) ends it for good, even for a copied cookie.
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,                     -- sha256(session id)
+    username TEXT NOT NULL,
+    created REAL NOT NULL,
+    seen REAL NOT NULL,
+    ip TEXT,
+    agent TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(username);
+
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
     v TEXT

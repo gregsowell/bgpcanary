@@ -405,7 +405,9 @@ class Service:
 
     async def _handle_event(self, eid, phase):
         ev = dict(self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())
-        notify = phase in ("open", "close") and config.should_notify(self.cfg, ev, phase)   # per-type choices
+        # per-type choices decide. An escalation (warning -> critical) is the first alert for "critical only"
+        # subscribers, and news for everyone who was told about the warning.
+        notify = phase in ("open", "escalate", "close") and config.should_notify(self.cfg, ev, phase)
         if notify:
             images = []
             if self.cfg.email.enabled and self.cfg.email.recipients:
@@ -444,7 +446,7 @@ class Service:
             if e.path and e.path[-1] == self.cfg.asn:
                 c = paths.chain(e.path, 2)   # transit -> upstream
                 chains[c] = chains.get(c, 0) + 1
-        return {"prefix": p, "visible": eng.visible(p), "base": eng.mons[p].baseline() or 0, "chains": chains}
+        return {"prefix": p, "visible": eng.visible(p), "base": eng.mons[p].current_baseline() or 0, "chains": chains}
 
     def _major_change(self, a, b):
         """Reason string if routing changed enough since the last Route Views query, else None. 'Enough' =

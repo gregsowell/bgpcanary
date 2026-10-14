@@ -6,6 +6,17 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Security
+- **Signing out now ends the session on the server,** so a copy of the session cookie stops working too. Sessions are tracked server-side: a password change, an admin's reset, a role change, "Sign out everywhere else" and deleting the account all end them, sessions not used for 7 days end, and everyone signs in again at least every 30 days. **After updating, everyone signs in once more** (cookies from earlier versions aren't accepted).
+- **Webhook failures are recorded without anything from the webhook URL:** the HTTP status, or the kind of failure with a cleaned-up detail. This applies to the alert log, the settings and event pages, and the logs, however bgpcanary is run.
+- **Monitored prefixes, like probe targets, must be plain prefixes,** and the Route Views client only ever sends a single printable command line.
+
+### Fixed
+- An outage that opened as a warning and then became critical sent no alert to "Critical only" subscribers (and no "escalated" notice to anyone). Escalations now go through the same per-type alert settings ([#1](https://github.com/gregsowell/bgpcanary/issues/1)).
+- An outage that lasted longer than the baseline window (24 hours by default) could never end, even after every peer came back. After a restart during an outage, recovery could also be judged against the outage's own low readings. An outage now keeps the baseline it opened with until it recovers ([#2](https://github.com/gregsowell/bgpcanary/issues/2)).
+- Turning RIPE Atlas off marked its periodic measurements stopped even when Atlas refused, and clearing the API key at the same time sent the stop requests without it. Measurements are now stopped with the key they were made with, recorded as stopped only once Atlas confirms, and anything not confirmed keeps counting against the daily credit cap, is retried, and is listed on the Atlas settings page ([#3](https://github.com/gregsowell/bgpcanary/issues/3)).
+- IPv6 Route Views traceroutes that reached their target were recorded as not reaching it, with no last hop ([#4](https://github.com/gregsowell/bgpcanary/issues/4)).
+
 ## [1.2.2] - 2026-10-14
 
 ### Security

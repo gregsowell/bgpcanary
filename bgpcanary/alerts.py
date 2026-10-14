@@ -14,6 +14,26 @@ import httpx
 
 log = logging.getLogger("bgpcanary.alerts")
 
+
+class _MaskURLs(logging.Filter):
+    """httpx logs every request with its full URL ("HTTP Request: POST <url> ..."), and a webhook's URL is its
+    credential. Keep those library logs at WARNING whatever the entry point (service, CLI), and if someone turns
+    them up anyway, mask the URLs in them."""
+
+    def filter(self, record):
+        try:
+            record.msg, record.args = mask_urls(record.getMessage()), ()
+        except Exception:
+            pass
+        return True
+
+
+for _name in ("httpx", "httpcore"):
+    _lib = logging.getLogger(_name)
+    _lib.addFilter(_MaskURLs())
+    if _lib.level < logging.WARNING:
+        _lib.setLevel(logging.WARNING)
+
 EMOJI = {"critical": ":red_circle:", "warning": ":large_orange_circle:", "info": ":information_source:",
          "resolved": ":large_green_circle:"}
 
@@ -36,14 +56,35 @@ def mask_urls(text):
     return _URL_RE.sub(_mask_one, str(text or ""))
 
 
+def _scrub(msg, url):
+    """Remove every secret-bearing piece of `url` from `msg`, in whatever form it appears: the whole URL, path,
+    query, each path segment and query value, and any user:password."""
+    if not url:
+        return msg
+    try:
+        p = urlsplit(url)
+        parts = [url, url.split("://", 1)[-1], p.path, p.query, p.password or "", p.username or "",
+                 *p.path.split("/"), *(v for kv in p.query.split("&") for v in kv.split("=", 1))]
+    except ValueError:
+        parts = [url]
+    for part in sorted({x for x in parts if len(x) >= 4}, key=len, reverse=True):
+        msg = msg.replace(part, "…")
+    return msg
+
+
 def safe_error(e, url=""):
-    """A webhook error message without the webhook URL."""
+    """What went wrong with a webhook, for the alert log, the journal and the settings pages, without anything from
+    its URL (the URL is the credential for Slack, Teams and most webhooks): an HTTP status, or the kind of failure
+    with a scrubbed detail."""
     if isinstance(e, httpx.HTTPStatusError):
         return f"HTTP {e.response.status_code} {e.response.reason_phrase}".strip()
-    msg = str(e) or type(e).__name__
-    if url:
-        msg = msg.replace(url, "<webhook URL>")
-    return mask_urls(msg)
+    kind = ("invalid webhook URL" if isinstance(e, (httpx.InvalidURL, httpx.UnsupportedProtocol)) else
+            "timed out" if isinstance(e, httpx.TimeoutException) else
+            "couldn't connect" if isinstance(e, httpx.ConnectError) else
+            "connection failed" if isinstance(e, httpx.TransportError) else
+            "request failed" if isinstance(e, httpx.HTTPError) else type(e).__name__)
+    detail = mask_urls(_scrub(str(e), url)).strip()[:200]
+    return f"{kind}: {detail}" if detail and detail.lower() != kind else kind
 
 
 def _fmt_ts(ts):

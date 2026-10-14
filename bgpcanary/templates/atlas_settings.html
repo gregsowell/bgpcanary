@@ -43,6 +43,10 @@
       <span class="muted">· estimated daily income {{ "{:,}".format((credits.estimated_daily_income or 0)|int) }}, spending {{ "{:,}".format((credits.estimated_daily_expenditure or 0)|int) }}</span>{% endif %}</dd>
     {% endif %}
     <dt>Committed today</dt><dd>~{{ "{:,}".format(spent) }} of {{ "{:,}".format(a.credit_cap|int) }} credits <span class="muted">(running baseline + one-offs in the last 24 h)</span></dd>
+    {% if state.stop_pending %}<dt>Not stopped yet</dt><dd><span class="badge b-warning">still running</span>
+      {% for m in state.stop_pending %}<a href="https://atlas.ripe.net/measurements/{{ m }}/" target="_blank" rel="noopener">#{{ m }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+      <span class="muted">· Atlas didn't confirm stopping these; they still count against the daily cap.
+      {% if has_key %}bgpcanary retries every few minutes.{% else %}With no API key saved, stop them on atlas.ripe.net.{% endif %}</span></dd>{% endif %}
     {% if state.baseline_msms %}<dt>Baseline</dt><dd>{% for m in state.baseline_msms %}<a href="https://atlas.ripe.net/measurements/{{ m }}/" target="_blank" rel="noopener">#{{ m }}</a>{% if not loop.last %}, {% endif %}{% endfor %} · {{ state.baseline_probes|length }} probes</dd>{% endif %}
   </dl>
 </div>

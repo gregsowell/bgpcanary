@@ -1,5 +1,6 @@
 """Configuration loading (TOML)."""
 import ipaddress
+import logging
 import os
 import re
 import tomllib
@@ -82,8 +83,29 @@ class Config:
         return bool(self.asn) and bool(self.prefixes)
 
 
+def plain_prefix(p, strict=False):
+    """A plain IPv4/IPv6 network (ValueError otherwise). Like plain_ip, it rejects IPv6 zone suffixes
+    ('2001:db8::%x/64'), which ipaddress accepts but which aren't part of a prefix: prefixes end up in Route Views
+    and IRR commands, which must only ever get the plain prefix."""
+    n = ipaddress.ip_network(str(p).strip(), strict=strict)
+    if getattr(n.network_address, "scope_id", None):
+        raise ValueError(f"{str(p)[:60]!r} has a zone suffix")
+    return n
+
+
 def normalize_prefix(p: str) -> str:
-    return str(ipaddress.ip_network(p.strip(), strict=False))
+    return str(plain_prefix(p))
+
+
+def _valid_prefixes(items, what):
+    """Saved settings: keep the valid entries and log the rest (a bad saved value mustn't stop the service)."""
+    out = []
+    for x in items:
+        try:
+            out.append(normalize_prefix(x))
+        except ValueError:
+            logging.getLogger("bgpcanary.config").warning("ignoring invalid %s in saved settings: %r", what, str(x)[:60])
+    return out
 
 
 # Monitoring settings edited in the web UI (kv "monitor_settings") override [monitor] / probe targets /
@@ -101,9 +123,9 @@ def apply_monitor_settings(cfg, data: dict | None) -> None:
     if not data:
         return
     cfg.asn = int(data.get("asn", cfg.asn) or 0)
-    cfg.prefixes = [normalize_prefix(x) for x in data.get("prefixes", cfg.prefixes)]
+    cfg.prefixes = _valid_prefixes(data.get("prefixes", cfg.prefixes), "prefix")
     cfg.expected_upstreams = [int(x) for x in data.get("expected_upstreams", cfg.expected_upstreams)]
-    cfg.owned_space = [normalize_prefix(x) for x in data.get("owned_space", cfg.owned_space)]
+    cfg.owned_space = _valid_prefixes(data.get("owned_space", cfg.owned_space), "owned prefix")
     cfg.probe_targets = list(data.get("probe_targets", cfg.probe_targets))
     cfg.site_name = data.get("site_name") or cfg.site_name
 
@@ -403,6 +425,14 @@ def plain_ip(text):
 
 
 def load(path: str = DEFAULT_PATH) -> Config:
+    try:
+        return _load(path)
+    except (ValueError, TypeError) as ex:   # a value of the wrong kind: say which, instead of a traceback
+        raise ConfigError(f"Config file {path} has an invalid value: {ex}\n"
+                          f"Fix it with: sudo nano {path}") from None
+
+
+def _load(path):
     raw = _read(path)
     mon = raw.get("monitor", {})
     web = raw.get("web", {})

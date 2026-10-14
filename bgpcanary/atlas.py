@@ -494,13 +494,48 @@ class Atlas:
             except Exception as ex:
                 log.warning("Atlas fetch %s: %s", msm, ex)
 
-    async def stop(self, msm_id):
+    async def stop(self, msm_id, key=True):
+        """Stop a measurement. It's recorded as stopped only once Atlas confirms it, or reports that it has already
+        ended; otherwise it stays counted against the daily credit cap and is kept for retry_stops(). Returns
+        whether it's stopped. `key`: as for _api (True = the saved key)."""
         try:
-            await self._api("DELETE", f"/measurements/{msm_id}/")
+            await self._api("DELETE", f"/measurements/{msm_id}/", key=key)
+            ok = True
         except Exception as ex:
-            log.warning("stopping Atlas measurement %s: %s", msm_id, ex)
-        self.conn.execute("UPDATE atlas_msm SET stopped=? WHERE id=?", (time.time(), msm_id))
+            ok = await self._ended(msm_id, key)
+            if not ok:
+                log.warning("stopping Atlas measurement %s failed (will retry): %s", msm_id, ex)
+        st = db.kv_get(self.conn, KV_STATE, {}) or {}
+        pending = set(st.get("stop_pending") or [])
+        if ok:
+            self.conn.execute("UPDATE atlas_msm SET stopped=? WHERE id=?", (time.time(), msm_id))
+            pending.discard(msm_id)
+        else:
+            pending.add(msm_id)
+        st["stop_pending"] = sorted(pending)
+        db.kv_set(self.conn, KV_STATE, st)
         self.conn.commit()
+        return ok
+
+    async def _ended(self, msm_id, key=True):
+        """Whether Atlas says the measurement has already ended (stopped, failed, no probes, archived)."""
+        k = self.s["api_key"] if key is True else key
+        try:
+            d = await self._api("GET", f"/measurements/{msm_id}/", key=k or False)
+        except AtlasError as ex:
+            return ex.status == 404 and bool(k)   # gone, as seen by its owner
+        except Exception:
+            return False
+        return (d.get("status") or {}).get("id") in (4, 5, 6, 7, 8)
+
+    def pending_stops(self):
+        return list((db.kv_get(self.conn, KV_STATE, {}) or {}).get("stop_pending") or [])
+
+    async def retry_stops(self):
+        """Measurements Atlas didn't confirm stopping: try again (needs the saved key)."""
+        if self.s["api_key"]:
+            for m in self.pending_stops():
+                await self.stop(m)
 
     def label(self, t):
         return (self.s.get("target_labels") or {}).get(t, "")
@@ -671,14 +706,19 @@ class Atlas:
                         if shift else ", even though BGP may have looked normal.")},
             end_ts=end)
 
-    async def disable(self):
-        """Stop the periodic baseline measurements (one-offs finish on their own)."""
-        st = db.kv_get(self.conn, KV_STATE, {}) or {}
-        for m in st.get("baseline_msms", []):
-            await self.stop(m)
+    async def disable(self, key=True):
+        """Stop the periodic baseline measurements (one-offs finish on their own). `key`: the key they were made
+        with, when the saved one is about to change. Returns those Atlas didn't confirm stopping: they stay
+        counted against the credit cap and listed for retry."""
+        failed = []
+        for m in (db.kv_get(self.conn, KV_STATE, {}) or {}).get("baseline_msms", []):
+            if not await self.stop(m, key=key):
+                failed.append(m)
+        st = db.kv_get(self.conn, KV_STATE, {}) or {}   # (re-read: stop() keeps the retry list in it)
         st.update({"baseline_sig": None, "baseline_msms": [], "baseline_by": {}})
         db.kv_set(self.conn, KV_STATE, st)
         self.conn.commit()
+        return failed
 
     async def load_demo(self):
         """Preview data without an API key or credits: the last day of RIPE's own public built-in
@@ -782,6 +822,7 @@ class Atlas:
         await asyncio.sleep(90)
         while True:
             try:
+                await self.retry_stops()   # (also while Atlas is off: these may still be using credits)
                 if enabled(self.conn):
                     await self.ensure_baseline()
                     await self.poll()

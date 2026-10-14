@@ -37,6 +37,7 @@ class PrefixMon:
         self.event_id = None
         self.event_sev = None
         self.min_vis = None
+        self.ref_base = None       # while down: the baseline the outage opened with (see current_baseline)
         self.samples = deque()     # (ts, visible) for baseline
         self.ups_hist = deque()    # (ts, {upstream: peers}) per bucket, for upstream-shift detection
         self.shift_hits = 0        # consecutive buckets over the shift threshold
@@ -52,6 +53,14 @@ class PrefixMon:
         if len(vals) < 20:
             return float(vals[-1])
         return float(vals[int(len(vals) * 0.95) - 1])
+
+    def current_baseline(self):
+        """The baseline to judge visibility against. During an outage that's the healthy baseline it opened with:
+        the rolling one stops learning while down (its samples age out, and after a restart it would be rebuilt
+        from the outage's own low readings), so a long outage could otherwise never be seen to recover."""
+        if self.state == "down" and self.ref_base:
+            return self.ref_base
+        return self.baseline()
 
 
 class Engine:
@@ -94,6 +103,7 @@ class Engine:
                 m = self.mons[r["prefix"]]
                 m.state, m.event_id, m.event_sev = "down", r["id"], r["severity"]
                 m.min_vis = r["min_visible"] if r["min_visible"] is not None else 0
+                m.ref_base = r["baseline"] or detail.get("baseline")   # stored when the outage opened
             elif detail.get("tf_key") or detail.get("ext_key"):   # managed by transit.py / registry.py
                 k = detail.get("tf_key") or detail.get("ext_key")
                 self.anomalies[k] = {"id": r["id"], "zero_since": None, "sev": r["severity"]}
@@ -267,7 +277,7 @@ class Engine:
 
     # ------------------------------------------------------------------ outage state machine
     def _track(self, m, ts, v):
-        base = m.baseline()
+        base = m.current_baseline()
         if base is None or base <= 0:
             return
         th = base * self.cfg.outage_threshold_pct / 100
@@ -305,7 +315,7 @@ class Engine:
     def _detect(self, now):
         S = self.cfg.sustain_seconds
         for p, m in self.mons.items():
-            base = m.baseline()
+            base = m.current_baseline()
             v = self.visible(p)
             if base:
                 # catch state changes that happened without per-update tracking (bulk loads)
@@ -321,6 +331,7 @@ class Engine:
                 if v < th:
                     sev = "critical" if m.dip_min < base * 0.5 else "warning"
                     m.state, m.event_sev, m.min_vis, m.rec_start = "down", sev, m.dip_min, None
+                    m.ref_base = base
                     m.event_id = self._new_event(
                         "outage", sev, p, m.dip_start,
                         f"{p} visibility dropped to {m.dip_min}/{base:.0f} RIS peers",
@@ -330,6 +341,7 @@ class Engine:
                 self._close_event(m.event_id, m.rec_start, min_visible=m.min_vis, severity=m.event_sev,
                                   title=f"{p} outage: visibility fell to {m.min_vis}/{base:.0f} RIS peers")
                 m.state, m.event_id, m.dip_start, m.dip_min, m.rec_start = "ok", None, None, None, None
+                m.ref_base = None
             if m.state == "ok" and m.dip_start is None and v > 0:
                 m.samples.append((now, v))
             while m.samples and m.samples[0][0] < now - self.cfg.baseline_hours * 3600:
@@ -525,7 +537,7 @@ class Engine:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO buckets(prefix,ts,visible,baseline,min_visible,chains,upstreams,updates,withdrawals)"
                     " VALUES(?,?,?,?,?,?,?,?,?)",
-                    (p, t, v, m.baseline(), m.bucket_min if m.bucket_min is not None else v,
+                    (p, t, v, m.current_baseline(), m.bucket_min if m.bucket_min is not None else v,
                      json.dumps(chains), json.dumps(ups), m.bucket_updates, m.bucket_withdrawals))
                 m.bucket_min = v
                 m.bucket_updates = m.bucket_withdrawals = 0

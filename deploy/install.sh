@@ -111,7 +111,8 @@ args = sys.argv[1:]
 cut = args.index("--")
 for p in args[:cut]:
     try:
-        ipaddress.ip_network(p, strict=False)
+        if getattr(ipaddress.ip_network(p, strict=False).network_address, "scope_id", None):
+            raise ValueError(p)
     except ValueError:
         sys.exit(f"Not a valid prefix: '{p}' (e.g. --prefix 192.0.2.0/24 --prefix 2001:db8::/48)")
 for a in args[cut + 1:]:

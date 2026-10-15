@@ -53,7 +53,11 @@
       <dt><span class="badge b-info">viewer</span></dt><dd>Sees everything (dashboard, events, paths, updates, registry, probes, settings) and can export GIFs and change their own password. Can't run probes, start checks, change toggles, send test alerts or manage users.</dd>
       <dt><span class="badge b-warning">admin</span></dt><dd>Everything, including this page.</dd>
     </dl>
+    {% if container %}
+    <p class="muted" style="font-size:12px">You can also manage users from the Docker host: <code>docker exec -it bgpcanary bgpcanary-admin useradd NAME --role viewer</code>, <code>users</code>, <code>userdel NAME</code> (<code>bgpcanary</code> being the container's name).</p>
+    {% else %}
     <p class="muted" style="font-size:12px">You can also manage users from the VM's command line: <code>sudo bgpcanary-admin useradd NAME --role viewer</code>, <code>users</code>, <code>userdel NAME</code>.</p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

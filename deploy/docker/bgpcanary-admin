@@ -1,0 +1,8 @@
+#!/bin/sh
+# bgpcanary's command line inside the container, e.g.  docker exec -it bgpcanary bgpcanary-admin users
+if [ "$(id -u)" = 0 ]; then
+  echo "Run this as the container's own user (leave out --user / -u), or files it creates won't be usable by bgpcanary." >&2
+  exit 1
+fi
+umask 077
+cd /opt/bgpcanary && exec python -m bgpcanary.cli "$@"

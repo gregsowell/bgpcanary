@@ -1,0 +1,3 @@
+bgp.example.com {
+	reverse_proxy bgpcanary:8080
+}

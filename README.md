@@ -68,6 +68,20 @@ background.
 
 Full instructions, including DNS, certificates and firewall: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
+### Or in a container
+
+An image for Docker and Podman, on amd64 and arm64: `ghcr.io/gregsowell/bgpcanary`.
+
+```bash
+mkdir bgpcanary && cd bgpcanary
+curl -fsSLO https://raw.githubusercontent.com/gregsowell/bgpcanary/main/deploy/docker/compose.yaml
+docker compose up -d
+docker compose logs bgpcanary     # the initial admin password
+```
+
+It serves plain HTTP on port 8080, for a reverse proxy that adds HTTPS. Proxy examples, settings, backups and
+moving an existing install into a container: **[docs/DOCKER.md](docs/DOCKER.md)**.
+
 ## Updating
 
 ```bash
@@ -78,11 +92,15 @@ It backs up your database and settings, installs the latest release, and checks 
 `--rollback` undoes it. Admins see an "update available" badge in the web UI when a new release is out.
 See **[docs/UPGRADING.md](docs/UPGRADING.md)**.
 
+In a container: `docker compose pull && docker compose up -d`. The database is backed up before the new version
+first starts.
+
 ## Documentation
 
 | | |
 |---|---|
 | [Installation](docs/INSTALL.md) | Requirements, install, first login, certificates, uninstalling |
+| [Containers](docs/DOCKER.md) | The Docker/Podman image: reverse proxies, settings, updates, backups |
 | [Upgrading](docs/UPGRADING.md) | Updates, backups, rolling back |
 | [Configuration](docs/CONFIGURATION.md) | Every setting, alerts, RIPE Atlas, the command line, where files live |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common problems and how to fix them |

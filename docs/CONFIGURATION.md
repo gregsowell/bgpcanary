@@ -80,6 +80,10 @@ daily credit use as you type.
 
 Values saved in the web UI take precedence. After editing the file, run `sudo systemctl restart bgpcanary`.
 
+In the container image, the file is `/var/lib/bgpcanary/config.toml` in the data volume. It's created on the
+first start, and the listen address comes from environment variables instead; see
+[DOCKER.md](DOCKER.md#environment-variables). Restart with `docker restart bgpcanary` after editing it.
+
 ## Command line
 
 ```bash
@@ -89,9 +93,13 @@ sudo bgpcanary-admin useradd admin                       # reset a password (e.g
 sudo bgpcanary-admin userdel NAME
 sudo bgpcanary-admin test-alert                          # send a test alert on every channel
 sudo bgpcanary-admin version
+sudo bgpcanary-admin backup - > bgpcanary.db             # a consistent copy of the database, while it runs
 sudo bgpcanary-update [--check | --rollback | --version X.Y.Z]
 sudo journalctl -u bgpcanary -f                          # live log
 ```
+
+In a container, run them as `docker exec -it bgpcanary bgpcanary-admin ...`, without `sudo`. For `backup -`, leave
+out `-it` (a terminal would mangle the data).
 
 ## Where things live
 
@@ -105,3 +113,6 @@ sudo journalctl -u bgpcanary -f                          # live log
 | Web server config | `/etc/nginx/conf.d/bgpcanary.conf` |
 | Certificate | `/etc/pki/tls/certs/bgpcanary.crt` and `/etc/pki/tls/private/bgpcanary.key` |
 | Service | `bgpcanary.service` (runs as user `bgpcanary`, behind nginx on 127.0.0.1:8080) |
+
+In the container image, everything bgpcanary keeps is in the data volume, `/var/lib/bgpcanary`; see
+[DOCKER.md](DOCKER.md#the-data-volume).

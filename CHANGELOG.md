@@ -6,6 +6,26 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-15
+
+### Added
+- **A container image**, `ghcr.io/gregsowell/bgpcanary`, for Docker and Podman on amd64 and arm64. See [docs/DOCKER.md](docs/DOCKER.md).
+  - Alpine Linux, about 100 MB. It runs as an unprivileged user with no Linux capabilities and works on a read-only filesystem. Everything it keeps is in one volume.
+  - On first start it creates the config file, with a random session key, and the initial admin account. The admin password goes to the container log.
+  - Before a new version first starts, it backs up the database inside the volume, keeping the newest 3 backups.
+  - Settings that need a restart restart the app inside the container, which keeps running.
+  - Examples for Docker Compose, Caddy and nginx, and how to move a server install into a container.
+  - Each release's image is built and tested by GitHub Actions on both architectures, with a signed build provenance.
+- `bgpcanary-admin backup FILE` makes a consistent copy of the database while bgpcanary runs, readable only by its owner. `backup -` writes it to standard output.
+
+### Changed
+- The client address used by the login limits comes from `X-Real-IP` only when the connection is from the same machine (the bundled nginx). Otherwise it comes from `X-Forwarded-For`, and only when that's sent by a trusted proxy. Nothing changes for server installs behind the bundled nginx.
+- If the login page is opened over plain HTTP, where the HTTPS-only sign-in cookie can't work, it now says so.
+- Settings pages show where the config file actually is.
+
+### Fixed
+- `bgpcanary-admin` run without sudo printed its "run as root" message on standard output instead of standard error.
+
 ## [1.2.3] - 2026-10-14
 
 ### Security
@@ -153,7 +173,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/gregsowell/bgpcanary/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/gregsowell/bgpcanary/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/gregsowell/bgpcanary/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/gregsowell/bgpcanary/compare/v1.2.0...v1.2.1

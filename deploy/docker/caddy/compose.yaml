@@ -1,0 +1,38 @@
+# bgpcanary behind Caddy, which gets and renews an HTTPS certificate by itself. Put this file and the Caddyfile
+# in a folder of their own, replace bgp.example.com in both with your host name, then:
+#
+#   docker compose up -d
+#   docker compose logs bgpcanary      # shows the initial admin password on the first start
+#
+# See docs/DOCKER.md.  Update:  docker compose pull && docker compose up -d
+services:
+  bgpcanary:
+    image: ${BGPCANARY_IMAGE:-ghcr.io/gregsowell/bgpcanary:latest}
+    container_name: bgpcanary
+    restart: unless-stopped
+    volumes:
+      - bgpcanary-data:/var/lib/bgpcanary
+    environment:
+      BGPCANARY_BASE_URL: "https://bgp.example.com"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  bgpcanary-data:
+  caddy-data:

@@ -227,7 +227,7 @@ chmod 640 "$ETC/config.toml"
 cat > /usr/bin/bgpcanary-admin <<'EOF'
 #!/bin/sh
 # runs the bgpcanary command line as the service user (runuser is part of every EL system; sudo may not be)
-[ "$(id -u)" = 0 ] || { echo "Run as root: sudo bgpcanary-admin $*"; exit 1; }
+[ "$(id -u)" = 0 ] || { echo "Run as root: sudo bgpcanary-admin $*" >&2; exit 1; }
 cd /opt/bgpcanary && exec runuser -u bgpcanary -- env BGPCANARY_CONFIG=/etc/bgpcanary/config.toml /opt/bgpcanary/venv/bin/python -m bgpcanary.cli "$@"
 EOF
 chmod 755 /usr/bin/bgpcanary-admin

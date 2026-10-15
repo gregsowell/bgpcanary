@@ -35,6 +35,6 @@
   </form>
 </div>
 {% if not first_run %}
-<p class="muted" style="font-size:12px">{% if from_db %}These values were saved here and override the <code>[monitor]</code> section of <code>/etc/bgpcanary/config.toml</code>.{% else %}These values currently come from <code>/etc/bgpcanary/config.toml</code>. Once you save here, the saved values take over.{% endif %} Detection thresholds, Route Views servers and storage settings stay in the config file.</p>
+<p class="muted" style="font-size:12px">{% if from_db %}These values were saved here and override the <code>[monitor]</code> section of <code>{{ config_path }}</code>.{% else %}These values currently come from <code>{{ config_path }}</code>. Once you save here, the saved values take over.{% endif %} Detection thresholds, Route Views servers and storage settings stay in the config file.</p>
 {% endif %}
 {% endblock %}

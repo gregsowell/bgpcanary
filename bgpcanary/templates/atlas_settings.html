@@ -107,6 +107,11 @@
   so the probe can run anywhere: this server, another Linux box, a Raspberry Pi, or a hardware probe. It needs a stable connection and little else
   (a few MB of RAM and roughly 5-10 kbit/s).</p>
 
+  {% if container and not probe.installed %}
+  <h3 style="font-size:14px;margin:16px 0 6px">On this server</h3>
+  <p class="muted" style="margin-top:0">bgpcanary is running in a container, which doesn't include a probe. A software probe can run on the Docker host
+  itself or on any other machine (see below); it doesn't need to be on the same machine as bgpcanary.</p>
+  {% else %}
   <h3 style="font-size:14px;margin:16px 0 6px">On this server</h3>
   {% if probe.installed %}
   <dl class="kv">
@@ -125,6 +130,7 @@ sudo vi /etc/ripe-atlas/config.txt                       # probe options (ports,
   <pre style="white-space:pre-wrap">sudo /opt/bgpcanary/deploy/install.sh --atlas-probe-only</pre>
   <p class="muted" style="font-size:12px">It prints the probe's public key when it finishes; reload this page and it shows here too. On a new server, add
   <code>--atlas-probe</code> to the normal install command to do both at once.</p>
+  {% endif %}
   {% endif %}
 
   {% if my_probes %}

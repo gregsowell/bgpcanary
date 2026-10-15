@@ -6,6 +6,9 @@
   <h1 style="text-align:center">{{ cfg.site_name }}</h1>
   <p class="muted">AS{{ cfg.asn }} · {{ cfg.prefixes|join(', ') }}</p>
   {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+  {% if need_https %}<div class="msg err">This page came over plain HTTP, so your browser won't keep the sign-in cookie and signing in
+    won't work. Open bgpcanary over HTTPS (behind a reverse proxy){% if container %}, or for a quick test start the container with
+    <code>BGPCANARY_INSECURE_COOKIES=1</code>{% endif %}.</div>{% endif %}
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="u">Username</label>

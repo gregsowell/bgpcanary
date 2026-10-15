@@ -21,7 +21,7 @@
         if (d.started && d.started !== since) { location.href = "/"; return; }
       }
     } catch (e) { /* still restarting */ }
-    if (n > 90) { document.getElementById("rs-msg").textContent = "It's taking longer than expected. Check 'sudo systemctl status bgpcanary' on the server."; return; }
+    if (n > 90) { document.getElementById("rs-msg").textContent = {{ ("It's taking longer than expected. Check the container's log ('docker logs bgpcanary')." if container else "It's taking longer than expected. Check 'sudo systemctl status bgpcanary' on the server.")|tojson }}; return; }
     setTimeout(tick, 1000);
   };
   setTimeout(tick, 1500);

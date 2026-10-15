@@ -2,7 +2,11 @@
 import argparse
 import asyncio
 import getpass
+import os
+import shutil
+import sqlite3
 import sys
+import tempfile
 import time
 
 from . import alerts, auth, config, db
@@ -16,6 +20,40 @@ def _password(prompt):
     if not line:
         sys.exit("no password given on standard input")
     return line.rstrip("\r\n")
+
+
+def _copy_db(conn, path):
+    dst = sqlite3.connect(path)
+    try:
+        conn.backup(dst)   # SQLite's online backup: consistent even while the service writes
+    finally:
+        dst.close()
+
+
+def backup(conn, db_path, out):
+    """Copy the database to a new file that only its owner can read (it holds password hashes and API keys), or
+    with '-' to standard output, e.g.  docker exec bgpcanary bgpcanary-admin backup - > bgpcanary.db"""
+    if out == "-":
+        if sys.stdout.isatty():
+            sys.exit("redirect the output to a file, e.g.  bgpcanary-admin backup - > bgpcanary.db")
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(db_path)), prefix=".backup-")
+        os.close(fd)
+        try:
+            _copy_db(conn, tmp)
+            with open(tmp, "rb") as f:
+                shutil.copyfileobj(f, sys.stdout.buffer)
+            sys.stdout.buffer.flush()
+        finally:
+            os.unlink(tmp)
+        return
+    try:
+        os.close(os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        sys.exit(f"{out} already exists")
+    except OSError as ex:
+        sys.exit(f"can't create {out}: {ex.strerror}")
+    _copy_db(conn, out)
+    print(f"database copied to {out} ({os.path.getsize(out) // 1024} KB)")
 
 
 def main():
@@ -33,6 +71,9 @@ def main():
     sub.add_parser("test-alert", help="send a test alert on all channels")
     sub.add_parser("version", help="print the installed bgpcanary version")
     sub.add_parser("ensure-admin", help="create the default 'admin' account if no users exist (prints its password)")
+    b = sub.add_parser("backup", help="write a consistent copy of the database to FILE, or - for standard output "
+                       "(safe while bgpcanary runs)")
+    b.add_argument("file")
     args = ap.parse_args()
 
     try:
@@ -72,6 +113,8 @@ def main():
         if pw:
             print("username: admin")
             print(f"password: {pw}")
+    elif args.cmd == "backup":
+        backup(conn, cfg.db_path, args.file)
     elif args.cmd == "test-alert":
         ev = {"id": None, "kind": "test", "severity": "info", "prefix": ", ".join(cfg.prefixes),
               "start_ts": time.time(), "end_ts": None, "title": "Test alert from bgpcanary CLI"}

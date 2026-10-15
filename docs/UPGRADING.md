@@ -16,6 +16,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`:
 
 ## Updating
 
+Running the container image? Use `docker compose pull && docker compose up -d`; see
+[DOCKER.md](DOCKER.md#updating). The rest of this page is about server installs.
+
 ```bash
 sudo bgpcanary-update
 ```
@@ -75,6 +78,9 @@ sudo bash /tmp/bgpcanary-1.2.2/deploy/update.sh --from /tmp/bgpcanary-1.2.2
   sudo sqlite3 /var/lib/bgpcanary/bgpcanary.db ".backup '/root/bgpcanary-$(date +%F).db'"
   ```
 
+  From 1.3.0 there's also `sudo bgpcanary-admin backup - > bgpcanary-$(date +%F).db`, which writes the copy to
+  standard output. Keep these files private: the database holds password hashes and API keys.
+
   Keep `/etc/bgpcanary/` too, because it contains the session key and initial settings.
 - To restore one:
 
@@ -91,6 +97,8 @@ sudo bash /tmp/bgpcanary-1.2.2/deploy/update.sh --from /tmp/bgpcanary-1.2.2
 1. On the old server, take a backup (above) and copy it plus `/etc/bgpcanary/config.toml` to the new one.
 2. Install bgpcanary on the new server with the same `--fqdn`.
 3. Stop the service, put the database and config in place (owner `bgpcanary`, config group `bgpcanary`), and start it again.
+
+To move into a container instead, see [DOCKER.md](DOCKER.md#moving-a-server-install-into-a-container).
 
 ## Coming from "bgpmon"
 

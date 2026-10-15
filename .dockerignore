@@ -1,0 +1,22 @@
+# The image only needs requirements.txt, bgpcanary/ and a few files from deploy/: keep everything else out of the
+# build context (and never send local databases, configs or vendored files built elsewhere).
+.git
+.github
+docs
+*.mp4
+*.mov
+*.tscproj
+*.trec
+**/__pycache__
+**/*.pyc
+bgpcanary/static/vendor
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/config.toml
+.venv
+venv
+.env
+.claude
+.vscode
+.idea

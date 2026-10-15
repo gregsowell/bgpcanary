@@ -29,11 +29,21 @@
 
 <div class="panel">
   <h2>How to update</h2>
+  {% if container %}
+  <p style="margin-top:0">This copy runs from the container image <code>{{ image }}</code>. To update, pull the new image and re-create the
+  container. With Docker Compose, in the folder with your <code>compose.yaml</code>:</p>
+  <pre>docker compose pull
+docker compose up -d</pre>
+  <p class="muted" style="font-size:13px">The data volume (database, settings and users) is kept, and the database is backed up inside it, in
+  <code>backups/</code>, before a new version first starts. To go back, run the previous version's tag (for example
+  <code>{{ image }}:{{ version }}</code>). See the <a href="https://github.com/{{ repo }}/blob/main/docs/DOCKER.md" target="_blank" rel="noopener">container guide</a>.</p>
+  {% else %}
   <p style="margin-top:0">Updates are installed on the server (the web app deliberately has no system privileges). Run:</p>
   <pre>sudo bgpcanary-update</pre>
   <p class="muted" style="font-size:13px">It backs up the database and settings first, downloads the latest release, installs it (your configuration, data,
   users and certificate are kept), and checks that the service comes back. If anything goes wrong, <code>sudo bgpcanary-update --rollback</code>
   returns to the previous version and database. <code>sudo bgpcanary-update --check</code> only reports whether a newer version exists.</p>
+  {% endif %}
 </div>
 
 {% if is_admin %}

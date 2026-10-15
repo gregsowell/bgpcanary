@@ -9,6 +9,9 @@ systemctl status bgpcanary nginx
 curl -s http://127.0.0.1:8080/healthz      # {"ok": true, "version": ...} when the app is up
 ```
 
+In a container, the log is `docker logs bgpcanary` (`-f` to follow), and `docker ps` shows whether its health
+check passes.
+
 ## The web page doesn't load
 
 - **"502 Bad Gateway":** nginx is up but the app isn't. Check `systemctl status bgpcanary` and the log.
@@ -45,6 +48,34 @@ working even while someone else is guessing at it. To clear every limit at once:
 sudo systemctl restart bgpcanary
 ```
 
+In a container, `docker restart bgpcanary` does the same. If *everyone* is refused at once behind a reverse
+proxy, bgpcanary is probably counting every browser as the proxy's address: the proxy isn't sending
+X-Forwarded-For, or its address isn't covered by `BGPCANARY_TRUSTED_PROXIES` (see
+[DOCKER.md](DOCKER.md#which-addresses-may-send-these-headers)).
+
+## Signing in does nothing, or the login page says it "came over plain HTTP"
+
+bgpcanary's sign-in cookies are HTTPS-only, so a browser on plain `http://` won't keep them. The login page
+says so when that happens. Open the site over HTTPS, through a reverse proxy in front of the container (see
+[DOCKER.md](DOCKER.md#https-a-reverse-proxy-in-front)). For a quick test on a trusted network, start the container
+with `BGPCANARY_INSECURE_COOKIES=1` instead. `http://localhost` works in most browsers either way, because they
+keep HTTPS-only cookies there.
+
+If the page appears over HTTPS and still says this, the proxy isn't sending `X-Forwarded-Proto: https`, or its
+address isn't trusted (see the section above).
+
+## The container stops: "... isn't writable by this container's user"
+
+The data directory you mounted belongs to someone else. The app runs as uid 10001; give it the directory:
+
+```bash
+sudo chown -R 10001:10001 ./data              # Docker, or Podman as root
+podman unshare chown -R 10001:10001 ./data    # rootless Podman
+```
+
+Or use a named volume (`-v bgpcanary-data:/var/lib/bgpcanary`), which needs nothing. On SELinux systems, add `:Z`
+to a directory mount: `-v ./data:/var/lib/bgpcanary:Z`.
+
 ## "Refused: this request didn't come from this site's own pages"
 
 Changes (form submissions) are only accepted from bgpcanary's own address. If you reach it through another
@@ -57,6 +88,9 @@ base_url = "https://bgp.example.com"
 ```
 
 Then `sudo systemctl restart bgpcanary`.
+
+In front of the container, the usual cause is a proxy that doesn't pass on the browser's Host header (nginx needs
+`proxy_set_header Host $http_host;`). Fix the proxy, or set the Site URL as above.
 
 ## No data / "RIS Live disconnected"
 

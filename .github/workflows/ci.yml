@@ -16,7 +16,7 @@ jobs:
       - name: Python compiles and imports
         run: |
           python -m compileall -q bgpcanary
-          python -c "import bgpcanary.config, bgpcanary.db, bgpcanary.engine, bgpcanary.paths, bgpcanary.updates"
+          python -c "import bgpcanary.config, bgpcanary.db, bgpcanary.engine, bgpcanary.paths, bgpcanary.updates, bgpcanary.container"
       - name: Templates compile
         run: |
           python - <<'EOF'
@@ -28,6 +28,47 @@ jobs:
           print("templates ok")
           EOF
       - name: Shell scripts parse
-        run: for f in deploy/*.sh; do bash -n "$f"; done
+        run: for f in deploy/*.sh deploy/docker/*.sh deploy/docker/bgpcanary-admin; do bash -n "$f"; done
       - name: Version is valid
         run: grep -Eq '^__version__ = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?"$' bgpcanary/__init__.py
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+      - name: Build the image
+        run: docker build -t bgpcanary:ci .
+      - name: Smoke test
+        run: bash deploy/docker/smoke-test.sh bgpcanary:ci
+      - name: The Compose example, with the backup and restore commands from docs/DOCKER.md
+        env:
+          BGPCANARY_IMAGE: bgpcanary:ci
+        run: |
+          dc() { docker compose -f deploy/docker/compose.yaml -p bgpcanary-ci "$@"; }
+          up() { for i in $(seq 60); do curl -fsS http://127.0.0.1:8080/healthz && return 0; sleep 2; done; return 1; }
+          dc up -d
+          up
+          umask 077
+          docker exec bgpcanary bgpcanary-admin backup - > /tmp/backup.db
+          python3 -c "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); assert c.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; assert c.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 1" /tmp/backup.db
+          dc stop bgpcanary
+          dc run --rm -T bgpcanary sh -c 'umask 077 && rm -f /var/lib/bgpcanary/bgpcanary.db-wal /var/lib/bgpcanary/bgpcanary.db-shm && cat > /var/lib/bgpcanary/bgpcanary.db' < /tmp/backup.db
+          dc up -d
+          up
+          dc logs bgpcanary
+          dc down -v
+      - name: The Caddy example serves it over HTTPS
+        env:
+          BGPCANARY_IMAGE: bgpcanary:ci
+        run: |
+          mkdir /tmp/caddy && cp deploy/docker/caddy/compose.yaml deploy/docker/caddy/Caddyfile /tmp/caddy/
+          sed -i 's/reverse_proxy bgpcanary:8080/tls internal\n\treverse_proxy bgpcanary:8080/' /tmp/caddy/Caddyfile   # (no public DNS here)
+          cd /tmp/caddy && docker compose -p bgpcanary-caddy up -d
+          for i in $(seq 60); do
+            curl -fsSk --resolve bgp.example.com:443:127.0.0.1 -o login.html https://bgp.example.com/login && break; sleep 2
+          done
+          docker compose -p bgpcanary-caddy logs
+          grep -q 'action="/login"' login.html
+          if grep -q "came over plain HTTP" login.html; then echo "::error::the app didn't see HTTPS through Caddy"; exit 1; fi
+          curl -fsSkI --resolve bgp.example.com:443:127.0.0.1 https://bgp.example.com/login | grep -i '^strict-transport-security'
+          docker compose -p bgpcanary-caddy down -v

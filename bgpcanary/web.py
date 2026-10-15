@@ -1,5 +1,6 @@
 """FastAPI web UI."""
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadData, URLSafeTimedSerializer
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import REPO, __version__, alerts, atlas, auth, config, db, evidence, paths, registry, ripe, transit, tree, updates
@@ -32,6 +34,9 @@ except config.ConfigError as ex:   # shown by `journalctl -u bgpcanary` instead 
 svc = Service(cfg)
 throttle = auth.Throttle()
 templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
+# The container image (BGPCANARY_CONTAINER=1) has no bundled nginx in front and no systemd: there the app sends
+# nginx's security headers itself, and the pages show docker commands instead of server ones.
+CONTAINER = os.environ.get("BGPCANARY_CONTAINER") == "1"
 
 
 def fmt_dur(s):
@@ -51,6 +56,7 @@ def fmt_dur(s):
 templates.env.filters["dur"] = fmt_dur
 templates.env.filters["fromjson"] = lambda s: json.loads(s) if s else {}
 templates.env.filters["mask_urls"] = alerts.mask_urls   # older alert-log rows may still hold a webhook URL
+templates.env.globals.update(container=CONTAINER, config_path=config.DEFAULT_PATH, image="ghcr.io/" + REPO.lower())
 
 
 @asynccontextmanager
@@ -65,6 +71,42 @@ app.add_middleware(SessionMiddleware, secret_key=cfg.secret_key, session_cookie=
                    max_age=7 * 86400, same_site="strict",
                    https_only=os.environ.get("BGPCANARY_INSECURE_COOKIES") != "1")
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
+
+# The headers the bundled nginx adds (deploy/nginx-bgpcanary.conf: keep the two the same). The app sends them itself
+# only in the container image; behind that nginx they'd be sent twice.
+SECURITY_HEADERS = [
+    ("X-Frame-Options", "DENY"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "same-origin"),
+    ("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' "
+     "'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; "
+     "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"),
+]
+
+
+class SecurityHeaders:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                h = MutableHeaders(scope=message)
+                for k, v in SECURITY_HEADERS:
+                    h.setdefault(k, v)
+                if scope.get("scheme") == "https":   # (as the proxy in front reported it)
+                    h.setdefault("Strict-Transport-Security", "max-age=31536000")
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+if CONTAINER:
+    app.add_middleware(SecurityHeaders)
 
 
 def _origin(url):
@@ -203,14 +245,38 @@ def admin(request: Request):
     return u
 
 
+def client_ip(request):
+    """The browser's address (login limits, session list, log lines). uvicorn has already taken it from
+    X-Forwarded-For if the connection came from a proxy it trusts (--forwarded-allow-ips; in the container,
+    BGPCANARY_TRUSTED_PROXIES). X-Real-IP counts only from a proxy on this machine (the bundled nginx), so a client
+    that can reach the app directly can't choose its own address."""
+    host = request.client.host if request.client else ""
+    real = request.headers.get("x-real-ip")
+    if real:
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return real
+        except ValueError:
+            pass
+    return host
+
+
+def cookies_need_https(request):
+    """True if this page came over plain HTTP from a non-local address while the sign-in cookies are HTTPS-only:
+    the browser won't keep them, so signing in would silently fail. The login page says so."""
+    if os.environ.get("BGPCANARY_INSECURE_COOKIES") == "1" or request.url.scheme == "https":
+        return False
+    host = (request.url.hostname or "").lower()
+    return host not in ("localhost", "127.0.0.1", "::1") and not host.endswith(".localhost")
+
+
 def start_session(request, username):
     """A new server-side session for this browser (a fresh id each time: nothing carries over from before)."""
     row = auth.get_user(svc.aconn, username)
     request.session.clear()
     request.session["user"] = username
     request.session["v"] = row["session_ver"] if row else 0
-    request.session["sid"] = auth.new_session(svc.aconn, username, request.headers.get("x-real-ip") or
-                                              (request.client.host if request.client else ""),
+    request.session["sid"] = auth.new_session(svc.aconn, username, client_ip(request),
                                               request.headers.get("user-agent", ""))
     return row
 
@@ -246,7 +312,7 @@ def render(request, name, **ctx):
 # ---------------------------------------------------------------------- auth
 @app.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request, next: str = "/"):
-    return render(request, "login.html", next=next, error=None)
+    return render(request, "login.html", next=next, error=None, need_https=cookies_need_https(request))
 
 
 _login_slots = asyncio.Semaphore(4)   # password hashing is deliberately expensive: a few at a time
@@ -289,7 +355,7 @@ def login_refusal(request, message, status):
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("/")):
     global _login_waiting
-    ip = request.headers.get("x-real-ip") or request.client.host
+    ip = client_ip(request)
     if _login_waiting >= LOGIN_QUEUE_MAX:
         return login_refusal(request, "The server is busy. Try again in a moment.", 503)
     device = known_device(request, username)
@@ -310,7 +376,8 @@ async def login(request: Request, username: str = Form(...), password: str = For
     if not ok:
         log.warning("failed login for %r from %s", username[:64], ip)
         await asyncio.sleep(1)
-        return render(request, "login.html", next=next, error="Invalid username or password.")
+        return render(request, "login.html", next=next, error="Invalid username or password.",
+                      need_https=cookies_need_https(request))
     throttle.success(ip, username, device)
     row = start_session(request, username)
     if not next.startswith("/") or next.startswith("//"):
@@ -1132,9 +1199,15 @@ async def about_save(request: Request, action: str = Form(""), enabled: str = Fo
     return RedirectResponse(f"/settings/about?msg={quote(msg)}", status_code=303)
 
 
+restart_requested = False   # (read by bgpcanary.container, which then starts the app again in place)
+
+
 def _restart_soon(delay=1.0):
-    """Exit gracefully; systemd (Restart=always) starts the service again with the new settings."""
+    """Exit gracefully; systemd (Restart=always) starts the service again with the new settings (in the container,
+    bgpcanary.container does, in the same process)."""
     import signal
+    global restart_requested
+    restart_requested = True
     asyncio.get_running_loop().call_later(delay, os.kill, os.getpid(), signal.SIGTERM)
 
 

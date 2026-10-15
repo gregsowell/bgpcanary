@@ -145,5 +145,5 @@
   {% if tf_last %}<p class="muted" style="margin-bottom:0">Last check <time data-ts="{{ tf_last }}" data-sec="1"></time></p>{% endif %}
   {% endif %}
 </div>
-<p class="muted" style="font-size:12px">Only the database path, listen address and session key are set in <code>/etc/bgpcanary/config.toml</code>. Everything else is managed from this page.</p>
+<p class="muted" style="font-size:12px">Only the database path, listen address and session key are set in <code>{{ config_path }}</code>. Everything else is managed from this page.</p>
 {% endblock %}

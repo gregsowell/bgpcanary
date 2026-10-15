@@ -1,5 +1,8 @@
 # Installing bgpcanary
 
+This page covers installing on a server. To run bgpcanary with Docker or Podman instead (on amd64 or arm64),
+see [DOCKER.md](DOCKER.md).
+
 ## Requirements
 
 - **Operating system:** Rocky Linux, AlmaLinux or Red Hat Enterprise Linux **9 or 10**, x86-64. A fresh minimal install is ideal; bgpcanary brings its own nginx configuration.

@@ -1,0 +1,35 @@
+# bgpcanary with Docker Compose. Put this file in a folder of its own, then:
+#
+#   docker compose up -d
+#   docker compose logs bgpcanary      # shows the initial admin password on the first start
+#
+# bgpcanary then listens on port 8080 of this host's loopback address, for a reverse proxy on this host that
+# adds HTTPS. Other setups (a proxy in another container, trying it out over plain HTTP) are in docs/DOCKER.md.
+# Update:  docker compose pull && docker compose up -d
+services:
+  bgpcanary:
+    image: ${BGPCANARY_IMAGE:-ghcr.io/gregsowell/bgpcanary:latest}   # or a fixed version, e.g. ghcr.io/gregsowell/bgpcanary:1.3.0
+    container_name: bgpcanary
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - bgpcanary-data:/var/lib/bgpcanary   # database, config, backups: everything to keep
+    environment:
+      # The address people use, e.g. "https://bgp.example.com", for links in alerts. Read on the first start
+      # only; it can be changed later under Settings > Alerts.
+      BGPCANARY_BASE_URL: ""
+      # Only to try it over plain http://<host>:8080 without a proxy (then also publish "8080:8080" above):
+      # BGPCANARY_INSECURE_COOKIES: "1"
+    # hardening: the app only writes to its volume and /tmp, and needs no privileges
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+volumes:
+  bgpcanary-data:

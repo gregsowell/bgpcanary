@@ -3,7 +3,7 @@
 {% block content %}
 <h1><a href="/settings" style="color:var(--muted)">Settings</a> / Alert channels</h1>
 {% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
-<p class="muted">{% if from_db %}These settings were saved here and override the <code>[alerts]</code> section of <code>/etc/bgpcanary/config.toml</code>.{% else %}These values currently come from <code>/etc/bgpcanary/config.toml</code>. Once you save anything here, the saved values take over. Changes apply immediately, with no restart needed.{% endif %}</p>
+<p class="muted">{% if from_db %}These settings were saved here and override the <code>[alerts]</code> section of <code>{{ config_path }}</code>.{% else %}These values currently come from <code>{{ config_path }}</code>. Once you save anything here, the saved values take over. Changes apply immediately, with no restart needed.{% endif %}</p>
 
 <div class="panel">
   <h2>General</h2>

@@ -6,7 +6,7 @@ see [DOCKER.md](DOCKER.md).
 ## Requirements
 
 - **Operating system:** Rocky Linux, AlmaLinux or Red Hat Enterprise Linux **9 or 10**, x86-64. A fresh minimal install is ideal; bgpcanary brings its own nginx configuration.
-- **Size:** 2 vCPU, 2 GB RAM and 20 GB disk is plenty for a few prefixes. The database grows by roughly 0.5–1 GB per prefix per year, and the installer keeps the last three backups in `/var/backups/bgpcanary`.
+- **Size:** 2 vCPU, 2 GB RAM and 20 GB disk is plenty for a few prefixes. The database grows by roughly 0.1–0.3 GB per prefix per year, plus RIPE Atlas results if you use Atlas. Updates keep the last three backups in `/var/backups/bgpcanary`.
 - **Outbound network access:**
 
   | To | Port | For |

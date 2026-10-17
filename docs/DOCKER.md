@@ -189,7 +189,8 @@ All are optional. Everything else is set in the web UI, as on a server install.
 | `backups/before-<version>-<date>.db` | a copy taken before each new version first starts; the newest 3 are kept |
 | `initial-admin-password` | the generated admin password, until it's changed |
 
-Plan on roughly 0.5–1 GB of disk per prefix per year, plus the backups.
+Plan on roughly 0.1–0.3 GB of disk per prefix per year, plus RIPE Atlas results if you use Atlas, plus the
+backups.
 
 **A host directory instead of a named volume** has to be writable by the container's user, uid 10001:
 
@@ -235,7 +236,9 @@ To choose when you move to new features, use a tag like `1.3` (bug fixes only) o
 
 Run the previous version's image, e.g. `image: ghcr.io/gregsowell/bgpcanary:1.3.0` in compose.yaml, then
 `docker compose up -d`. Database changes are only ever additive, so an older version works with a newer
-database.
+database. The exception is the upstream chains in the visibility history: since 1.3.2 they're stored only when
+they change, so 1.3.1 and earlier show the upstream chains chart and the event pages' "who carried" table mostly
+empty. Restore the backup taken before the update to get them back.
 
 If you'd rather have the database exactly as it was before the update, restore the backup taken then. Anything
 recorded since that backup is lost, so keep a copy of the current database first ([Backups](#backups)).

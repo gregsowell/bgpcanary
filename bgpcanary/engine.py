@@ -49,6 +49,7 @@ class PrefixMon:
         self.bucket_min = None
         self.bucket_updates = 0
         self.bucket_withdrawals = 0
+        self.stored = None         # (ts, chains, upstreams) of the last bucket written (see Engine.tick)
         self.last_update = 0.0
 
     def add_sample(self, ts, v):
@@ -727,11 +728,17 @@ class Engine:
             for p, m in self.mons.items():
                 v = self.visible(p)
                 chains, ups, nb = self._rib_summary(p)   # nb: neighbour -> RIS peers via it
+                # The chains / upstreams JSON (6 KB for a prefix seen through hundreds of paths) is stored only when
+                # it changes: NULL means "the same as the bucket before" (db.fill_mix fills it in). It's stored anyway
+                # in the first bucket of each UTC day and after any break, so it's never more than a day back.
+                same = m.stored and m.stored[0] == t - self.B and t // 86400 == m.stored[0] // 86400
                 self.conn.execute(
                     "INSERT OR REPLACE INTO buckets(prefix,ts,visible,baseline,min_visible,chains,upstreams,updates,withdrawals)"
                     " VALUES(?,?,?,?,?,?,?,?,?)",
                     (p, t, v, m.current_baseline(), m.bucket_min if m.bucket_min is not None else v,
-                     chains, ups, m.bucket_updates, m.bucket_withdrawals))
+                     None if same and chains == m.stored[1] else chains, None if same and ups == m.stored[2] else ups,
+                     m.bucket_updates, m.bucket_withdrawals))
+                m.stored = (t, chains, ups)
                 m.bucket_min = v
                 m.bucket_updates = m.bucket_withdrawals = 0
                 # peers coming and going isn't an upstream shift; they have checks of their own

@@ -27,8 +27,8 @@ def _rounds(rows, gap=120):
 
 def _upstream_mix(conn, prefix, ev, s, e):
     """Peers per upstream before the event, at its most-changed bucket, and after it ended."""
-    rows = conn.execute("SELECT ts, visible, upstreams FROM buckets WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts",
-                        (prefix, s, e)).fetchall()
+    rows = db.fill_mix(conn, conn.execute("SELECT ts, visible, upstreams FROM buckets WHERE prefix=? AND ts>=? AND ts<=? "
+                                          "ORDER BY ts", (prefix, s, e)), prefix)
     if not rows:
         return None
     start, end = ev["start_ts"], ev["end_ts"]

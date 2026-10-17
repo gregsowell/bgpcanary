@@ -462,6 +462,14 @@ def group_chains(d):
     return out
 
 
+def grouped_chains(cache, s):
+    """group_chains of a bucket's chains JSON, worked out once per request for each different one: buckets keep the
+    same chains (the same string, see db.fill_mix) until they change. The result is shared: don't change it."""
+    if s not in cache:
+        cache[s] = group_chains(json.loads(s or "{}"))
+    return cache[s]
+
+
 def chain_label(c, nm):
     if c.startswith("peers:"):
         return "Private peers" if c[6:] == peering.PRIVATE else f"Peers at {c[6:]}"
@@ -582,10 +590,10 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
     end = end or time.time()
     start = start or end - 86400
     conn = rconn()
-    rows = conn.execute("SELECT ts,visible,min_visible,baseline,chains,updates,withdrawals FROM buckets "
-                        "WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts", (prefix, start, end)).fetchall()
+    rows = db.fill_mix(conn, conn.execute("SELECT ts,visible,min_visible,baseline,chains,updates,withdrawals FROM buckets "
+                                          "WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts", (prefix, start, end)), prefix)
     step = max(1, len(rows) // 1500)
-    pts = []
+    pts, grouped = [], {}
     for i in range(0, len(rows), step):
         grp = rows[i:i + step]
         low = min(grp, key=lambda r: r["min_visible"] if r["min_visible"] is not None else r["visible"])
@@ -595,7 +603,7 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
                     "baseline": grp[-1]["baseline"],
                     "updates": sum(r["updates"] or 0 for r in grp),
                     "withdrawals": sum(r["withdrawals"] or 0 for r in grp),
-                    "chains": group_chains(json.loads(low["chains"] or "{}"))})
+                    "chains": grouped_chains(grouped, low["chains"])})
     # insert null points across data gaps so charts show a break instead of a flat line
     step_s = step * cfg.bucket_seconds
     gapped = []
@@ -638,8 +646,9 @@ async def api_series_multi(request: Request, prefixes: str, start: float = None,
     start = start or end - 86400
     conn = rconn()
     q = ",".join("?" * len(want))
-    rows = conn.execute(f"SELECT prefix,ts,visible,min_visible,baseline,chains,updates,withdrawals FROM buckets "
-                        f"WHERE prefix IN ({q}) AND ts>=? AND ts<=? ORDER BY ts", (*want, start, end)).fetchall()
+    rows = db.fill_mix(conn, conn.execute(f"SELECT prefix,ts,visible,min_visible,baseline,chains,updates,withdrawals "
+                                          f"FROM buckets WHERE prefix IN ({q}) AND ts>=? AND ts<=? ORDER BY ts",
+                                          (*want, start, end)))
     # the same time slots for every prefix: about 1500 across the window, at least one bucket each
     slot_s = max(cfg.bucket_seconds, (end - start) / 1500)
     nslots = int((end - start) // slot_s) + 1
@@ -660,9 +669,9 @@ async def api_series_multi(request: Request, prefixes: str, start: float = None,
             lowest_row[k] = r
         upd[i] = (upd[i] or 0) + (r["updates"] or 0)
         wd[i] = (wd[i] or 0) + (r["withdrawals"] or 0)
-    chains = [dict() for _ in range(nslots)]
+    chains, grouped = [dict() for _ in range(nslots)], {}
     for (p, i), r in lowest_row.items():
-        for c, n in group_chains(json.loads(r["chains"] or "{}")).items():
+        for c, n in grouped_chains(grouped, r["chains"]).items():
             chains[i][c] = chains[i].get(c, 0) + n
     has = [upd[i] is not None for i in range(nslots)]   # slots with any data; the rest are gaps
     # the prefixes that dipped lowest get their own line; any beyond MAX_STRANDS share a "lowest of the others" line

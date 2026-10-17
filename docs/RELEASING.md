@@ -81,6 +81,7 @@ can run `sudo bgpcanary-update --rollback` in the meantime, or run the previous 
 ## Rules that keep upgrades painless
 
 - **Database:** only ever *add* tables or columns, and add the change to `init()` in `bgpcanary/db.py` so it runs automatically at startup. Never require users to run SQL.
+  - A data migration that could take more than a few seconds on a big database runs in the background after startup instead, a batch at a time, picking up where it left off after a restart, with the pages correct at every step (see `Service._compact_buckets`). `init()` runs before the web server answers, and both the updater and the container health check give a new version only a minute.
 - **Settings:** new settings need sensible defaults. If you rename or remove one, keep reading the old name for at least one minor version.
 - **Installer:** `deploy/install.sh` must stay safe to re-run on an existing install. It's what every update runs.
 

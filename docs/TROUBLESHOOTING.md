@@ -157,8 +157,29 @@ someone may be leaking or hijacking your route.
 
 ## The database is getting big
 
-Raw BGP updates are the bulk of the database. Lower **Keep raw BGP updates for (days)** under Settings ›
-Detection & data sources. Visibility history and events are kept regardless.
+Since 1.3.2 the visibility history takes about 0.1–0.2 GB per prefix per year, even for a prefix that RIS peers
+reach through hundreds of different paths. Before that, every 30-second bucket stored the upstream chains in full
+again, which reached several GB per prefix per year for such prefixes.
+
+After updating to 1.3.2, bgpcanary compacts the history it already has, in the background (a few minutes for a big
+database). Then it rewrites the database file once to give the space back, which pauses it for a few seconds. The
+log shows both steps:
+
+```bash
+sudo journalctl -u bgpcanary | grep -i compact
+docker logs bgpcanary 2>&1 | grep -i compact       # in a container
+```
+
+- **"there isn't room to compact it now":** rewriting the file needs free disk space of about twice the size of
+  the compacted database, part of it in the temporary directory (`/tmp` in a container, which is in memory). Free the
+  space the message names, then restart bgpcanary (`sudo systemctl restart bgpcanary`, or `docker restart
+  bgpcanary`). It tries again at every start until it's done.
+- **The backups taken before the update** keep their old size. Once you're happy with the new version, delete the
+  older ones from `/var/backups/bgpcanary` (or `backups/` in the container's volume).
+
+The rest of the database is mostly raw BGP updates and, if you use it, RIPE Atlas results. To keep raw updates
+for less time, lower **Keep raw BGP updates for (days)** under Settings › Detection & data sources. Visibility
+history and events are kept regardless.
 
 ## Something else
 

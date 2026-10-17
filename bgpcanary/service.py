@@ -3,6 +3,8 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
+import shutil
 import time
 
 from . import alerts, atlas, config, db, paths, registry, ripe, routeviews, transit, tree, updates
@@ -38,6 +40,7 @@ class Service:
         self.registry = registry.RegistryWatch(self)
         self.atlas = atlas.Atlas(self)   # optional RIPE Atlas data-plane checks (idle until an API key is set)
         self.pending_backfill = []   # prefixes added since the database was created
+        self.replays = 0             # history loads / gap fills running (they rewrite buckets; see _compact_buckets)
         self.last_burst = 0          # last event-triggered Route Views burst (merge simultaneous events)
         # Route Views telnet budget per collector per UTC day (their rate limiter blocks an IP for the day
         # once it exceeds 100 connections / 500 KB down / 100 KB up per collector)
@@ -90,6 +93,7 @@ class Service:
         self.tasks.append(asyncio.create_task(self._tick_loop()))
         self.tasks.append(asyncio.create_task(self._reconcile_loop()))
         self.tasks.append(asyncio.create_task(self._gap_loop()))
+        self.tasks.append(asyncio.create_task(self._compact_buckets()))
         self.tasks.append(asyncio.create_task(self._transit_loop()))
         self.tasks.append(asyncio.create_task(self._registry_loop()))
         self.tasks.append(asyncio.create_task(self._snapshot_reconcile_loop()))
@@ -176,7 +180,13 @@ class Service:
             s += 7 * 86400
         log.info("%s: %d chunk(s) from %s", label, len(spans), time.strftime("%Y-%m-%d %H:%M", time.gmtime(start)))
         avail, t0 = start, time.time()
+        self.replays += 1
         try:
+            # buckets this rewrites (e.g. the live engine's while RIS Live was cut off) may be what later ones rely
+            # on for their chains / upstreams: store those in the later ones first
+            for p in eng.mons:
+                db.pin_mix(eng.conn, p, start, end + self.cfg.bucket_seconds)
+            eng.conn.commit()
             for i, (s, e) in enumerate(spans):
                 if show:
                     self.engine.status["history"] = {"for": show, "done": i, "total": len(spans), "started": t0,
@@ -190,6 +200,7 @@ class Service:
                 avail = ripe_ts(d["query_endtime"])
                 log.info("%s chunk %d/%d: %d events", label, i + 1, len(spans), len(d.get("events", [])))
         finally:
+            self.replays -= 1
             if show:
                 self.engine.status["history"] = None
         return avail
@@ -319,6 +330,68 @@ class Service:
             log.info("stored %d initial RIB rows at %s", len(rows), time.strftime("%Y-%m-%d %H:%M", time.gmtime(start)))
         db.kv_set(self.conn, "init_rows_v2", True)
         self.conn.commit()
+
+    async def _compact_buckets(self):
+        """One-time migration: buckets stored before 1.3.2 keep their chains / upstreams JSON in every row, about 6 KB
+        each for a prefix seen through hundreds of paths. Drop it wherever it's the same as the bucket before, as
+        Engine.tick now does, a thousand buckets at a time in the background (the pages show the same at every step),
+        then give the space back to the disk once. Carries on where it was after a restart. It can't run in
+        db.init: on a big database it takes minutes, and the updater gives a new version a minute to answer."""
+        at = db.kv_get(self.aconn, db.COMPACT_KV)
+        if at is True:
+            return
+        await asyncio.sleep(120)   # after the startup work
+        try:
+            if at != "vacuum":
+                at, n, t0 = tuple(at or ("", 0)), 0, time.time()
+                log.info("compacting stored buckets: their chains / upstreams are now kept only where they change")
+                while at:
+                    while self.replays:   # a history load or gap fill is rewriting buckets: wait for it
+                        await asyncio.sleep(10)
+                    at, k = await asyncio.to_thread(db.compact_mix, self.aconn, self.cfg.bucket_seconds, at)
+                    n += k
+                    db.kv_set(self.aconn, db.COMPACT_KV, list(at) if at else "vacuum")
+                    self.aconn.commit()
+                    await asyncio.sleep(0.2)   # (live monitoring shares the connection)
+                log.info("compacted %d stored buckets in %.0f s", n, time.time() - t0)
+            if await self._vacuum():
+                db.kv_set(self.aconn, db.COMPACT_KV, True)
+                self.aconn.commit()
+        except Exception:
+            log.exception("bucket compaction failed (it carries on at the next start)")
+
+    async def _vacuum(self):
+        """Give the space the compaction freed inside the database file back to the disk: VACUUM rewrites the file,
+        which pauses bgpcanary for a few seconds. Skipped when it would free less than a quarter of the file (the
+        space is reused as new data comes in). Returns False when it's worth doing but there isn't room for the
+        copies it makes (it's tried again at the next start)."""
+        c, here = self.aconn, os.path.dirname(os.path.abspath(self.cfg.db_path))
+        page = c.execute("PRAGMA page_size").fetchone()[0]
+        size = c.execute("PRAGMA page_count").fetchone()[0] * page
+        free = c.execute("PRAGMA freelist_count").fetchone()[0] * page
+        if free < size / 4 or free < 50e6:
+            return True
+        # VACUUM writes the data (size - free) to a temporary file in SQLite's temp directory, then through the WAL
+        # next to the database
+        tmp = next((d for d in (os.environ.get("SQLITE_TMPDIR"), os.environ.get("TMPDIR"), "/var/tmp", "/usr/tmp", "/tmp")
+                    if d and os.path.isdir(d) and os.access(d, os.W_OK | os.X_OK)), here)
+        need = {}   # filesystem -> (a directory on it, bytes needed there)
+        for d in (here, tmp):
+            d0, n = need.get(os.stat(d).st_dev, (d, 100e6))
+            need[os.stat(d).st_dev] = (d0, n + size - free)
+        short = [(d, n) for d, n in need.values() if shutil.disk_usage(d).free < n]
+        if short:
+            log.warning("the database file has %.0f MB of free space inside it, but there isn't room to compact it "
+                        "now: that needs %s. Free some disk space; it's tried again at the next start.", free / 1e6,
+                        ", ".join(f"{n / 1e6:.0f} MB free in {d}" for d, n in short))
+            return False
+        log.info("compacting the database file (%.0f MB, %.0f MB of it free space); bgpcanary pauses meanwhile",
+                 size / 1e6, free / 1e6)
+        t0 = time.time()
+        await asyncio.to_thread(db.vacuum, c)
+        log.info("database file compacted to %.0f MB in %.0f s", os.path.getsize(self.cfg.db_path) / 1e6,
+                 time.time() - t0)
+        return True
 
     def _add_gap(self, s, e):
         gaps = db.kv_get(self.aconn, "gaps", [])
@@ -686,8 +759,8 @@ class Service:
                     for e in list(table.values()):
                         if e.path:
                             want.update(e.path)
-                for r in self.aconn.execute("SELECT chains FROM buckets ORDER BY ts DESC LIMIT 1"):
-                    for ch in json.loads(r["chains"] or "{}"):
+                for p in self.cfg.prefixes:   # each prefix's newest stored chains (through the index: no table scan)
+                    for ch in json.loads(db.mix_at(self.aconn, p, time.time()) or "{}"):
                         want.update(int(x) for x in ch.split())
                 # ASNs near the origin (upstreams/transit) first; they are the ones shown in charts
                 near = set()

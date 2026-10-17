@@ -6,6 +6,13 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+- **The visibility history took far more disk space than it should.** Every 30-second bucket stored the prefix's upstream chains and upstream counts in full again, though they change in only about 1 bucket in 100. For a prefix that RIS peers reach through hundreds of different paths, that came to about 6 KB per bucket: 8–9 GB per prefix per year, where the docs said 0.5–1 GB. They're now stored only when they change (and once a day), and the charts and event pages show exactly what they did. For two such prefixes, 90 days of history now takes 0.1 GB instead of 4.3 GB, and the dashboard's charts load 4 to 14 times faster: 0.2 s instead of 1 s for the last 24 hours, and 5 s instead of a minute for both prefixes over 90 days.
+  - History stored by older versions is compacted once, in the background, after the update: a few minutes for a big database. Then the database file is rewritten to give the space back, which pauses bgpcanary for a few seconds. That needs free disk space of about twice the compacted database; without it, the log says so and it's tried again at every start. See [UPGRADING.md](docs/UPGRADING.md#updating-to-132).
+  - An older version still runs on the compacted database, but shows the upstream chains chart and the event pages' "who carried" table mostly empty. `sudo bgpcanary-update --rollback` restores the database from before the update.
+- Looking up AS names for the charts read the whole visibility history every 5 minutes.
+- The docs' disk figures: plan on roughly 0.1–0.3 GB per prefix per year.
+
 ## [1.3.1] - 2026-10-16
 
 ### Added

@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS buckets (
     visible INTEGER NOT NULL,
     baseline REAL,
     min_visible INTEGER,
-    chains TEXT,                   -- json {"64510 64502 64501": n, ...}  (transit chain -> count)
-    upstreams TEXT,                -- json {"64501": n}
+    chains TEXT,                   -- json {"64510 64502 64501": n, ...}  (transit chain -> count), NULL = unchanged
+    upstreams TEXT,                -- json {"64501": n}, NULL = unchanged (the same as the bucket before: see MIX)
     updates INTEGER DEFAULT 0,
     withdrawals INTEGER DEFAULT 0,
     PRIMARY KEY (prefix, ts)
@@ -195,6 +195,10 @@ def init(path: str) -> None:
         masked = mask_urls(r["error"])
         if masked != r["error"]:
             conn.execute("UPDATE alert_log SET error=? WHERE id=?", (masked, r["id"]))
+    # Buckets stored before 1.3.2 keep their chains / upstreams in every row; the service compacts them in the
+    # background (Service._compact_buckets). A new database has none.
+    if kv_get(conn, COMPACT_KV) is None and not conn.execute("SELECT 1 FROM buckets LIMIT 1").fetchone():
+        kv_set(conn, COMPACT_KV, True)
     conn.commit()
     conn.close()
 
@@ -215,6 +219,49 @@ def state_at(conn, prefix, ts):
         " SELECT collector, peer, peer_asn, kind, path, ts,"
         "  ROW_NUMBER() OVER (PARTITION BY collector, peer ORDER BY ts DESC, id DESC) rn"
         " FROM updates WHERE prefix=? AND ts<=?) WHERE rn=1", (prefix, ts)).fetchall()
+
+
+# A bucket stores its chains / upstreams JSON only when it changes: NULL means "the same as this prefix's bucket
+# before" (Engine.tick). The first bucket of each UTC day and the first after any break store it anyway, so the
+# value in effect is never more than a day back. Read buckets through fill_mix to get it in every row.
+MIX = ("chains", "upstreams")
+COMPACT_KV = "buckets_compacted"   # older buckets' migration: [prefix, ts] done so far, "vacuum", then true
+
+
+def mix_at(conn, prefix, ts, col="chains"):
+    """The chains (or upstreams) JSON in effect at bucket `ts` of `prefix`: the newest one stored at or before it."""
+    r = conn.execute(f"SELECT {col} FROM buckets WHERE prefix=? AND ts<=? AND {col} IS NOT NULL "
+                     "ORDER BY ts DESC LIMIT 1", (prefix, ts)).fetchone()
+    return r[0] if r else None
+
+
+def fill_mix(conn, rows, prefix=None):
+    """Bucket rows, oldest first, as dicts with every NULL chains / upstreams filled in from the bucket before.
+    The rows are all of `prefix`, or have a prefix column."""
+    out, last = [], {}
+    for r in rows:
+        d = dict(r)
+        for col in MIX:
+            if col in d:
+                k = (d.get("prefix", prefix), col)
+                if d[col] is not None:
+                    last[k] = d[col]
+                elif k in last:
+                    d[col] = last[k]
+                else:   # the first bucket asked for relies on one before it
+                    d[col] = last[k] = mix_at(conn, k[0], d["ts"], col)
+        out.append(d)
+    return out
+
+
+def pin_mix(conn, prefix, start, end):
+    """Store the chains / upstreams in effect on each bucket of `prefix` from `start` to `end` that relies on the one
+    before it, so a replay that rewrites some of them (a gap fill) can't change what the others show."""
+    rows = conn.execute("SELECT ts, chains, upstreams FROM buckets WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts",
+                        (prefix, start, end)).fetchall()
+    conn.executemany("UPDATE buckets SET chains=?, upstreams=? WHERE prefix=? AND ts=?",
+                     [(d["chains"], d["upstreams"], prefix, d["ts"]) for r, d in zip(rows, fill_mix(conn, rows, prefix))
+                      if r["chains"] is None or r["upstreams"] is None])
 
 
 def annotate_probes(conn, rows):
@@ -243,3 +290,46 @@ def prune(conn, raw_retention_days: int):
         " FROM updates WHERE ts < ?) WHERE rn=1 AND kind='A'", (cutoff, cutoff))
     conn.execute("DELETE FROM updates WHERE ts < ?", (cutoff,))
     conn.commit()
+
+
+def compact_mix(conn, B, at, limit=1000):
+    """One step of the migration of buckets stored before 1.3.2, which keep their chains / upstreams in every row:
+    from the bucket after `at` = (prefix, ts), in that order, drop them where Engine.tick now would. Returns (where
+    to go on from, or None once every bucket is done; buckets changed)."""
+    with conn._lock:   # read and update as one step: gap fills write buckets from a worker thread
+        rows = conn.execute("SELECT * FROM buckets WHERE (prefix, ts) > (?, ?) ORDER BY prefix, ts LIMIT ?",
+                            (*at, limit)).fetchall()
+        prev, todo = None, []
+        if rows and rows[0]["prefix"] == at[0]:   # carrying on within a prefix: its bucket before, as it shows
+            prev = {"prefix": at[0], "ts": at[1], **{c: mix_at(conn, at[0], at[1], c) for c in MIX}}
+        for r in rows:
+            if prev and prev["prefix"] != r["prefix"]:
+                prev = None
+            # the bucket before, on the same UTC day (within a minute: they may have been recorded at another size)
+            same = prev and r["ts"] - prev["ts"] <= max(B, 60) and r["ts"] // 86400 == prev["ts"] // 86400
+            cur, new = {"prefix": r["prefix"], "ts": r["ts"]}, None
+            for c in MIX:
+                cur[c] = r[c] if r[c] is not None else prev[c] if prev else mix_at(conn, r["prefix"], r["ts"], c)
+                if same and r[c] is not None and r[c] == prev[c]:
+                    new = new or dict(r)
+                    new[c] = None
+            if new:
+                todo.append(new)
+            prev = cur
+        # Each one is written again whole: an UPDATE that only shrinks a row leaves its page almost empty, and then
+        # the database looks many times bigger than it is until a VACUUM (whose check for room would refuse it).
+        if todo:
+            cols = list(todo[0])
+            conn.executemany(f"INSERT OR REPLACE INTO buckets({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
+                             [[d[c] for c in cols] for d in todo])
+        conn.commit()
+    return ((rows[-1]["prefix"], rows[-1]["ts"]) if len(rows) == limit else None), len(todo)
+
+
+def vacuum(conn):
+    """Rewrite the database file without its free space (VACUUM), then empty the WAL. Everything else that uses `conn`
+    waits meanwhile."""
+    with conn._lock:
+        conn.commit()   # (VACUUM can't run inside a transaction)
+        conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")

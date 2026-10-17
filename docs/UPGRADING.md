@@ -56,6 +56,19 @@ since the update is set aside, not deleted, in `/var/backups/bgpcanary/rolled-ba
 To go further back, use `--version` with the older release number. Please also
 [open an issue](https://github.com/gregsowell/bgpcanary/issues) describing what went wrong.
 
+## Updating to 1.3.2
+
+1.3.2 stores the visibility history far more compactly (see the [changelog](../CHANGELOG.md)). The normal
+`sudo bgpcanary-update` works. Once the new version is running, it compacts the history you already have, in the
+background: a few minutes for a big database, during which the pages show the same as before. Then it rewrites the
+database file once to give the space back, which pauses bgpcanary for a few seconds. The log says how it went
+(`sudo journalctl -u bgpcanary | grep -i compact`); if it reports there isn't room, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-database-is-getting-big).
+
+To go back afterwards, use `--rollback`, which restores the database from before the update. An older version
+installed with `--version` runs on the compacted database, but shows the upstream chains chart and the event pages'
+"who carried" table mostly empty.
+
 ## Updating to 1.2.2
 
 1.2.2 moves backups to `/var/backups/bgpcanary` and changes how updates handle them (see the

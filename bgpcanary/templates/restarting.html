@@ -4,7 +4,7 @@
 <div class="panel login">
   <h1>Applying settings…</h1>
   <p id="rs-msg">The service is restarting with the new monitoring settings. This page continues on its own when it's back.</p>
-  {% if added %}<p class="muted">History for {{ added|join(', ') }} loads in the background over the next few minutes. Charts fill in as it arrives.</p>{% endif %}
+  {% if added %}<p class="muted">History for {{ added|join(', ') }} loads over the next few minutes. The pages show its progress.</p>{% endif %}
   <p class="muted" id="rs-wait">Waiting…</p>
 </div>
 <script>

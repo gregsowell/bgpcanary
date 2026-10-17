@@ -84,7 +84,8 @@ class TransitCheck:
                 continue
             version = ipaddress.ip_network(prefix, strict=False).version
             adj, seen = self._our_counts(prefix)
-            ups = {u for (u, _t) in adj} | set(self.cfg.expected_upstreams)
+            # (not peers: they're meant to pass your routes only to their customers, never to their transits)
+            ups = {u for (u, _t) in adj if not eng.peer_group(u)} | set(self.cfg.expected_upstreams)
             for u in sorted(ups):
                 if not any(k[0] == u for k in adj):
                     unknown.add((prefix, u))

@@ -53,7 +53,7 @@
           {% if x.kind == 'prefixes' %}<textarea name="t_{{ x.attr }}" rows="2" style="width:100%">{{ x.value|join('\n') if x.value is not string else x.value }}</textarea>
           {% else %}<input name="t_{{ x.attr }}" value="{{ x.value }}" inputmode="decimal" style="width:90px"{% if x.opts.min is defined %} data-min="{{ x.opts.min }}"{% endif %}>{% endif %}
           <span style="display:block;font-size:11px">{{ x.opts.help }}</span></label>
-        {% else %}<span class="muted" style="font-size:12px">{% if t.kind == 'upstream_missing' or t.kind == 'unexpected_upstream' %}Uses the expected upstreams under <a href="/settings/monitor">Monitored network</a>.{% elif t.kind == 'blip' %}Uses the outage thresholds above.{% elif t.check == 'registry' %}Uses the registry watch (interval above).{% else %}No settings.{% endif %}</span>{% endfor %}</td>
+        {% else %}<span class="muted" style="font-size:12px">{% if t.kind == 'upstream_missing' or t.kind == 'unexpected_upstream' %}Uses the expected upstreams under <a href="/settings/monitor">Monitored network</a>.{% elif t.kind == 'blip' %}Uses the outage thresholds above.{% elif t.kind == 'new_peer' %}Uses your exchanges (from PeeringDB) and the peers under <a href="/settings/monitor">Monitored network</a>.{% elif t.check == 'registry' %}Uses the registry watch (interval above).{% else %}No settings.{% endif %}</span>{% endfor %}</td>
     </tr>
     {% endfor %}
     {% endfor %}

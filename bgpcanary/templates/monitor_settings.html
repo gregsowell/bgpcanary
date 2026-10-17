@@ -18,7 +18,11 @@
     </label>
     <label class="span2">Expected upstream ASNs (your direct transit providers)
       <input name="expected_upstreams" value="{{ m.expected_upstreams|join(', ') }}" placeholder="e.g. 64501, 64502">
-      <span style="font-size:12px">Paths through any other neighbor raise an "unexpected upstream" warning. Upstreams that carry none of your paths raise an "expected upstream missing" warning. Each upstream's own transits and peers appear in the connectivity tree. Leave empty to warn on any upstream the first time it's seen.</span>
+      <span style="font-size:12px">Paths through any other neighbor, except your peers (below), raise an "unexpected upstream" warning. Upstreams that carry none of your paths raise an "expected upstream missing" warning. Each upstream's own transits and peers appear in the connectivity tree. Leave empty to warn on any upstream the first time it's seen.</span>
+    </label>
+    <label class="span2">Peer ASNs (optional: networks you peer with rather than buy transit from)
+      <input name="peers" value="{{ m.peers|join(', ') }}" placeholder="e.g. 64510, 64511">
+      <span style="font-size:12px">Peers at your internet exchanges are found in PeeringDB automatically{% if px and px.exchanges %} (see below){% endif %}. List private peers here, and peers at exchanges PeeringDB doesn't know about. Peers go on the connectivity tree's "Exchanges" branch and get checks of their own (exchange peers lost, peer leak) instead of "unexpected upstream" warnings.</span>
     </label>
     <label class="span2">Other address space you hold (optional; allocations or aggregates, one per line)
       <textarea name="owned_space" rows="2" placeholder="198.51.100.0/22">{{ m.owned_space|join('\n') }}</textarea>
@@ -35,6 +39,27 @@
   </form>
 </div>
 {% if not first_run %}
+<div class="panel">
+  <h2>Internet exchanges <span class="muted" style="font-size:13px;font-weight:400">· from PeeringDB</span></h2>
+  {% if px.exchanges %}
+  <p style="margin-top:0">PeeringDB lists AS{{ cfg.asn }} at
+    {% for x in px.exchanges %}<strong>{{ x.name }}</strong> <span class="muted">({{ x.members }} networks)</span>{% if not loop.last %}, {% endif %}{% endfor %}.
+    Neighbors that are members there are treated as exchange peers, unless they're one of your expected upstreams.
+    {% if px.error %}<br><span class="muted">The last lookup failed ({{ px.error }}), so this is the list from before.</span>{% endif %}</p>
+  {% elif px.fetched %}
+  <p class="muted" style="margin-top:0">PeeringDB lists no exchanges for AS{{ cfg.asn }}.
+    If you peer at exchanges, add your network's connections to PeeringDB, or list your peers above.</p>
+  {% elif px.error %}
+  <p class="muted" style="margin-top:0">Couldn't look up your exchanges in PeeringDB: {{ px.error }}. bgpcanary tries again in
+    about an hour. Until then, exchange peers count as unknown neighbors.</p>
+  {% else %}
+  <p class="muted" style="margin-top:0">Not looked up yet: bgpcanary asks PeeringDB when it starts.</p>
+  {% endif %}
+  <form method="post" action="/settings/exchanges/refresh" class="toolbar" style="margin:0">
+    <button type="submit">Look up again now</button>
+    <span class="muted" style="font-size:12px">{% if px.fetched %}Last looked up <time data-ts="{{ px.fetched }}"></time>. {% endif %}bgpcanary checks once a day by itself.</span>
+  </form>
+</div>
 <p class="muted" style="font-size:12px">{% if from_db %}These values were saved here and override the <code>[monitor]</code> section of <code>{{ config_path }}</code>.{% else %}These values currently come from <code>{{ config_path }}</code>. Once you save here, the saved values take over.{% endif %} Detection thresholds, Route Views servers and storage settings stay in the config file.</p>
 {% endif %}
 {% endblock %}

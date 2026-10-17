@@ -7,10 +7,12 @@ import time
 
 from . import alerts, atlas, config, db, paths, registry, ripe, routeviews, transit, tree, updates
 from .engine import Engine, _parse_ts as ripe_ts, close_open
+from .peering import Peering
 
 log = logging.getLogger("bgpcanary.service")
 # events that trigger an immediate Route Views snapshot + ping/traceroute burst
-BURST_KINDS = ("outage", "upstream_missing", "origin_hijack", "more_specific", "covering_prefix", "upstream_shift")
+BURST_KINDS = ("outage", "upstream_missing", "origin_hijack", "more_specific", "covering_prefix", "upstream_shift",
+               "peer_leak")
 
 
 class Service:
@@ -25,7 +27,8 @@ class Service:
         config.apply_monitor_settings(cfg, db.kv_get(self.conn, config.MONITOR_KV))   # GUI-saved ASN/prefixes
         config.apply_alert_settings(cfg, db.kv_get(self.conn, config.ALERT_KV))       # GUI-saved alert settings
         config.apply_tuning(cfg, db.kv_get(self.conn, config.TUNING_KV))              # GUI-saved thresholds etc.
-        self.engine = Engine(cfg, self.conn)
+        self.peering = Peering(cfg, self.conn)   # your exchanges (PeeringDB) and listed peers, shared by every engine
+        self.engine = Engine(cfg, self.conn, peering=self.peering)
         self.engine.listeners.append(self._on_event)
         self.sourceapp = f"bgpcanary-as{cfg.asn}"
         self.tasks = []
@@ -65,11 +68,18 @@ class Service:
 
     async def _main(self):
         eng, B = self.engine, self.cfg.bucket_seconds
+        try:   # before the history: so peers in it are recognised as peers
+            await asyncio.wait_for(self.peering.refresh(), 120)
+        except Exception as ex:
+            log.warning("PeeringDB lookup skipped: %s", ex)
+        self.tasks.append(asyncio.create_task(self._peering_loop()))
         try:
             await self._startup_history()
             await self._ensure_init_rows()
         except Exception:
             log.exception("history load failed; continuing live")
+        if not self.first_sync.is_set():   # (the pages say so until the first RIS Live sync: then "live")
+            eng.status.update(phase="connecting to RIS Live", connecting_since=time.time())
         eng.historical = False
         eng.last_bucket = int(time.time() // B * B)
         for m in eng.mons.values():
@@ -94,12 +104,11 @@ class Service:
         B = self.cfg.bucket_seconds
         for p in list(self.pending_backfill):
             now = time.time()
-            self.engine.status["backfilling"] = p
             try:   # through the single writer connection, as in _fill_gaps
-                f = Engine(dataclasses.replace(self.cfg, prefixes=[p]), self.aconn, restore=False)
+                f = Engine(dataclasses.replace(self.cfg, prefixes=[p]), self.aconn, restore=False, peering=self.peering)
                 f.historical = True
                 avail = await self._replay(f, now - self.cfg.backfill_days * 86400, self.live_since or now,
-                                           label=f"history for {p}", prefixes=[p])
+                                           label=f"history for {p}", prefixes=[p], show=p)
                 close_open(f, avail)
                 if self.live_since and self.live_since - avail > B:
                     self._add_gap(avail, self.live_since)   # BGPlay lags a few hours; the gap filler finishes it
@@ -107,7 +116,15 @@ class Service:
                 log.exception("history load for %s failed", p)
             finally:
                 self.pending_backfill.remove(p)
-        self.engine.status.pop("backfilling", None)
+
+    async def _peering_loop(self):
+        """Keep your exchanges' member lists fresh (PeeringDB is only asked once a day, or an hour after a failure)."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await self.peering.refresh()
+            except Exception:
+                log.exception("PeeringDB refresh failed")
 
     async def _run_sync(self, fn):
         return fn()
@@ -149,23 +166,32 @@ class Service:
                 merged["sources"] += d.get("sources", [])
         return merged
 
-    async def _replay(self, eng, start, end, label="backfill", prefixes=None):
-        """Replay BGPlay history [start, end) into `eng` in 7-day chunks. Returns the end of available data."""
+    async def _replay(self, eng, start, end, label="backfill", prefixes=None, show=None):
+        """Replay BGPlay history [start, end) into `eng` in 7-day chunks. Returns the end of available data.
+        `show`: report progress in status["history"] for the web pages: "all" for the first start's history load,
+        or the prefix whose history loads in the background."""
         spans, s = [], start
         while s < end:
             spans.append((s, min(s + 7 * 86400, end)))
             s += 7 * 86400
         log.info("%s: %d chunk(s) from %s", label, len(spans), time.strftime("%Y-%m-%d %H:%M", time.gmtime(start)))
-        avail = start
-        for i, (s, e) in enumerate(spans):
-            if eng is self.engine:
-                eng.status["phase"] = f"{label} {i + 1}/{len(spans)}"
-            d = await self._bgplay_merged(s, e, prefixes)
-            if not d:
-                continue
-            await asyncio.to_thread(eng.load_bgplay, d, i == 0)
-            avail = ripe_ts(d["query_endtime"])
-            log.info("%s chunk %d/%d: %d events", label, i + 1, len(spans), len(d.get("events", [])))
+        avail, t0 = start, time.time()
+        try:
+            for i, (s, e) in enumerate(spans):
+                if show:
+                    self.engine.status["history"] = {"for": show, "done": i, "total": len(spans), "started": t0,
+                                                      "start": start, "end": end, "upto": s}
+                if eng is self.engine:
+                    eng.status["phase"] = f"loading history {i + 1}/{len(spans)}"
+                d = await self._bgplay_merged(s, e, prefixes)
+                if not d:
+                    continue
+                await asyncio.to_thread(eng.load_bgplay, d, i == 0)
+                avail = ripe_ts(d["query_endtime"])
+                log.info("%s chunk %d/%d: %d events", label, i + 1, len(spans), len(d.get("events", [])))
+        finally:
+            if show:
+                self.engine.status["history"] = None
         return avail
 
     async def _startup_history(self):
@@ -175,7 +201,8 @@ class Service:
         last = eng.last_bucket_ts()
         eng.historical = True
         if last is None and self.cfg.backfill_days > 0:
-            gap_start = await self._replay(eng, now - self.cfg.backfill_days * 86400, now)
+            gap_start = await self._replay(eng, now - self.cfg.backfill_days * 86400, now, show="all")
+            eng.status["phase"] = "finishing the history load"
             # first install: drop routes the replay still holds but RIS no longer has (silent drops)
             d = await self._bgplay_merged(now - 60, now)
             if d:
@@ -353,7 +380,7 @@ class Service:
                 continue
             # The filler writes through the service's single writer connection: a second connection on
             # this thread can deadlock against the live engine's open transaction ("database is locked").
-            f = Engine(self.cfg, self.aconn, restore=False)
+            f = Engine(self.cfg, self.aconn, restore=False, peering=self.peering)
             f.historical = True
             f.seed_baseline(s)
             f.last_bucket = int(-(-s // B) * B)
@@ -412,7 +439,7 @@ class Service:
             images = []
             if self.cfg.email.enabled and self.cfg.email.recipients:
                 try:   # before/now connectivity-tree snapshots for the email
-                    images = await tree.event_images(self.cfg, self.sourceapp, ev, phase)
+                    images = await tree.event_images(self.cfg, self.sourceapp, ev, phase, peering=self.peering)
                 except Exception:
                     log.exception("tree images for event %s failed; sending without them", eid)
             await alerts.send(self.cfg, self.aconn, ev, phase, images=images)

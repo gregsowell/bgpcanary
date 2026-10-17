@@ -21,28 +21,74 @@
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const PALETTE = ["#2463eb", "#e8710a", "#12a36b", "#9b4dca", "#d23f8a", "#0f9bb5", "#8a8f98"];
 
-  // Shades outage/blip/anomaly windows behind the chart.
+  // Shades outage/blip/anomaly windows behind the chart: one shade per stretch of time and severity, however many
+  // events overlap there (each used to add its own, so dozens of open warnings became an opaque block).
+  const BAND_COLORS = [["info", "rgba(59,111,214,.10)"], ["warning", "rgba(199,119,0,.16)"], ["critical", "rgba(200,38,43,.16)"]];
   const eventBands = {
     id: "eventBands",
     beforeDatasetsDraw(chart, _a, opts) {
-      const evs = opts.events || [];
       const { ctx, chartArea: a, scales: { x } } = chart;
-      ctx.save();
-      for (const e of evs) {
+      const spans = { info: [], warning: [], critical: [] };
+      for (const e of opts.events || []) {
         // informational notices (transit filter checks, chain changes...) are often open for days: only brief
         // dips are shaded among the info events, as the chart captions say
         if (e.severity === "info" && e.kind !== "blip") continue;
-        const s = e.start_ts * 1000, en = (e.end_ts || Date.now() / 1000) * 1000;
-        let x0 = x.getPixelForValue(s), x1 = x.getPixelForValue(en);
+        let x0 = x.getPixelForValue(e.start_ts * 1000), x1 = x.getPixelForValue((e.end_ts || Date.now() / 1000) * 1000);
         if (x1 < a.left || x0 > a.right) continue;
         x0 = Math.max(x0, a.left); x1 = Math.min(Math.max(x1, x0 + 2), a.right);
-        const col = e.severity === "critical" ? "rgba(200,38,43,.16)" : e.severity === "warning" ? "rgba(199,119,0,.16)" : "rgba(59,111,214,.10)";
+        (spans[e.severity] || spans.info).push([x0, x1]);
+      }
+      ctx.save();
+      for (const [sev, col] of BAND_COLORS) {
         ctx.fillStyle = col;
-        ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top);
+        let cur = null;
+        for (const [x0, x1] of spans[sev].sort((p, q) => p[0] - q[0])) {
+          if (cur && x0 <= cur[1]) { cur[1] = Math.max(cur[1], x1); continue; }
+          if (cur) ctx.fillRect(cur[0], a.top, cur[1] - cur[0], a.bottom - a.top);
+          cur = [x0, x1];
+        }
+        if (cur) ctx.fillRect(cur[0], a.top, cur[1] - cur[0], a.bottom - a.top);
       }
       ctx.restore();
     }
   };
+
+  // The "not live yet" banner (base.html): refreshed every few seconds. Once bgpcanary is live, the dashboard
+  // reloads (its figures were replayed history); other pages say so instead of reloading under the reader.
+  document.addEventListener("DOMContentLoaded", () => {
+    const b = document.getElementById("loading-banner");
+    if (!b) return;
+    let notLive = !b.classList.contains("lb-info");   // first start or restart (lb-info: a new prefix's history)
+    const tick = async () => {
+      let d;
+      try {
+        const r = await fetch("/api/status", { cache: "no-store" });
+        if (!r.ok) { setTimeout(tick, 15000); return; }
+        d = await r.json();
+      } catch (e) { setTimeout(tick, 5000); return; }   // e.g. restarting
+      if (d.phase) document.querySelectorAll(".js-phase").forEach(el => { el.textContent = d.phase; });
+      if (notLive && (!d.html || d.what === "prefix")) {   // it has just gone live
+        if (b.dataset.reload) { location.reload(); return; }
+        notLive = false;
+        const dot = document.querySelector("header .me .dot");
+        if (dot) { dot.className = "dot ok"; dot.title = "RIS Live connected"; }
+        if (!d.html) {
+          b.className = "loading-banner lb-info";
+          b.innerHTML = "<strong>Live monitoring has started.</strong> <a href=\"\">Reload</a> to see current data.";
+          return;
+        }
+      }
+      if (d.html) {
+        b.className = "loading-banner" + (d.what === "prefix" ? " lb-info" : "");
+        b.innerHTML = d.html;
+        localize(b);
+        setTimeout(tick, 5000);
+      } else {
+        b.innerHTML = "<strong>History loaded.</strong> <a href=\"\">Reload</a> to see it in the charts.";
+      }
+    };
+    setTimeout(tick, 5000);
+  });
 
   function timeAxis(start, end) {
     const span = end - start;

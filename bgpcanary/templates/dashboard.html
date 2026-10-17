@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 {% set multi = sel|length > 1 %}
+{% set replaying = loading and loading.what in ('history', 'finishing') %}{# first start: figures are replayed history #}
 {% set ranges = [('6h', 21600), ('24h', 86400), ('7d', 604800), ('30d', 2592000), ('90d', 7776000)] %}
 {% if all_prefixes|length > 1 %}
 <form class="panel toolbar prefix-picker" method="get" action="/" id="prefix-picker">
@@ -19,11 +20,11 @@
 <div class="grid g4">
   <div class="panel stat">
     <div class="label">{{ sel|length }} prefixes · AS{{ cfg.asn }}</div>
-    <div class="value"><span class="badge b-{{ worst_state }}" style="font-size:16px">{{ c.ok }}/{{ sel|length }} OK</span></div>
-    <div class="sub">{% if status.ws_connected %}RIS Live connected{% else %}RIS Live disconnected{% endif %}{% if status.last_msg %} · last msg <time data-ts="{{ status.last_msg }}" data-sec="1"></time>{% endif %}</div>
+    <div class="value">{% if replaying %}<span class="badge b-info" style="font-size:16px">loading history</span>{% else %}<span class="badge b-{{ worst_state }}" style="font-size:16px">{{ c.ok }}/{{ sel|length }} OK</span>{% endif %}</div>
+    <div class="sub">{% if loading and loading.what != 'prefix' %}Not live yet: <span class="js-phase">{{ status.phase }}</span>{% elif status.ws_connected %}RIS Live connected{% else %}RIS Live disconnected{% endif %}{% if status.last_msg %} · last msg <time data-ts="{{ status.last_msg }}" data-sec="1"></time>{% endif %}</div>
   </div>
   <div class="panel stat">
-    <div class="label">Lowest visibility now</div>
+    <div class="label">Lowest visibility {{ '· replayed history' if replaying else 'now' }}</div>
     {% if c.worst %}
     <div class="value">{{ '%.1f'|format(c.worst.pct) }}%</div>
     <div class="sub"><a href="/?prefix={{ c.worst.prefix|urlencode }}">{{ c.worst.prefix }}</a> · {{ c.worst.visible }} of {{ '%.0f'|format(c.worst.baseline) }} RIS peers</div>
@@ -32,8 +33,9 @@
   <div class="panel stat">
     <div class="label">Upstream{{ 's' if c.upstreams|length > 1 }} <span style="text-transform:none">(paths, all selected prefixes)</span></div>
     <div class="value" style="font-size:18px">
-      {% for u, n in c.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span><br>{% else %}—{% endfor %}
+      {% for u, n in c.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span>{% if cfg.expected_upstreams and u not in cfg.expected_upstreams %} <span class="badge b-warning" title="Neither one of your expected upstreams nor a known peer">unexpected</span>{% endif %}<br>{% else %}{% if not c.peers %}—{% endif %}{% endfor %}
       {% for u in c.missing %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }}</span> <span class="badge b-warning">not seen</span><br>{% endfor %}
+      {% set groups = c.peers %}{% include "_peer_groups.html" %}
     </div>
   </div>
   <div class="panel stat">
@@ -54,7 +56,8 @@
       <td><span class="badge b-{{ s.state }}">{{ s.state }}</span></td>
       <td class="right">{{ s.visible }}{% if s.baseline %} <span class="muted">/ {{ '%.0f'|format(s.baseline) }}</span>{% endif %}</td>
       <td class="right">{% if s.pct is not none %}{{ '%.1f'|format(s.pct) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
-      <td>{% for u, n in s.upstreams %}AS{{ u }} <span class="muted">({{ n }})</span>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}
+      <td>{% for u, n in s.upstreams %}AS{{ u }} <span class="muted">({{ n }})</span>{% if not loop.last %}, {% endif %}{% else %}{% if not s.peers %}<span class="muted">none</span>{% endif %}{% endfor %}
+        {% for g in s.peers %} <span class="badge b-info" title="{% for u, n in g.peers %}AS{{ u }} {{ names.get(u, '') }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}">+{{ g.peers|length }} peer{{ 's' if g.peers|length != 1 }} {{ 'via private peering' if g.name == 'Private peering' else 'at ' ~ g.name }} ({{ g.paths }})</span>{% endfor %}
         {% for u in s.missing %} <span class="badge b-warning" title="Expected upstream not seen for this prefix">AS{{ u }} not seen</span>{% endfor %}</td>
       <td><a href="/?prefix={{ s.prefix|urlencode }}">Details →</a></td></tr>
     {% endfor %}
@@ -77,19 +80,20 @@
 <div class="grid g4">
   <div class="panel stat">
     <div class="label">{{ s.prefix }} · AS{{ cfg.asn }}</div>
-    <div class="value"><span class="badge b-{{ s.state }}" style="font-size:16px">{{ s.state|upper }}</span></div>
-    <div class="sub">{% if status.ws_connected %}RIS Live connected{% else %}RIS Live disconnected{% endif %}{% if status.last_msg %} · last msg <time data-ts="{{ status.last_msg }}" data-sec="1"></time>{% endif %}</div>
+    <div class="value">{% if replaying %}<span class="badge b-info" style="font-size:16px">LOADING HISTORY</span>{% else %}<span class="badge b-{{ s.state }}" style="font-size:16px">{{ s.state|upper }}</span>{% endif %}</div>
+    <div class="sub">{% if loading and loading.what != 'prefix' %}Not live yet: <span class="js-phase">{{ status.phase }}</span>{% elif status.ws_connected %}RIS Live connected{% else %}RIS Live disconnected{% endif %}{% if status.last_msg %} · last msg <time data-ts="{{ status.last_msg }}" data-sec="1"></time>{% endif %}</div>
   </div>
   <div class="panel stat">
-    <div class="label">RIS peers seeing prefix</div>
+    <div class="label">RIS peers seeing prefix{{ ' · replayed history' if replaying }}</div>
     <div class="value">{{ s.visible }}{% if s.baseline %} <span class="muted" style="font-size:16px">/ {{ '%.0f'|format(s.baseline) }}</span>{% endif %}</div>
     <div class="sub">{% if s.pct is not none %}{{ '%.1f'|format(s.pct) }}% of 24h baseline{% else %}building baseline…{% endif %}</div>
   </div>
   <div class="panel stat">
     <div class="label">Upstream{{ 's' if s.upstreams|length > 1 }}</div>
     <div class="value" style="font-size:18px">
-      {% for u, n in s.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span><br>{% else %}—{% endfor %}
+      {% for u, n in s.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span>{% if cfg.expected_upstreams and u not in cfg.expected_upstreams %} <span class="badge b-warning" title="Neither one of your expected upstreams nor a known peer">unexpected</span>{% endif %}<br>{% else %}{% if not s.peers %}—{% endif %}{% endfor %}
       {% for u in s.missing %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }}</span> <span class="badge b-warning">not seen</span><br>{% endfor %}
+      {% set groups = s.peers %}{% include "_peer_groups.html" %}
     </div>
   </div>
   <div class="panel stat">
@@ -176,7 +180,7 @@
   <div class="scroll"><table>
     <tr><th>Chain (transit → upstream)</th><th class="right">Peers</th><th class="right">Prefixes</th><th style="width:25%">Share</th></tr>
     {% for c, n, k in combined.chains %}
-    <tr><td>{% for a in c.split() %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a> <span class="muted">{{ names.get(a|int, '') }}</span>{% if not loop.last %} → {% endif %}{% endfor %} → AS{{ cfg.asn }}</td>
+    <tr><td>{% if c.startswith('peers:') %}<span class="badge b-info">peers</span> {{ 'Private peering' if c[6:] == 'Private peering' else 'Peers at ' ~ c[6:] }}{% else %}{% for a in c.split() %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a> <span class="muted">{{ names.get(a|int, '') }}</span>{% if not loop.last %} → {% endif %}{% endfor %}{% endif %} → AS{{ cfg.asn }}</td>
       <td class="right">{{ n }}</td>
       <td class="right">{{ k }} of {{ sel|length }}</td>
       <td><div class="bar"><span style="width:{{ (100 * n / combined.paths) if combined.paths else 0 }}%"></span></div></td></tr>
@@ -189,7 +193,7 @@
   <div class="scroll"><table>
     <tr><th>Chain (transit → upstream)</th><th class="right">Peers</th><th style="width:30%">Share</th></tr>
     {% for c, n in s.chains %}
-    <tr><td>{% for a in c.split() %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a> <span class="muted">{{ names.get(a|int, '') }}</span>{% if not loop.last %} → {% endif %}{% endfor %} → AS{{ cfg.asn }}</td>
+    <tr><td>{% if c.startswith('peers:') %}<span class="badge b-info">peers</span> {{ 'Private peering' if c[6:] == 'Private peering' else 'Peers at ' ~ c[6:] }}{% else %}{% for a in c.split() %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a> <span class="muted">{{ names.get(a|int, '') }}</span>{% if not loop.last %} → {% endif %}{% endfor %}{% endif %} → AS{{ cfg.asn }}</td>
       <td class="right">{{ n }}</td>
       <td><div class="bar"><span style="width:{{ (100 * n / s.visible) if s.visible else 0 }}%"></span></div></td></tr>
     {% else %}<tr><td colspan="3" class="muted">No paths yet.</td></tr>{% endfor %}

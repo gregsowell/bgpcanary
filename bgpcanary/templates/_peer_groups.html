@@ -1,0 +1,6 @@
+{# Peers grouped by exchange, under the dashboard's upstream list. `groups`: the peer list from web.split_neighbours() #}
+{% for g in groups %}
+<details class="peer-group"><summary><span class="badge b-info">peers</span> {{ g.name }}: {{ g.peers|length }} <span class="muted">({{ g.paths }} path{{ 's' if g.paths != 1 }})</span></summary>
+  <div class="muted">{% for u, n in g.peers %}AS{{ u }} {{ names.get(u, '') }} ({{ n }}){% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+</details>
+{% endfor %}

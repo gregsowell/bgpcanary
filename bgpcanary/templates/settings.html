@@ -3,7 +3,6 @@
 {% block content %}
 <h1>Settings</h1>
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
-{% if status.backfilling %}<div class="msg">Loading history for {{ status.backfilling }}…</div>{% endif %}
 {% set alerts_on = cfg.email.enabled or (cfg.webhooks|selectattr('enabled')|list) %}
 
 <div class="cards">

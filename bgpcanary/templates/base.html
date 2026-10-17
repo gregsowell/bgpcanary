@@ -32,7 +32,7 @@
     </nav>
     {% if update and update.available %}<a class="badge b-warning" href="/settings/about" title="A newer bgpcanary release is available">update {{ update.latest }}</a>{% endif %}
     <span class="me">
-      <span class="dot {{ 'ok' if status.ws_connected else 'bad' }}" title="RIS Live {{ 'connected' if status.ws_connected else 'disconnected' }}"></span>{{ status.phase }} · {{ user }}{% if role == 'viewer' %} <span class="badge b-info">view only</span>{% endif %} · <a href="/logout">Log out</a>
+      {% if loading and loading.what != 'prefix' %}<span class="dot warn" title="Not live yet"></span>{% else %}<span class="dot {{ 'ok' if status.ws_connected else 'bad' }}" title="RIS Live {{ 'connected' if status.ws_connected else 'disconnected' }}"></span>{% endif %}<span class="js-phase">{{ status.phase }}</span> · {{ user }}{% if role == 'viewer' %} <span class="badge b-info">view only</span>{% endif %} · <a href="/logout">Log out</a>
     </span>
   </div>
 </header>
@@ -56,6 +56,14 @@ function hideSupport() {
 }
 </script>
 <main class="wrap">
+{% if loading %}
+{# not live yet (first start, restart) or a new prefix's history loading: app.js keeps it up to date, and reloads
+   the dashboard once bgpcanary is live #}
+<div class="loading-banner{{ ' lb-info' if loading.what == 'prefix' }}" id="loading-banner"
+     data-reload="{{ '1' if request.url.path == '/' and loading.what != 'prefix' else '' }}">
+  {% with ld = loading %}{% include "_loading.html" %}{% endwith %}
+</div>
+{% endif %}
 {% block content %}{% endblock %}
 </main>
 {% if user %}<footer class="wrap muted" style="font-size:12px;padding:0 16px 24px">bgpcanary {{ version }} · <a href="/settings/about">About &amp; updates</a></footer>{% endif %}

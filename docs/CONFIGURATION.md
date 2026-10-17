@@ -11,11 +11,41 @@ start.
 | ASN | Your AS number; paths must end in it to count as "seeing" your prefix |
 | Prefixes | Every prefix you announce, IPv4 and IPv6, aggregates and more-specifics |
 | Expected upstreams | The ASes you buy transit from. Enables "expected upstream missing", "unexpected upstream" and the upstream-shift view. |
+| Peers | Networks you peer with rather than buy transit from (optional). Peers at your internet exchanges are found automatically (below); list private peers here. |
 | Owned space | Larger blocks you hold (optional). Announcements inside them that you don't monitor are flagged. |
 | Probe targets | Addresses in your space that answer ping: used by Route Views ping/traceroute and as default RIPE Atlas targets |
 | Site name | Shown in the header and alert subjects |
 
 Adding a prefix loads up to 90 days of its history in the background.
+
+### Exchange peers
+
+If you peer at internet exchanges, many of the networks right next to you in BGP paths are peers, not transit
+providers. A peer only passes your routes to its own customers, so each one reaches just a few RIS peers.
+bgpcanary keeps them apart from your upstreams:
+
+- **How it knows:** it looks up the exchanges your ASN is on in [PeeringDB](https://www.peeringdb.com/) once a
+  day, along with their member lists. A neighbor that's a member of one of your exchanges is an exchange peer.
+  So is any ASN under **Peers** (private peering, or an exchange PeeringDB doesn't know). Your expected
+  upstreams always count as transit, even when they're at the same exchange.
+- **What changes:**
+  - peers don't raise "unexpected upstream" warnings;
+  - the dashboard lists them per exchange, under your upstreams;
+  - the connectivity tree puts them on one **Exchanges** branch, split per exchange;
+  - the upstream chains chart shows one "Peers at …" series per exchange;
+  - upstream-shift detection ignores them.
+- **Checks of their own:**
+  - **Exchange peers lost:** many peers at one exchange stop carrying a prefix at once (your port, the
+    route servers, or the exchange itself). It closes once they've been back for 15 minutes, so a flapping
+    session is one event. Private peers aren't part of it, since each has a link of its own.
+  - **Peer leak:** one peer suddenly carries a prefix to a large share of the internet, far beyond its usual
+    reach. That usual reach is learned first, so a big peer with many customers of its own isn't flagged.
+  - **New peer** (information): a peer carries a prefix for the first time.
+- **Unknown neighbors** still raise "unexpected upstream". The event's page asks what the network is to you:
+  **One of my transit providers** or **A peer**. One click files it, the warning closes by itself, and no
+  restart is needed.
+
+Settings › Monitored network shows which exchanges PeeringDB lists for you, with a **Look up again now** button.
 
 ## Alerts (Settings › Alert channels)
 
@@ -31,8 +61,11 @@ Adding a prefix loads up to 90 days of its history in the background.
 | Reachability loss | critical | Most RIPE Atlas probes got no reply from one of your addresses (needs Atlas) |
 | Expected upstream missing | warning | |
 | Upstream shift | warning | A large share of peers moved between your upstreams within minutes; triggers Route Views and Atlas checks |
-| Unexpected / new upstream | warning | |
+| Unexpected / new upstream | warning | A neighbor that's neither an expected upstream nor a peer |
 | New upstream chain | info | A transit → upstream combination seen for the first time |
+| Exchange peers lost | warning | Many of one exchange's peers stopped carrying a prefix at once (default: half of them) |
+| Peer leak | warning | A peer carries a prefix to at least 10% of RIS peers and three times its usual reach; triggers Route Views checks |
+| New peer | info | A peer at one of your exchanges (or a listed peer) carries a prefix for the first time |
 | Origin hijack | critical | Another AS originates your prefix |
 | More-specific | warning / critical | Critical when another AS originates it |
 | Covering announcement | warning | |

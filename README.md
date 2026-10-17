@@ -22,6 +22,7 @@ networks.
 - **Connectivity tree:**
   - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't.
   - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
+- **Internet exchanges:** peers at your exchanges are recognized automatically from PeeringDB, and kept apart from your transit providers. They get one Exchanges branch in the tree and no false "unexpected upstream" warnings, and you're alerted when many of an exchange's peers drop at once or a peer leaks your routes.
 - **Detection and alerts** (email, Slack, Microsoft Teams or any webhook), each type switchable with its own thresholds:
   - outages and brief dips;
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;
@@ -63,8 +64,8 @@ sudo ./deploy/install.sh --fqdn bgp.example.com
 ```
 
 Open `https://bgp.example.com/`, sign in as `admin` with the password the installer printed, choose a new
-password, and enter your ASN and prefixes. Monitoring starts within seconds; 90 days of history load in the
-background.
+password, and enter your ASN and prefixes. bgpcanary first loads 90 days of history, usually in a few minutes,
+with a progress bar on every page. Then live monitoring starts and the dashboard switches over by itself.
 
 Full instructions, including DNS, certificates and firewall: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
@@ -118,7 +119,7 @@ rate limits are respected, and the RIPEstat requests identify themselves. Please
 | [RIPE RIS Live](https://ris-live.ripe.net/) | Real-time BGP updates from ~330 peers (the main detector) |
 | [RIPEstat](https://stat.ripe.net/) | Current state (looking glass), per-second history (BGPlay), AS names and neighbours |
 | [Route Views](https://www.routeviews.org/) | `show ip bgp`, ping and traceroute from their collectors (telnet; kept within their daily limits) |
-| [RADb IRR](https://www.radb.net/), [PeeringDB](https://www.peeringdb.com/), RPKI via RIPEstat | Registry watch |
+| [RADb IRR](https://www.radb.net/), [PeeringDB](https://www.peeringdb.com/), RPKI via RIPEstat | Registry watch; which of your neighbors are peers at your internet exchanges |
 | [RIPE Atlas](https://atlas.ripe.net/) (optional) | Ping and traceroute from probes worldwide; needs your own API key and credits |
 | [Team Cymru](https://www.team-cymru.com/ip-asn-mapping) | IP-to-ASN lookups for traceroute hops |
 

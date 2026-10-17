@@ -1,0 +1,25 @@
+{# The "not live yet" banner's content: base.html shows it, and /api/status sends it again as it changes.
+   `ld` comes from web.loading(). #}
+{% if ld.what == 'history' %}
+<strong>Loading {{ ld.days }} days of history from RIPE RIS: week {{ ld.week }} of {{ ld.weeks }}</strong>
+<div class="bar"><span style="width:{{ ld.pct }}%"></span></div>
+<div>Live monitoring starts when this is done{% if ld.eta_min %}, in about {{ ld.eta_min }} minute{{ 's' if ld.eta_min != 1 }}{% else %}. That usually takes a few minutes; an estimate appears here shortly{% endif %}.
+  Until then, the figures and charts show the history as it's replayed{% if ld.at %} (now at <time data-ts="{{ ld.at }}"></time>){% endif %}, not the current state.
+  This page updates by itself.</div>
+{% elif ld.what == 'finishing' %}
+<strong>Finishing the history load</strong>
+<div class="bar"><span style="width:100%"></span></div>
+<div>Checking which routes RIS still has, then connecting to RIS Live for live updates.</div>
+{% elif ld.what == 'connecting' %}
+<strong>Connecting to RIS Live</strong>
+<div>The history is loaded. Live updates start as soon as the connection is up.
+  {% if ld.slow %}This is taking longer than usual: bgpcanary needs outbound HTTPS to ris-live.ripe.net
+  (see <a href="https://github.com/{{ repo }}/blob/main/docs/TROUBLESHOOTING.md#no-data--ris-live-disconnected" target="_blank" rel="noopener">Troubleshooting</a>).{% endif %}</div>
+{% elif ld.what == 'starting' %}
+<strong>Starting up</strong>
+<div>Checking the current routes. Live updates start in a moment.</div>
+{% elif ld.what == 'prefix' %}
+<strong>Loading history for {{ ld.prefix }}: week {{ ld.week }} of {{ ld.weeks }}</strong>
+<div class="bar"><span style="width:{{ ld.pct }}%"></span></div>
+<div>Live monitoring is running. This prefix's charts fill in as its history arrives{% if ld.eta_min %}, in about {{ ld.eta_min }} minute{{ 's' if ld.eta_min != 1 }}{% endif %}.</div>
+{% endif %}

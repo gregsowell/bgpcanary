@@ -15,8 +15,10 @@ from collections import deque
 from dataclasses import dataclass
 
 from . import db, paths
+from .peering import Peering
 
 log = logging.getLogger("bgpcanary.engine")
+XL_HOLD = 900   # "exchange peers lost" closes once the peers have been back this long (s)
 
 
 
@@ -38,7 +40,10 @@ class PrefixMon:
         self.event_sev = None
         self.min_vis = None
         self.ref_base = None       # while down: the baseline the outage opened with (see current_baseline)
-        self.samples = deque()     # (ts, visible) for baseline
+        self.samples = deque()     # (ts, visible) for baseline; changed only through the *_sample(s) methods below
+        self._hist = {}            # visible -> how many samples have it, so baseline() needn't sort every sample
+        self._ver = 0              # bumped whenever the samples change
+        self._base = (-1, None)    # (version, baseline) last computed
         self.ups_hist = deque()    # (ts, {upstream: peers}) per bucket, for upstream-shift detection
         self.shift_hits = 0        # consecutive buckets over the shift threshold
         self.bucket_min = None
@@ -46,13 +51,40 @@ class PrefixMon:
         self.bucket_withdrawals = 0
         self.last_update = 0.0
 
+    def add_sample(self, ts, v):
+        self.samples.append((ts, v))
+        self._hist[v] = self._hist.get(v, 0) + 1
+        self._ver += 1
+
+    def drop_samples_before(self, cutoff):
+        while self.samples and self.samples[0][0] < cutoff:
+            _, v = self.samples.popleft()
+            if self._hist.get(v, 0) > 1:
+                self._hist[v] -= 1
+            else:
+                self._hist.pop(v, None)
+            self._ver += 1
+
+    def clear_samples(self):
+        self.samples.clear()
+        self._hist.clear()
+        self._ver += 1
+
     def baseline(self):
-        if not self.samples:
-            return None
-        vals = sorted(v for _, v in self.samples)
-        if len(vals) < 20:
-            return float(vals[-1])
-        return float(vals[int(len(vals) * 0.95) - 1])
+        """The 95th percentile of visibility over the window (the highest reading while there are fewer than 20).
+        Kept as counts per value and cached until the samples change: replaying 90 days of history asks for it
+        several times per 30-second bucket."""
+        ver = self._ver   # (read first: a page asking while the history replay adds samples can't cache a stale value)
+        if self._base[0] != ver:
+            n, b, acc = len(self.samples), None, 0
+            rank = int(n * 0.95) if n >= 20 else n
+            for v in sorted(self._hist):
+                acc += self._hist.get(v, 0)
+                if n and acc >= rank:
+                    b = float(v)
+                    break
+            self._base = (ver, b)
+        return self._base[1]
 
     def current_baseline(self):
         """The baseline to judge visibility against. During an outage that's the healthy baseline it opened with:
@@ -64,14 +96,21 @@ class PrefixMon:
 
 
 class Engine:
-    def __init__(self, cfg, conn, restore=True):
+    def __init__(self, cfg, conn, restore=True, peering=None):
         self.cfg = cfg
         self.conn = conn
+        self.peering = peering or Peering(cfg, conn)   # which neighbours are peers (exchanges, listed peers)
+        self.xhist = {}   # (prefix, exchange) -> peer counts over the baseline window, for "exchange peers lost"
+        self.lhist = {}   # (prefix, peer asn) -> its usual reach, for "peer leak"
         self.asn = cfg.asn
         self.nets = {p: ipaddress.ip_network(p) for p in cfg.prefixes}
         self.owned = [ipaddress.ip_network(p, strict=False) for p in cfg.owned_space]
         self.mons = {p: PrefixMon(p) for p in cfg.prefixes}
         self.rib: dict[str, dict[tuple, Entry]] = {}
+        # per prefix, bumped whenever one of its paths changes (apply() is the only place that changes the RIB), so
+        # what's counted from the paths every bucket is only counted again after a change: see visible(), _rib_summary()
+        self.rib_ver: dict[str, int] = {}
+        self._vis, self._summ = {}, {}
         self.anomalies: dict[str, dict] = {}
         self.B = cfg.bucket_seconds
         self.last_bucket = None
@@ -108,16 +147,19 @@ class Engine:
                 k = detail.get("tf_key") or detail.get("ext_key")
                 self.anomalies[k] = {"id": r["id"], "zero_since": None, "sev": r["severity"]}
             elif detail.get("key"):
-                self.anomalies[detail["key"]] = {"id": r["id"], "zero_since": None, "sev": r["severity"]}
+                self.anomalies[detail["key"]] = {"id": r["id"], "zero_since": None, "sev": r["severity"],
+                                                 # exchange peers lost / peer leak: what they're judged against
+                                                 "ref": detail.get("baseline"), "thr": detail.get("threshold"),
+                                                 "peak": detail.get("reach", 0), "low": detail.get("carrying")}
 
     def seed_baseline(self, at=None):
         at = at or time.time()
         cutoff = at - self.cfg.baseline_hours * 3600
         for p, m in self.mons.items():
-            m.samples.clear()
+            m.clear_samples()
             for r in self.conn.execute(
                     "SELECT ts, visible FROM buckets WHERE prefix=? AND ts>=? AND ts<? ORDER BY ts", (p, cutoff, at)):
-                m.samples.append((r["ts"], r["visible"]))
+                m.add_sample(r["ts"], r["visible"])
 
     def last_bucket_ts(self):
         r = self.conn.execute("SELECT MAX(ts) AS t FROM buckets").fetchone()
@@ -169,7 +211,34 @@ class Engine:
         return cache[prefix]
 
     def visible(self, prefix):
-        return sum(1 for e in self.rib.get(prefix, {}).values() if e.path and e.path[-1] == self.asn)
+        ver = self.rib_ver.get(prefix, 0)   # (read first, as in PrefixMon.baseline)
+        c = self._vis.get(prefix)
+        if c is None or c[0] != ver:
+            c = self._vis[prefix] = (ver, sum(1 for e in self.rib.get(prefix, {}).values()
+                                              if e.path and e.path[-1] == self.asn))
+        return c[1]
+
+    def _rib_summary(self, prefix):
+        """For a bucket row: (chains JSON, upstreams JSON, {neighbour: RIS peers reaching you through it}). Counted
+        again only after the prefix's paths change: a replayed week has 20,160 buckets, most of them quiet."""
+        ver = self.rib_ver.get(prefix, 0)
+        c = self._summ.get(prefix)
+        if c is None or c[0] != ver:
+            chains, ups = {}, {}
+            for e in self.rib.get(prefix, {}).values():
+                if e.path and e.path[-1] == self.asn:
+                    ch = paths.chain(e.path)
+                    chains[ch] = chains.get(ch, 0) + 1
+                    u = str(paths.upstream(e.path))
+                    ups[u] = ups.get(u, 0) + 1
+            c = self._summ[prefix] = (ver, json.dumps(chains), json.dumps(ups),
+                                      {int(k): n for k, n in ups.items() if k != "None"})
+        return c[1:]
+
+    def peer_group(self, asn):
+        """Where neighbour `asn` peers with you: an exchange's name or "Private peering". None for transit or an
+        unknown neighbour (see peering.py)."""
+        return self.peering.group(asn)
 
     def current_paths(self, prefix):
         out = []
@@ -226,6 +295,8 @@ class Engine:
         if kind == "W" and not cur:
             changed = False
         table[key] = Entry(norm, ts, peer_asn if peer_asn is not None else (cur.peer_asn if cur else None))
+        if changed:
+            self.rib_ver[prefix] = self.rib_ver.get(prefix, 0) + 1
         if store and (changed or source not in ("resync",)):
             self.conn.execute(
                 "INSERT INTO updates(ts,source,collector,peer,peer_asn,prefix,kind,path,communities)"
@@ -258,14 +329,21 @@ class Engine:
 
     def _check_new_hops(self, prefix, p, ts):
         up = paths.upstream(p)
+        group = self.peer_group(up) if up is not None else None
         if up is not None and (prefix, up) not in self.seen_upstreams:
             self.seen_upstreams.add((prefix, up))
             self.conn.execute("INSERT OR IGNORE INTO seen_upstreams(prefix,asn,first_seen,last_seen) VALUES(?,?,?,?)",
                               (prefix, up, ts, ts))
-            if self.status.get("seeding") is not True and not self.cfg.expected_upstreams:
-                self._new_event("new_upstream", "warning", prefix, ts,
-                                f"New upstream AS{up} seen for {prefix}",
-                                {"asn": up, "path": p}, end_ts=ts)
+            if self.status.get("seeding") is not True:
+                if group:
+                    self._new_event("new_peer", "info", prefix, ts, f"New peer AS{up} ({group}) carries {prefix}",
+                                    {"asn": up, "exchange": group, "path": p}, end_ts=ts)
+                elif not self.cfg.expected_upstreams:
+                    self._new_event("new_upstream", "warning", prefix, ts,
+                                    f"New upstream AS{up} seen for {prefix}",
+                                    {"asn": up, "path": p}, end_ts=ts)
+        if group:
+            return   # a peer's path isn't an upstream chain
         ch = paths.chain(p, 2)  # transit -> upstream; 3 hops would fire once per peer network
         if ch and (prefix, ch) not in self.seen_chains:
             self.seen_chains.add((prefix, ch))
@@ -343,9 +421,8 @@ class Engine:
                 m.state, m.event_id, m.dip_start, m.dip_min, m.rec_start = "ok", None, None, None, None
                 m.ref_base = None
             if m.state == "ok" and m.dip_start is None and v > 0:
-                m.samples.append((now, v))
-            while m.samples and m.samples[0][0] < now - self.cfg.baseline_hours * 3600:
-                m.samples.popleft()
+                m.add_sample(now, v)
+            m.drop_samples_before(now - self.cfg.baseline_hours * 3600)
         self._detect_anomalies(now)
 
     def _anomaly_counts(self):
@@ -363,7 +440,8 @@ class Engine:
                     if org != self.asn:
                         items.append(("origin_hijack", "critical",
                                       f"{prefix} originated by AS{org} (expected AS{self.asn})"))
-                    elif exp and paths.upstream(e.path) not in exp and paths.upstream(e.path) is not None:
+                    elif (exp and paths.upstream(e.path) not in exp and paths.upstream(e.path) is not None
+                          and not self.peer_group(paths.upstream(e.path))):   # (peers have checks of their own)
                         up = paths.upstream(e.path)
                         items.append(("unexpected_upstream", "warning",
                                       f"{prefix} seen via unexpected upstream AS{up}"))
@@ -446,7 +524,7 @@ class Engine:
             eid = self._new_event(kind, sev, prefix, first, title, detail)
             self.anomalies[key] = {"id": eid, "zero_since": None, "sev": sev}
         for key, a in list(self.anomalies.items()):
-            if key in counts or key.startswith(("tf|", "reg|", "shift|")):   # managed elsewhere
+            if key in counts or key.startswith(("tf|", "reg|", "shift|", "xl|", "pl|")):   # managed elsewhere
                 continue
             if a["zero_since"] is None:
                 a["zero_since"] = now
@@ -514,6 +592,127 @@ class Engine:
         self.anomalies[key] = {"id": eid, "zero_since": None, "sev": "warning", "last_big": now, "peak": moved,
                                "before": then, "last_move": now}
 
+    def _detect_peering(self, p, m, now, v, nb):
+        """Per bucket, for one prefix (`nb`: neighbour -> RIS peers reaching you through it):
+        - exchange peers lost: at one exchange, many of the peers that normally carry the prefix stop at once;
+        - peer leak: one peer carries the prefix far beyond its own customers.
+        Warnings that open and close after the sustain time. An outage or dip of the prefix itself is alerted on
+        its own, so neither opens then."""
+        S, W = self.cfg.sustain_seconds, self.cfg.baseline_hours * 3600
+        healthy = m.state == "ok" and m.dip_start is None
+        groups = {}
+        for u, n in nb.items():
+            g = self.peer_group(u)
+            if g:
+                groups.setdefault(g, {})[u] = n
+        # exchange peers lost: compared with how many peers there normally carry it (95th percentile, like visibility).
+        # Not for private peers: each has a link of its own, so there's no one place for them to fail together.
+        xp = self.cfg.exchange_loss_pct
+        ixes = {ix["name"] for ix in self.peering.exchanges()}
+        for k in [k for k in self.anomalies if k.startswith(f"xl|{p}|") and k.split("|", 2)[2] not in ixes]:
+            self._close_event(self.anomalies.pop(k)["id"], now,   # PeeringDB doesn't list you there any more
+                              title=f"{p}: {k.split('|', 2)[2]} is no longer one of your exchanges")
+        for g in (set(groups) | {k[1] for k in self.xhist if k[0] == p}) & ixes:
+            # samples: (ts, peers) over the window; hist: how often each count occurs in it (no sorting per bucket,
+            # which mattered when replaying 90 days of history)
+            h = self.xhist.setdefault((p, g), {"samples": deque(), "hist": {}, "seen": {}, "since": None})
+            here = groups.get(g, {})
+            for u in here:
+                h["seen"][u] = now
+            cnt, key = len(here), f"xl|{p}|{g}"
+            a = self.anomalies.get(key)
+            if a:
+                ref = a.get("ref") or 0
+                a["low"] = cnt if a.get("low") is None else min(a["low"], cnt)
+                back = xp <= 0 or cnt >= ref * (1 - xp / 200)   # at most half the alert's share still missing
+                h["since"] = (h["since"] or now) if back else None
+                # closes once they've been back for 15 minutes (or the sustain time, if longer): a session that
+                # flaps is one event, not one per flap
+                if back and now - h["since"] >= max(S, XL_HOLD):
+                    self._close_event(a["id"], h["since"],
+                                      title=f"{p}: {g} peers carrying it fell to {a['low']} of {ref:.0f}")
+                    del self.anomalies[key]
+                    h["since"] = None
+                continue
+            hist = h["hist"]
+            if healthy:
+                h["samples"].append((now, cnt))
+                hist[cnt] = hist.get(cnt, 0) + 1
+            while h["samples"] and h["samples"][0][0] < now - W:
+                _, old = h["samples"].popleft()
+                hist[old] -= 1
+                if not hist[old]:
+                    del hist[old]
+            base, n = 0, len(h["samples"])   # 95th percentile, as for visibility (the highest count while few)
+            if n:
+                rank, acc = (int(n * 0.95) if n >= 20 else n), 0
+                for c in sorted(hist):
+                    acc += hist[c]
+                    if acc >= rank:
+                        base = c
+                        break
+            low = xp > 0 and healthy and base >= 3 and cnt <= base * (1 - xp / 100)
+            h["since"] = (h["since"] or now) if low else None
+            if low and now - h["since"] >= S:
+                gone = sorted(u for u, t in h["seen"].items() if u not in here and t >= now - W)
+                eid = self._new_event(
+                    "exchange_loss", "warning", p, h["since"], f"{p}: {base - cnt} of {base} {g} peers stopped carrying it",
+                    {"key": key, "exchange": g, "baseline": base, "carrying": cnt, "lost": gone[:200],
+                     "note": "Many peers at one exchange stopped carrying this prefix at the same time. That usually "
+                             "points at your port or BGP sessions there, the exchange's route servers, or the exchange "
+                             "itself. Those networks now reach you through your transit providers instead."})
+                self.anomalies[key] = {"id": eid, "zero_since": None, "sev": "warning", "ref": base, "low": cnt}
+                h["since"] = None
+        # peer leak: reach far beyond its usual (the average while it's normal: over everything seen for the first
+        # 6 hours, then a moving average over about 6 hours). Nothing is judged in the first 10 minutes of a peer, so
+        # a big peer with many customers of its own isn't taken for a leak before its usual reach is known.
+        lp, alpha = self.cfg.peer_leak_pct, min(1.0, self.B / (6 * 3600))
+        current = {u: n for grp in groups.values() for u, n in grp.items()}
+        open_ = {int(k.rsplit("|", 1)[1]) for k in self.anomalies if k.startswith(f"pl|{p}|")}
+        for u in set(current) | open_:
+            n = current.get(u, 0)
+            h = self.lhist.setdefault((p, u), {"typ": None, "obs": 0, "since": None, "peak": 0})
+            key = f"pl|{p}|{u}"
+            a = self.anomalies.get(key)
+            if a and not self.peer_group(u):   # filed as one of your transits since (or left your exchanges)
+                self._close_event(a["id"], now, title=f"{p}: AS{u} isn't counted as a peer any more")
+                del self.anomalies[key]
+                h["since"], h["peak"] = None, 0
+                continue
+            if a:
+                h["peak"] = max(h["peak"], a.get("peak") or 0, n)
+                back = lp <= 0 or n < (a.get("thr") or 0) * 0.7
+                h["since"] = (h["since"] or now) if back else None
+                if back and now - h["since"] >= S:
+                    self._close_event(a["id"], h["since"], title=f"{p}: peer AS{u} back to its usual reach "
+                                                                 f"(at most {h['peak']} RIS peers during the leak)")
+                    del self.anomalies[key]
+                    h["since"], h["peak"] = None, 0
+                continue
+            if not healthy or v <= 0:   # an outage or dip of the prefix itself: neither judged nor learned from
+                h["since"] = None
+                continue
+            typ = h["typ"] or 0
+            thr = max(lp / 100 * v, 3 * typ, 10)
+            high = lp > 0 and h["obs"] * self.B >= 600 and n >= thr
+            h["since"] = (h["since"] or now) if high else None
+            if not high:
+                h["typ"] = n if h["typ"] is None else h["typ"] + max(alpha, 1 / (h["obs"] + 1)) * (n - h["typ"])
+                h["obs"] += 1
+            elif now - h["since"] >= S:
+                where = self.peering.label(u)
+                usual = (f" (AS{u} usually reaches about {max(1, round(typ))} of them)" if typ else "")
+                eid = self._new_event(
+                    "peer_leak", "warning", p, h["since"], f"{p}: peer AS{u} ({where}) carries it to {n} of {v} RIS peers",
+                    {"key": key, "asn": u, "exchange": where, "reach": n, "usual": round(typ, 1), "visible": v,
+                     "threshold": thr,
+                     "note": f"A peer normally passes your routes only to its own customers{usual}. Carrying them to "
+                             f"this much of the internet usually means it's leaking them to its own transits or other "
+                             f"peers, which pulls your traffic through a network that isn't paid to carry it. If "
+                             f"AS{u} is in fact one of your transit providers, mark it as one (button below)."})
+                self.anomalies[key] = {"id": eid, "zero_since": None, "sev": "warning", "thr": thr, "peak": n}
+                h["since"], h["peak"] = None, n
+
     # ------------------------------------------------------------------ buckets
     def tick(self, now):
         """Close every bucket that ended at or before `now`."""
@@ -527,21 +726,17 @@ class Engine:
             t = self.last_bucket
             for p, m in self.mons.items():
                 v = self.visible(p)
-                chains, ups = {}, {}
-                for e in self.rib.get(p, {}).values():
-                    if e.path and e.path[-1] == self.asn:
-                        c = paths.chain(e.path)
-                        chains[c] = chains.get(c, 0) + 1
-                        u = str(paths.upstream(e.path))
-                        ups[u] = ups.get(u, 0) + 1
+                chains, ups, nb = self._rib_summary(p)   # nb: neighbour -> RIS peers via it
                 self.conn.execute(
                     "INSERT OR REPLACE INTO buckets(prefix,ts,visible,baseline,min_visible,chains,upstreams,updates,withdrawals)"
                     " VALUES(?,?,?,?,?,?,?,?,?)",
                     (p, t, v, m.current_baseline(), m.bucket_min if m.bucket_min is not None else v,
-                     json.dumps(chains), json.dumps(ups), m.bucket_updates, m.bucket_withdrawals))
+                     chains, ups, m.bucket_updates, m.bucket_withdrawals))
                 m.bucket_min = v
                 m.bucket_updates = m.bucket_withdrawals = 0
-                self._detect_shift(p, m, t + self.B, v, {int(k): n for k, n in ups.items() if k != "None"})
+                # peers coming and going isn't an upstream shift; they have checks of their own
+                self._detect_shift(p, m, t + self.B, v, {u: n for u, n in nb.items() if not self.peer_group(u)})
+                self._detect_peering(p, m, t + self.B, v, nb)
             self.last_bucket += self.B
             self._detect(self.last_bucket)
             closed = True
@@ -597,7 +792,7 @@ class Engine:
         for p, m in self.mons.items():
             v = self.visible(p)
             if v:
-                m.samples.append((ts, v))
+                m.add_sample(ts, v)
 
     def resync_lg(self, lg, source="resync"):
         """Reconcile the RIB against a RIPEstat looking-glass snapshot. Returns number of changes."""

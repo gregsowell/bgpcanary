@@ -14,6 +14,9 @@ prefixes = []                 # e.g. ["192.0.2.0/24", "2001:db8::/48"]
 # Your direct transit providers. Anything else adjacent to your origin raises an "unexpected_upstream"
 # warning. Leave empty to get a warning the first time a new upstream appears.
 expected_upstreams = []       # e.g. [64501, 64502]
+# Networks you peer with rather than buy transit from. Peers at the internet exchanges your ASN is on are found
+# in PeeringDB automatically; list private peers (and peers at exchanges PeeringDB doesn't know) here.
+peers = []                    # e.g. [64510, 64511]
 # Other address space you hold but don't list above (e.g. your allocations). Your ASN announcing or
 # registering route objects inside it is expected and not flagged. Large networks: list your aggregates.
 owned_space = []              # e.g. ["198.51.100.0/22"]

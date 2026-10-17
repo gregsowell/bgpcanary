@@ -6,6 +6,39 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-16
+
+### Added
+- **Exchange peers.** Networks you peer with at internet exchanges are now recognized and kept apart from your transit providers.
+  - bgpcanary looks up the exchanges your ASN is on in PeeringDB once a day, and treats their members as peers. List private peers under Settings › Monitored network › Peers. Your expected upstreams always count as transit, even at the same exchange.
+  - Peers no longer raise "unexpected upstream" warnings.
+  - The dashboard lists them per exchange under your upstreams, and the prefix table shows "+N peers at …".
+  - The connectivity tree has one **Exchanges** branch, split per exchange, with every peer shown. The tree images in alert emails do too.
+  - The upstream chains chart and table show one "Peers at …" entry per exchange.
+  - Upstream-shift detection and the transit filter check leave peers out.
+- **New alert types** (group "Exchange peering"):
+  - **Exchange peers lost** (warning): many of one exchange's peers stop carrying a prefix at once, by default half of them. That usually means your port, the exchange's route servers, or the exchange itself. A flapping session is one event: it closes once the peers have been back for 15 minutes.
+  - **Peer leak** (warning): a peer carries a prefix to a large share of the internet, by default at least 10% of RIS peers and three times its usual reach. That usually means it's leaking your routes to its own transits or peers. Each peer's usual reach is learned first, so a big peer with many customers of its own isn't flagged. Like an outage, it triggers a Route Views snapshot, ping and traceroute for the evidence.
+  - **New peer** (information).
+- **"What is this network to you?"** Event pages for unexpected or new upstreams, new peers and peer leaks have two buttons: **One of my transit providers** and **A peer**. One click files the network, and the warning closes by itself, with no restart.
+- Settings › Monitored network shows which exchanges PeeringDB lists for you, with a button to look them up again.
+
+### Changed
+- **The first start says what it's doing.** Before live monitoring begins, bgpcanary loads up to 90 days of history, and the pages now make that obvious:
+  - a banner on every page shows the progress and an estimate;
+  - the dashboard's figures are marked as replayed history;
+  - the header's status dot is amber instead of red;
+  - once the history is loaded, the dashboard switches to live data by itself.
+
+  The banner also covers connecting to RIS Live (with a hint if that takes long), restarts, and history loading for prefixes added later.
+- **Loading history is about 6× faster.** Baselines and path counts were worked out again for every 30-second step of the replay, even when nothing had changed. Now they're only redone after a change, with identical results. For two busy prefixes, 90 days of history took about 17 minutes and now take under 3. Live monitoring uses less CPU too.
+
+### Fixed
+- For a network at an exchange, the connectivity tree drew every peer as an upstream with up to 20 of its own neighbors. The tree was very tall and mostly empty, and the dashboard fetched each peer's neighbors from RIPEstat.
+- The transit filter check treated exchange peers as upstreams. It queried RIPEstat for each one, then flagged their transits for not carrying your routes, which is exactly what a peer should do.
+- Charts turned solid orange when many warnings were open at once: each open event added its shading on top of the others. Overlapping events now shade as one.
+- The docs said live monitoring starts within seconds of the first setup, with history loading in the background. On a first start it begins once the history has loaded; the docs now say so.
+
 ## [1.3.0] - 2026-10-15
 
 ### Added
@@ -173,7 +206,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/gregsowell/bgpcanary/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/gregsowell/bgpcanary/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/gregsowell/bgpcanary/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/gregsowell/bgpcanary/compare/v1.2.1...v1.2.2

@@ -20,6 +20,20 @@ check passes.
   - check that DNS points at the server.
 - **Certificate warning:** expected with the self-signed certificate. See [INSTALL.md](INSTALL.md#using-a-real-certificate).
 
+## A "Loading history" banner on every page
+
+On a first start, bgpcanary loads up to 90 days of history from RIPE RIS before live monitoring begins. The
+banner shows how far it has got and, after a minute or so, an estimate. It usually takes a few minutes; prefixes
+with a lot of routing activity take longer. Until it finishes, the dashboard shows the history as it's replayed.
+Events found in that history are marked "(backfill)" and don't send alerts.
+
+If the banner stops moving on:
+- the log lists each week as it loads (`backfill chunk 3/13: … events`) and any failed requests (`bgplay … failed`);
+- the server needs outbound HTTPS to `stat.ripe.net` for the history.
+
+If **"Connecting to RIS Live"** lasts more than a couple of minutes, the connection to `ris-live.ripe.net` isn't
+getting through: see [No data / "RIS Live disconnected"](#no-data--ris-live-disconnected).
+
 ## "Config file ... has a syntax error"
 
 `/etc/bgpcanary/config.toml` was edited and isn't valid any more. The message shows the lines around the
@@ -91,6 +105,21 @@ Then `sudo systemctl restart bgpcanary`.
 
 In front of the container, the usual cause is a proxy that doesn't pass on the browser's Host header (nginx needs
 `proxy_set_header Host $http_host;`). Fix the proxy, or set the Site URL as above.
+
+## Lots of "unexpected upstream" warnings
+
+Each one names a network seen right next to yours in BGP paths that isn't one of your expected upstreams.
+Usually it's a peer: a network you exchange routes with at an internet exchange, or over a private link.
+
+- **Peers at an exchange** are recognized automatically if your exchange connections are in PeeringDB.
+  Settings › Monitored network shows which exchanges PeeringDB lists for you. If one is missing, add your
+  connection to PeeringDB and press **Look up again now**.
+- **Private peers**, or peers at an exchange PeeringDB doesn't list, need to be added to **Peers** on the same page.
+- **Quickest:** open the warning's event page and answer **One of my transit providers** or **A peer**. The
+  warning closes by itself a minute or two later.
+
+If a network you've never dealt with shows up next to you, especially for many RIS peers, take it seriously:
+someone may be leaking or hijacking your route.
 
 ## No data / "RIS Live disconnected"
 

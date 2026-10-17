@@ -26,6 +26,7 @@
   // one color per prefix when several share one tree (up to 12 strands; more are combined into one)
   const PCOL = ["#2463eb", "#e8710a", "#12a36b", "#9b4dca", "#d23f8a", "#0f9bb5",
                 "#b8860b", "#5c6bc0", "#6d4c41", "#00796b", "#7cb342", "#455a64"];
+  const PRIVATE = "Private peering";   // the group for listed peers that aren't at one of your exchanges (peering.py)
 
   function theme() {
     return {
@@ -41,7 +42,14 @@
       this.ev = data.event || null;
       this.events = data.events || (data.event ? [data.event] : []);
       this.paths = data.paths.map(s => s.split(" ").map(Number));
-      this.rev = this.paths.map(p => p.slice().reverse()); // origin first
+      // origin first. Peers (data.exchanges: peer -> exchange) hang off one "Exchanges" branch, split per exchange:
+      // origin > "x" > "x:<n>" > peer > ... (two virtual hops; transit branches are unchanged)
+      const ex = data.exchanges || {};
+      this.xnames = [...new Set(Object.values(ex))].sort((a, b) => (a === PRIVATE) - (b === PRIVATE) || a.localeCompare(b));
+      this.rev = this.paths.map(p => {
+        const r = p.slice().reverse(), g = r.length > 1 && r[0] === data.asn ? ex[r[1]] : undefined;
+        return g === undefined ? r : [r[0], "x", "x:" + this.xnames.indexOf(g), ...r.slice(1)];
+      });
       this.U = data.updates;
       this.cur = Int32Array.from(data.init);
       this.ptr = 0;
@@ -160,16 +168,20 @@
       // collapse: keep topN children (pinned ones always), fold the rest into "others"
       const disp = new Map(), shown = new Map();
       const roots = [...all].filter(k => !k.includes(">"));
+      const isX = k => /(^|>)x(:\d+)?$/.test(k);   // the "Exchanges" node, or one exchange: always shown
       const visit = (k, level, parent) => {
-        shown.set(k, { key: k, level, asn: Number(k.split(">").pop()), parent, children: [], max: maxC.get(k) || 0 });
+        const last = k.split(">").pop();
+        const xg = last === "x" ? "all" : last.startsWith("x:") ? this.xnames[Number(last.slice(2))] : null;
+        shown.set(k, { key: k, level, asn: Number(last), xg, parent, children: [], max: maxC.get(k) || 0 });
         disp.set(k, k);
         if (parent) shown.get(parent).children.push(k);
         const ch = [...(kids.get(k) || [])].sort((a, b) => ((maxC.get(b) || 0) - (maxC.get(a) || 0)) || (pw(b) - pw(a)));
         const top = [], rest = [];
         let free = 0;
+        const cap = last.startsWith("x:") ? Math.max(topN, 40) : topN;   // an exchange's peers stay unfolded
         for (const c of ch) {
-          if (pinned.has(c)) top.push(c);
-          else if (free++ < topN) top.push(c);
+          if (pinned.has(c) || isX(c)) top.push(c);
+          else if (free++ < cap) top.push(c);
           else rest.push(c);
         }
         for (const c of top) visit(c, level + 1, k);
@@ -305,7 +317,9 @@
       const colW = (W - left - labelW) / Math.max(this.depth, 1);
       const pos = k => { const n = this.shown.get(k); return [left + n.level * colW, top + n.row * rowH + rowH / 2]; };
       // column headings, so it's clear which layer is which (e.g. vs bgp.tools' upstream list)
-      const COLS = ["You", "Your upstreams", "Their transits & peers", "Next hop out", "Further out", "Further out", "Further out"];
+      const COLS = this.xnames.length
+        ? ["You", "Upstreams · exchanges", "Their transits & peers · exchange", "Next hop out · your peers", "Further out", "Further out", "Further out"]
+        : ["You", "Your upstreams", "Their transits & peers", "Next hop out", "Further out", "Further out", "Further out"];
       ctx.font = "600 11px system-ui, sans-serif"; ctx.fillStyle = th.muted;
       for (let l = 0; l <= this.depth; l++) ctx.fillText(COLS[l].toUpperCase(), left + l * colW - (l ? 4 : 0), 68 + extra);
       ctx.strokeStyle = th.border; ctx.lineWidth = 1;
@@ -362,14 +376,18 @@
         const r = n.level === 0 ? 7 : 3 + 4 * Math.sqrt(Math.max(c, st === "lost" ? b * 0.3 : 0) / total);
         ctx.fillStyle = st === "idle" || st === "never" ? th.bg : col;
         ctx.strokeStyle = col; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath();
+        if (n.xg) ctx.rect(x - r, y - r, 2 * r, 2 * r);   // a grouping (exchanges), not a network
+        else ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
         let label;
         if (n.others) label = `+${n.others} more`;
+        else if (n.xg) label = n.xg === "all" ? "Exchanges" : n.xg;
         else {
           const nm = (this.D.names[n.asn] || "").split(/[ ,]/)[0];
           label = `AS${n.asn}${n.level === 0 && n.asn === this.D.asn ? " (you)" : nm ? " " + nm.slice(0, 14) : ""}`;
         }
-        ctx.font = (n.level <= 1 ? "600 " : "") + "12px system-ui, sans-serif";
+        ctx.font = (n.level <= 1 || n.xg ? "600 " : "") + "12px system-ui, sans-serif";
         ctx.fillStyle = st === "idle" || st === "lost" || st === "never" ? th.muted : th.text;
         const lxp = x + r + 5;
         ctx.fillText(label, lxp, y - (n.children.length ? 7 : 0));
@@ -576,11 +594,15 @@
       const b = canvas.getBoundingClientRect(), x = (e.clientX - b.left) / k, y = (e.clientY - b.top) / k;
       const h = (rp.hit || []).find(h => (h.x - x) ** 2 + (h.y - y) ** 2 <= (h.r + 3 / k) ** 2);
       if (!h) { tip.style.display = "none"; return; }
-      const nm = h.n.others ? `${h.n.others} smaller branches` : `AS${h.n.asn} ${data.names[h.n.asn] || ""}`;
+      const nm = h.n.others ? `${h.n.others} smaller branches`
+        : h.n.xg === "all" ? "Exchanges: networks that peer with you"
+        : h.n.xg ? `${h.n.xg}: peers carrying your routes (they pass them only to their own customers)`
+        : `AS${h.n.asn} ${data.names[h.n.asn] || ""}`;
       const ref = rp.baseMode === "start" ? "at window start" : "at comparison point";
       const pin = rp.pinned && rp.pinned.get(h.k);
+      const peerAt = !h.n.xg && h.n.level === 3 && /(^|>)x>x:\d+>\d+$/.test(h.k) ? (data.exchanges || {})[h.n.asn] : null;
       const role = pin && pin.of ? `\nNeighbour of AS${pin.of} in the global table${pin.power ? ` (${pin.power} RIS adjacencies)` : ""}` :
-        pin && pin.upstream ? "\nYour direct upstream" : "";
+        pin && pin.upstream ? "\nYour direct upstream" : peerAt ? `\nPeers with you (${peerAt})` : "";
       const peak = rp.maxC.get(h.k) || 0;
       const never = pin && !h.c && !h.b ? (peak ? `\nNot carrying you now (carried up to ${peak} peers earlier in this window)`
                                                 : "\nCarried none of your paths in this window") : "";

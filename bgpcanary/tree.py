@@ -88,6 +88,22 @@ def state_paths(conn, prefix, ts):
 
 
 # ---------------------------------------------------------------------- model
+def is_x(k):
+    """A tree node that groups peers rather than being a network: "x" (Exchanges) or "x:<exchange>"."""
+    a = k[-1]
+    return isinstance(a, str) and (a == "x" or a.startswith("x:"))
+
+
+def group_peers(paths, asn, group):
+    """Paths (origin last) with two virtual hops before your AS for peers, so the tree shows them on one
+    "Exchanges" branch, split per exchange: [... peer, "x:<exchange>", "x", you]. `group`: peering.Peering.group."""
+    out = []
+    for p in paths:
+        g = group(p[-2]) if len(p) >= 2 and p[-1] == asn else None
+        out.append(p[:-1] + [f"x:{g}", "x", p[-1]] if g else p)
+    return out
+
+
 class Tree:
     def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6):
         self.asn, self.depth = asn, depth
@@ -137,9 +153,10 @@ class Tree:
                 self.nodes[parent]["children"].append(k)
             ch = sorted(kids.get(k, []), key=lambda c: (-(maxc.get(c, 0)), -(self.pinned.get(c, {}).get("power", 0))))
             free, rest = 0, []
+            cap = max(topn, 40) if is_x(k) and k[-1] != "x" else topn   # an exchange's peers stay unfolded
             for c in ch:
-                if c in self.pinned or free < topn:
-                    if c not in self.pinned:
+                if c in self.pinned or is_x(c) or free < cap:
+                    if c not in self.pinned and not is_x(c):
                         free += 1
                     visit(c, level + 1, k)
                 else:
@@ -259,7 +276,9 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         x -= 14
 
     colw = (W - 24 - 230) / max(tree.depth, 1)
-    cols = ["You", "Your upstreams", "Their transits & peers", "Next hop out", "Further out", "Further out"]
+    cols = (["You", "Upstreams · exchanges", "Their transits & peers · exchange", "Next hop out · your peers",
+             "Further out", "Further out"] if any(is_x(k) for k in tree.nodes if len(k) > 1)
+            else ["You", "Your upstreams", "Their transits & peers", "Next hop out", "Further out", "Further out"])
     for lvl in range(tree.depth + 1):
         T((24 + lvl * colw - (4 if lvl else 0), 74), cols[min(lvl, len(cols) - 1)].upper(), (11, True), C["muted"])
     dr.line([(16 * S, 90 * S), ((W - 16) * S, 90 * S)], fill=C["border"], width=S)
@@ -299,17 +318,22 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         c, b = counts.get(k, 0), base.get(k, 0)
         r = 7 if n["level"] == 0 else 3 + 4 * math.sqrt(max(c, b * 0.3 if st == "lost" else 0) / total)
         hollow = st in ("idle", "never")
-        dr.ellipse([(x - r) * S, (y - r) * S, (x + r) * S, (y + r) * S], fill=C["bg"] if hollow else col,
-                   outline=col, width=max(1, int(1.5 * S)))
+        box = [(x - r) * S, (y - r) * S, (x + r) * S, (y + r) * S]
+        if len(k) > 1 and is_x(k):   # a grouping (exchanges), not a network
+            dr.rectangle(box, fill=C["bg"] if hollow else col, outline=col, width=max(1, int(1.5 * S)))
+        else:
+            dr.ellipse(box, fill=C["bg"] if hollow else col, outline=col, width=max(1, int(1.5 * S)))
         if n["others"]:
             label = f"+{n['others']} more"
+        elif len(k) > 1 and is_x(k):
+            label = "Exchanges" if k[-1] == "x" else k[-1][2:]
         else:
             a = k[-1]
             nm = (names.get(a) or "").split(" ")[0].split(",")[0][:16]
             label = f"AS{a}" + (" (you)" if n["level"] == 0 else (f" {nm}" if nm else ""))
         lx = x + r + 5
         has_kids = bool(n["children"])
-        T((lx, y - (13 if has_kids else 7)), label, (12, n["level"] <= 1),
+        T((lx, y - (13 if has_kids else 7)), label, (12, n["level"] <= 1 or (len(k) > 1 and is_x(k))),
           C["muted"] if st in ("idle", "lost", "never") else C["text"])
         cnt = ("" if n["level"] == 0 else "not carrying you" if st == "never" else f"0 (was {b})" if st == "lost"
                else f"{c} of {b}" if st == "degraded" else f"{c} (new)" if st == "new" else f"{c}" if c else "")
@@ -328,7 +352,8 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
 
 
 # ---------------------------------------------------------------------- per-event images
-TREE_KINDS = ("outage", "upstream_missing", "unexpected_upstream", "origin_hijack", "more_specific", "upstream_shift")
+TREE_KINDS = ("outage", "upstream_missing", "unexpected_upstream", "origin_hijack", "more_specific", "upstream_shift",
+              "exchange_loss", "peer_leak")
 
 
 def _monitored_parent(cfg, prefix):
@@ -341,8 +366,9 @@ def _monitored_parent(cfg, prefix):
     return max(cands)[1] if cands else None
 
 
-async def event_images(cfg, sourceapp, ev, phase, now=None):
-    """[(cid, png_bytes, caption)] for an alert email, or [] if the event has no tree to show."""
+async def event_images(cfg, sourceapp, ev, phase, now=None, peering=None):
+    """[(cid, png_bytes, caption)] for an alert email, or [] if the event has no tree to show.
+    `peering`: peering.Peering, so peers go on the tree's "Exchanges" branch."""
     if ev.get("kind") not in TREE_KINDS:
         return []
     prefix = _monitored_parent(cfg, ev.get("prefix"))
@@ -368,12 +394,14 @@ async def event_images(cfg, sourceapp, ev, phase, now=None):
         else:
             moments.append(("now", now, "Now (when this alert was sent)"))
         states = {k: await asyncio.to_thread(state_paths, conn, prefix, ts) for k, ts, _ in moments}
-        base = states["before"]
+        group = peering.group if peering else (lambda a: None)
         ups = set(cfg.expected_upstreams)
         for paths in states.values():
-            ups.update(p[-2] for p in paths if len(p) >= 2 and p[-1] == cfg.asn)
+            ups.update(p[-2] for p in paths if len(p) >= 2 and p[-1] == cfg.asn and not group(p[-2]))
+        states = {k: group_peers(v, cfg.asn, group) for k, v in states.items()}
+        base = states["before"]
         nbrs = await upstream_neighbors(sourceapp, sorted(ups))
-        asns = {a for paths in states.values() for p in paths for a in p[-4:]} | ups | \
+        asns = {a for paths in states.values() for p in paths for a in p[-6:] if isinstance(a, int)} | ups | \
                {n for lst in nbrs.values() for n, _ in lst}
         names = {}
         if asns:

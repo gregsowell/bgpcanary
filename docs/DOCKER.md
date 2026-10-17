@@ -162,7 +162,8 @@ around the per-address login limit. The per-account limits still apply. To close
    `docker exec bgpcanary cat /var/lib/bgpcanary/initial-admin-password`.
 2. Open the site, sign in as **admin** and choose a new password.
 3. Enter your ASN and prefixes. bgpcanary restarts itself inside the container to apply them; the container keeps
-   running. The dashboard appears a few seconds later, and 90 days of history load in the background.
+   running. It then loads 90 days of history, usually in a few minutes, with a progress bar on every page. Live
+   monitoring starts when that's done, and the dashboard switches over by itself.
 
 Then carry on with the [next steps in INSTALL.md](INSTALL.md#first-login): alert channels, users and RIPE Atlas.
 

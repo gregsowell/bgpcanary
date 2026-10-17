@@ -18,7 +18,8 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import REPO, __version__, alerts, atlas, auth, config, db, evidence, paths, registry, ripe, transit, tree, updates
+from . import (REPO, __version__, alerts, atlas, auth, config, db, evidence, paths, peering, registry, ripe, transit,
+               tree, updates)
 from .service import Service
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -56,7 +57,8 @@ def fmt_dur(s):
 templates.env.filters["dur"] = fmt_dur
 templates.env.filters["fromjson"] = lambda s: json.loads(s) if s else {}
 templates.env.filters["mask_urls"] = alerts.mask_urls   # older alert-log rows may still hold a webhook URL
-templates.env.globals.update(container=CONTAINER, config_path=config.DEFAULT_PATH, image="ghcr.io/" + REPO.lower())
+templates.env.globals.update(container=CONTAINER, config_path=config.DEFAULT_PATH, image="ghcr.io/" + REPO.lower(),
+                             repo=REPO)
 
 
 @asynccontextmanager
@@ -300,13 +302,49 @@ def names(conn, asns):
     return {r["asn"]: r["name"] for r in conn.execute(f"SELECT asn,name FROM asn_names WHERE asn IN ({q})", asns)}
 
 
+def loading():
+    """What the "not live yet" banner shows (templates/_loading.html), or None once bgpcanary is live: the first
+    start's history load with its progress and an estimate, finishing it, connecting to RIS Live, starting up, or
+    a prefix added later whose history loads while live monitoring runs."""
+    st, now = svc.engine.status, time.time()
+    h, phase = st.get("history"), st.get("phase") or ""
+    if h:
+        frac, at = h["done"] / h["total"], h["upto"]
+        if h["for"] == "all" and svc.engine.historical and svc.engine.last_bucket:   # where the replay has got to
+            at = min(max(svc.engine.last_bucket, h["start"]), h["end"])
+            frac = max(frac, (at - h["start"]) / max(h["end"] - h["start"], 1))
+        elapsed = now - h["started"]
+        eta = elapsed * (1 - frac) / frac if frac >= 0.03 and elapsed >= 30 else None
+        return {"what": "history" if h["for"] == "all" else "prefix", "prefix": h["for"],
+                "week": min(h["done"] + 1, h["total"]), "weeks": h["total"], "pct": int(frac * 100),
+                "days": round((h["end"] - h["start"]) / 86400), "at": at,
+                "eta_min": None if eta is None else max(1, round(eta / 60))}
+    if phase == "finishing the history load":
+        return {"what": "finishing"}
+    if phase == "connecting to RIS Live":
+        return {"what": "connecting", "slow": now - (st.get("connecting_since") or now) > 120}
+    if phase == "starting":
+        return {"what": "starting"}
+    return None
+
+
 def render(request, name, **ctx):
     role = getattr(request.state, "role", None)
     ctx.update(request=request, cfg=cfg, user=request.session.get("user"), status=svc.engine.status,
                now=time.time(), role=role, is_admin=role == "admin", version=__version__,
                update=updates.state(svc.aconn) if role == "admin" else None,
+               loading=loading() if request.session.get("user") else None,
                outage=bool(request.session.get("user")) and any(m.state == "down" for m in svc.engine.mons.values()))
     return templates.TemplateResponse(request, name, ctx)
+
+
+@app.get("/api/status")
+async def api_status(request: Request):
+    """For the "not live yet" banner, which polls this: its new content, or html=null once bgpcanary is live."""
+    user(request)
+    ld = loading()
+    return {"phase": svc.engine.status.get("phase"), "what": ld["what"] if ld else None,
+            "html": templates.env.get_template("_loading.html").render(ld=ld) if ld else None}
 
 
 # ---------------------------------------------------------------------- auth
@@ -397,6 +435,43 @@ async def logout(request: Request):
 
 
 # ---------------------------------------------------------------------- pages
+def split_neighbours(counts):
+    """{neighbour: RIS peers reaching you through it} -> (transits and unknown neighbours, most paths first;
+    peers by exchange: [{"name", "peers": [(asn, paths), ...], "paths"}], exchanges by name, private peering last)."""
+    ups, groups = [], {}
+    for u, n in sorted(counts.items(), key=lambda x: -x[1]):
+        if u is None:
+            continue
+        g = svc.engine.peer_group(u)
+        if g:
+            groups.setdefault(g, []).append((u, n))
+        else:
+            ups.append((u, n))
+    return ups, [{"name": g, "peers": lst, "paths": sum(n for _, n in lst)}
+                 for g, lst in sorted(groups.items(), key=lambda kv: (kv[0] == peering.PRIVATE, kv[0].lower()))]
+
+
+def group_chains(d):
+    """{chain: paths}, with every chain that ends at a peer folded into one "peers:<exchange>" entry."""
+    out = {}
+    for c, n in d.items():
+        last = c.rsplit(" ", 1)[-1]
+        g = svc.engine.peer_group(int(last)) if last.isdigit() else None
+        k = f"peers:{g}" if g else c
+        out[k] = out.get(k, 0) + n
+    return out
+
+
+def chain_label(c, nm):
+    if c.startswith("peers:"):
+        return "Private peers" if c[6:] == peering.PRIVATE else f"Peers at {c[6:]}"
+    return " → ".join(f"AS{x} {nm.get(int(x), '')}".strip() for x in c.split())
+
+
+def chain_asns(chains):
+    return {int(x) for c in chains if not c.startswith("peers:") for x in c.split()}
+
+
 def prefix_summary(conn):
     out = []
     eng = svc.engine
@@ -414,10 +489,11 @@ def prefix_summary(conn):
         state = "down" if m.state == "down" else ("degraded" if m.dip_start else "ok")
         if not eng.status.get("phase", "").startswith("live"):
             state = "starting"
+        neighbours, peers = split_neighbours(ups)
         out.append({"prefix": p, "visible": v, "baseline": base, "state": state,
                     "pct": (100 * v / base) if base else None,
-                    "chains": sorted(chains.items(), key=lambda x: -x[1]),
-                    "upstreams": sorted(ups.items(), key=lambda x: -x[1]),
+                    "chains": sorted(group_chains(chains).items(), key=lambda x: -x[1]),
+                    "upstreams": neighbours, "peers": peers,
                     "missing": [u for u in cfg.expected_upstreams if u not in ups]})
     return out
 
@@ -442,8 +518,9 @@ async def dashboard(request: Request):
     summ = [s for s in summ_all if s["prefix"] in sel]
     asns = {cfg.asn, *cfg.expected_upstreams}
     for s in summ:
-        for c, _ in s["chains"]:
-            asns.update(int(x) for x in c.split())
+        asns |= chain_asns(c for c, _ in s["chains"])
+        asns.update(u for u, _ in s["upstreams"])
+        asns.update(u for g in s["peers"] for u, _ in g["peers"])
     # events for the selected prefixes plus network-wide ones (no prefix); all of them when everything is selected
     where = "" if every else f"(prefix IN ({','.join('?' * len(sel))}) OR prefix IS NULL) AND "
     args = [] if every else sel
@@ -476,18 +553,19 @@ async def dashboard(request: Request):
     conn.close()
     # combined view (several prefixes): problems first, then lowest visibility
     summ.sort(key=lambda s: (STATE_ORDER.get(s["state"], 9), s["pct"] if s["pct"] is not None else 999))
-    chains, ups = {}, {}
+    chains, nb = {}, {}
     for s in summ:
         for c, n in s["chains"]:
             t = chains.setdefault(c, [0, 0])
             t[0] += n
             t[1] += 1
-        for u, n in s["upstreams"]:
-            ups[u] = ups.get(u, 0) + n
+        for u, n in s["upstreams"] + [x for g in s["peers"] for x in g["peers"]]:
+            nb[u] = nb.get(u, 0) + n
+    c_ups, c_peers = split_neighbours(nb)
     combined = {
         "chains": sorted(((c, n, k) for c, (n, k) in chains.items()), key=lambda x: -x[1]),
-        "upstreams": sorted(ups.items(), key=lambda x: -x[1]),
-        "missing": [u for u in cfg.expected_upstreams if u not in ups],
+        "upstreams": c_ups, "peers": c_peers,
+        "missing": [u for u in cfg.expected_upstreams if u not in nb],
         "paths": sum(s["visible"] for s in summ),
         "ok": sum(1 for s in summ if s["state"] == "ok"),
         "worst": min((s for s in summ if s["pct"] is not None), key=lambda s: s["pct"], default=None),
@@ -517,7 +595,7 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
                     "baseline": grp[-1]["baseline"],
                     "updates": sum(r["updates"] or 0 for r in grp),
                     "withdrawals": sum(r["withdrawals"] or 0 for r in grp),
-                    "chains": json.loads(low["chains"] or "{}")})
+                    "chains": group_chains(json.loads(low["chains"] or "{}"))})
     # insert null points across data gaps so charts show a break instead of a flat line
     step_s = step * cfg.bucket_seconds
     gapped = []
@@ -535,10 +613,7 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
     events = [dict(r) for r in conn.execute(
         "SELECT id,kind,severity,start_ts,end_ts,title FROM events WHERE (prefix=? OR prefix IS NULL) "
         "AND start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts", (prefix, end, time.time(), start))]
-    asns = set()
-    for c in top:
-        asns.update(int(x) for x in c.split())
-    nm = names(conn, asns)
+    nm = names(conn, chain_asns(top))
     conn.close()
     chain_series = {c: [None if p.get("gap") else p["chains"].get(c, 0) for p in pts] for c in top}
     chain_series["other"] = [None if p.get("gap") else sum(v for k, v in p["chains"].items() if k not in top)
@@ -547,7 +622,7 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
             "ts": [p["ts"] for p in pts], "visible": [p["visible"] for p in pts], "min": [p["min"] for p in pts],
             "baseline": [p["baseline"] for p in pts], "updates": [p["updates"] for p in pts],
             "withdrawals": [p["withdrawals"] for p in pts], "chains": chain_series,
-            "chain_labels": {c: " → ".join(f"AS{x} {nm.get(int(x), '')}".strip() for x in c.split()) for c in top},
+            "chain_labels": {c: chain_label(c, nm) for c in top},
             "events": events, "threshold_pct": cfg.outage_threshold_pct}
 
 
@@ -587,7 +662,7 @@ async def api_series_multi(request: Request, prefixes: str, start: float = None,
         wd[i] = (wd[i] or 0) + (r["withdrawals"] or 0)
     chains = [dict() for _ in range(nslots)]
     for (p, i), r in lowest_row.items():
-        for c, n in json.loads(r["chains"] or "{}").items():
+        for c, n in group_chains(json.loads(r["chains"] or "{}")).items():
             chains[i][c] = chains[i].get(c, 0) + n
     has = [upd[i] is not None for i in range(nslots)]   # slots with any data; the rest are gaps
     # the prefixes that dipped lowest get their own line; any beyond MAX_STRANDS share a "lowest of the others" line
@@ -614,12 +689,12 @@ async def api_series_multi(request: Request, prefixes: str, start: float = None,
         + ("" if every else f"(prefix IN ({q}) OR prefix IS NULL) AND ")
         + "start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts",
         (*([] if every else want), end, time.time(), start))]
-    nm = names(conn, {int(x) for c in top for x in c.split()})
+    nm = names(conn, chain_asns(top))
     conn.close()
     return {"prefixes": want, "start": start, "end": end, "step": slot_s,
             "ts": [start + i * slot_s for i in range(nslots)], "lines": lines, "others": others,
             "updates": upd, "withdrawals": wd, "chains": chain_series,
-            "chain_labels": {c: " → ".join(f"AS{x} {nm.get(int(x), '')}".strip() for x in c.split()) for c in top},
+            "chain_labels": {c: chain_label(c, nm) for c in top},
             "events": events, "threshold_pct": cfg.outage_threshold_pct}
 
 
@@ -656,8 +731,20 @@ async def events_page(request: Request, kind: str = "", severity: str = "", info
                   info=info, kinds=kinds)
 
 
+def event_neighbour(ev):
+    """The neighbour an event is about (unexpected / new upstream, new peer, peer leak), for the page's
+    "what is it to you?" buttons; None for other events."""
+    d = json.loads(ev["detail"] or "{}")
+    if ev["kind"] in ("new_upstream", "new_peer", "peer_leak"):
+        return d.get("asn")
+    if ev["kind"] == "unexpected_upstream":
+        a = (d.get("key") or "").rsplit("|", 1)[-1]
+        return int(a) if a.isdigit() else None
+    return None
+
+
 @app.get("/events/{eid}", response_class=HTMLResponse)
-async def event_page(request: Request, eid: int):
+async def event_page(request: Request, eid: int, msg: str = ""):
     user(request)
     conn = rconn()
     ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
@@ -678,10 +765,18 @@ async def event_page(request: Request, eid: int):
     base = conn.execute("SELECT target FROM atlas_msm WHERE purpose='baseline' AND created<=? "
                         "AND (stopped IS NULL OR stopped>=?) ORDER BY created DESC LIMIT 1", (end, ev["start_ts"])).fetchone()
     ev_data = await _evidence(conn, ev)
+    nb = event_neighbour(ev)
+    nb_info = None
+    if nb:
+        nb_info = {"asn": nb, "name": names(conn, [nb]).get(nb, ""),
+                   "role": "transit" if nb in cfg.expected_upstreams else "listed peer" if nb in cfg.peers
+                   else "exchange peer" if svc.engine.peer_group(nb) else None,
+                   "exchange": svc.peering.label(nb)}
     conn.close()
     return render(request, "event.html", ev=ev, ups=ups, probes=probes, snaps=snaps, alerts=alerts_sent,
                   win_start=ev["start_ts"] - pad, win_end=end + pad, atlas_msms=atlas_msms,
-                  atlas_target=base["target"] if base else None, evd=ev_data, compare_all=",".join(svc.atlas.targets()))
+                  atlas_target=base["target"] if base else None, evd=ev_data, compare_all=",".join(svc.atlas.targets()),
+                  nb=nb_info, msg=msg)
 
 
 async def _evidence(conn, ev):
@@ -763,12 +858,18 @@ _NBR_CACHE = {}   # upstream asn -> (fetched_ts, [{"asn", "power"}])
 async def upstream_neighbors(data):
     """Attach each direct upstream's own neighbours (its transits/peers, i.e. ASes seen to its left in the
     global table, from RIPEstat asn-neighbours) so the tree can show who is NOT carrying our prefix.
-    Upstreams = configured expected upstreams + any AS seen adjacent to our origin in the window."""
-    ups = set(cfg.expected_upstreams)
+    Upstreams = configured expected upstreams + any AS seen adjacent to our origin in the window, except peers:
+    those go under the tree's "Exchanges" branch instead (data["exchanges"]: peer -> exchange)."""
+    ups, exchanges = set(cfg.expected_upstreams), {}
     for p in data["paths"]:
         a = [int(x) for x in p.split()]
         if len(a) >= 2 and a[-1] == cfg.asn:
-            ups.add(a[-2])
+            g = svc.engine.peer_group(a[-2])
+            if g:
+                exchanges[str(a[-2])] = g
+            else:
+                ups.add(a[-2])
+    data["exchanges"] = exchanges
     out = {}
     for u in sorted(ups):
         hit = _NBR_CACHE.get(u)
@@ -786,7 +887,7 @@ async def upstream_neighbors(data):
     data["upstreams"] = sorted(ups)
     data["upstream_neighbors"] = out
     # names for neighbours that never appear in our own paths
-    want = {n["asn"] for lst in out.values() for n in lst} | ups
+    want = {n["asn"] for lst in out.values() for n in lst} | ups | {int(a) for a in exchanges}
     missing = [a for a in want if str(a) not in data["names"]]
     if missing:
         known = names(svc.aconn, missing)
@@ -1219,13 +1320,14 @@ def _parse_list(text):
 async def monitor_settings_page(request: Request, msg: str = "", err: int = 0):
     admin(request)
     return render(request, "monitor_settings.html", msg=msg, err=err, m=config.monitor_settings_dict(cfg),
-                  from_db=db.kv_get(svc.aconn, config.MONITOR_KV) is not None, first_run=not cfg.configured)
+                  from_db=db.kv_get(svc.aconn, config.MONITOR_KV) is not None, first_run=not cfg.configured,
+                  px=svc.peering.status())
 
 
 @app.post("/settings/monitor")
 async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes: str = Form(""),
                                 expected_upstreams: str = Form(""), probe_targets: str = Form(""),
-                                owned_space: str = Form(""), site_name: str = Form("")):
+                                owned_space: str = Form(""), site_name: str = Form(""), peers: str = Form("")):
     import ipaddress
     who = admin(request)
 
@@ -1260,6 +1362,15 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
         if not y.isdigit():
             return back(f"Upstream {x} isn't an ASN")
         ups.append(int(y))
+    prs = []
+    for x in _parse_list(peers):
+        y = x.upper().removeprefix("AS")
+        if not y.isdigit():
+            return back(f"Peer {x} isn't an ASN")
+        if int(y) in ups:
+            return back(f"AS{y} is listed both as an upstream and as a peer: keep it in one of them")
+        if int(y) not in prs:
+            prs.append(int(y))
     owned = []
     for x in _parse_list(owned_space):
         try:
@@ -1272,7 +1383,7 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
             targets.append(config.plain_ip(x))
         except ValueError:
             return back(f"Probe target {x} isn't an IP address")
-    data = {"asn": int(a), "prefixes": pfx, "expected_upstreams": ups, "owned_space": owned,
+    data = {"asn": int(a), "prefixes": pfx, "expected_upstreams": ups, "peers": prs, "owned_space": owned,
             "probe_targets": targets, "site_name": site_name.strip() or f"BGP Canary · AS{a}"}
     old = config.monitor_settings_dict(cfg)
     db.kv_set(svc.aconn, config.MONITOR_KV, data)
@@ -1281,6 +1392,46 @@ async def monitor_settings_save(request: Request, asn: str = Form(""), prefixes:
     log.info("user %s changed monitoring settings: %s (added %s)", who, data, added)
     _restart_soon()
     return RedirectResponse("/restarting?" + urlencode({"since": STARTED, "added": ",".join(added)}),
+                            status_code=303)
+
+
+@app.post("/settings/exchanges/refresh")
+async def exchanges_refresh(request: Request):
+    """Look your exchanges up in PeeringDB now, instead of waiting for the daily check. Applies at once."""
+    who = admin(request)
+    before = svc.peering.data.get("fetched")
+    await svc.peering.refresh(force=True)
+    st = svc.peering.status()
+    log.info("user %s looked up the exchange list in PeeringDB", who)
+    if st["fetched"] is None or st["fetched"] == before and st["error"]:
+        msg = f"Couldn't reach PeeringDB ({st['error'] or 'no answer'}). The previous list is kept."
+        return RedirectResponse(f"/settings/monitor?err=1&msg={quote(msg)}", status_code=303)
+    n = len(st["exchanges"])
+    msg = (f"PeeringDB lists AS{cfg.asn} at {n} exchange{'s' if n != 1 else ''}." if n else
+           f"PeeringDB lists no exchanges for AS{cfg.asn}.")
+    return RedirectResponse(f"/settings/monitor?msg={quote(msg)}", status_code=303)
+
+
+@app.post("/settings/neighbor")
+async def neighbor_role(request: Request, asn: int = Form(...), role: str = Form(...), back: str = Form("/events")):
+    """One click from an event page: file a neighbour as one of your transits (an expected upstream) or as a peer.
+    Takes effect at once, without a restart: detection reads these lists on every check, so the warning it was
+    about closes by itself after the sustain time."""
+    who = admin(request)
+    if role not in ("transit", "peer") or not 0 < asn < 2 ** 32:
+        raise HTTPException(400, "Bad request")
+    back = back if re.fullmatch(r"/events/\d+", back) else "/events"
+    data = dict(db.kv_get(svc.aconn, config.MONITOR_KV) or config.monitor_settings_dict(cfg))
+    ups = [u for u in data.get("expected_upstreams", cfg.expected_upstreams) if u != asn]
+    prs = [u for u in data.get("peers", cfg.peers) if u != asn]
+    (ups if role == "transit" else prs).append(asn)
+    data.update(expected_upstreams=ups, peers=prs)
+    db.kv_set(svc.aconn, config.MONITOR_KV, data)
+    svc.aconn.commit()
+    cfg.expected_upstreams, cfg.peers = list(ups), list(prs)
+    log.info("user %s marked AS%s as %s", who, asn, "a transit (expected upstream)" if role == "transit" else "a peer")
+    msg = (f"AS{asn} is now one of your expected upstreams." if role == "transit" else f"AS{asn} is now listed as a peer.")
+    return RedirectResponse(f"{back}?msg={quote(msg + ' Its warning closes by itself within a minute or two.')}",
                             status_code=303)
 
 

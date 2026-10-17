@@ -2,6 +2,19 @@
 {% block title %}Event {{ ev.id }} · {{ cfg.site_name }}{% endblock %}
 {% block content %}
 <h1><span class="badge b-{{ ev.severity }}">{{ ev.severity }}</span> {{ ev.title }}</h1>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+{% if nb and is_admin %}
+<div class="panel">
+  <h2>What is AS{{ nb.asn }}{% if nb.name %} <span class="muted" style="font-weight:400">{{ nb.name }}</span>{% endif %} to you?</h2>
+  <p class="muted" style="margin-top:0">{% if nb.role == 'transit' %}It's one of your expected upstreams (transit).{% elif nb.role == 'exchange peer' %}It's a peer at {{ nb.exchange }} (from PeeringDB).{% elif nb.role == 'listed peer' %}It's in your list of peers.{% else %}bgpcanary doesn't know: it's neither one of your expected upstreams nor a peer.{% endif %}
+    Tell bgpcanary what it is and it's handled that way from now on: transits are expected to carry you to the whole internet, peers only to their own customers. You can change this later under Settings › <a href="/settings/monitor">Monitored network</a>.</p>
+  <form method="post" action="/settings/neighbor" class="toolbar" style="margin:0">
+    <input type="hidden" name="asn" value="{{ nb.asn }}"><input type="hidden" name="back" value="/events/{{ ev.id }}">
+    {% if nb.role != 'transit' %}<button type="submit" name="role" value="transit">One of my transit providers</button>{% endif %}
+    {% if not nb.role %}<button type="submit" name="role" value="peer">A peer</button>{% endif %}
+  </form>
+</div>
+{% endif %}
 <div class="grid g2 g-main">
   <div class="panel">
     <dl class="kv">

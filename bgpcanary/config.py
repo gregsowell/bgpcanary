@@ -35,6 +35,7 @@ class Config:
     asn: int
     prefixes: list
     expected_upstreams: list
+    peers: list         # neighbours that are peers, not transit (private peering; exchange members are found in PeeringDB)
     owned_space: list
     max_unmonitored: int
     db_path: str
@@ -50,6 +51,8 @@ class Config:
     shift_window_seconds: int
     shift_quiet_seconds: int
     loss_alert_pct: float
+    exchange_loss_pct: float
+    peer_leak_pct: float
     baseline_hours: int
     reconcile_minutes: int
     stale_days: int
@@ -115,7 +118,7 @@ MONITOR_KV = "monitor_settings"
 
 def monitor_settings_dict(cfg) -> dict:
     return {"asn": cfg.asn, "prefixes": list(cfg.prefixes), "expected_upstreams": list(cfg.expected_upstreams),
-            "owned_space": list(cfg.owned_space), "probe_targets": list(cfg.probe_targets),
+            "peers": list(cfg.peers), "owned_space": list(cfg.owned_space), "probe_targets": list(cfg.probe_targets),
             "site_name": cfg.site_name}
 
 
@@ -125,6 +128,7 @@ def apply_monitor_settings(cfg, data: dict | None) -> None:
     cfg.asn = int(data.get("asn", cfg.asn) or 0)
     cfg.prefixes = _valid_prefixes(data.get("prefixes", cfg.prefixes), "prefix")
     cfg.expected_upstreams = [int(x) for x in data.get("expected_upstreams", cfg.expected_upstreams)]
+    cfg.peers = [int(x) for x in data.get("peers", cfg.peers)]
     cfg.owned_space = _valid_prefixes(data.get("owned_space", cfg.owned_space), "owned prefix")
     cfg.probe_targets = list(data.get("probe_targets", cfg.probe_targets))
     cfg.site_name = data.get("site_name") or cfg.site_name
@@ -161,6 +165,16 @@ TUNING = [
                                              "own addresses (baseline targets, shift checks) gets no reply at all, a "
                                              "critical 'reachability loss' event opens, whatever BGP shows. Needs RIPE "
                                              "Atlas. 0 = off."}),
+    ("exchange_loss_pct", "Exchange peering", "Warn when this share of an exchange's peers stops carrying a prefix (%)",
+     "float", {"min": 0, "max": 100, "help": "Compared with how many peers at that exchange normally carry it (exchanges "
+                                             "with at least 3). Many peers dropping at once usually means a problem "
+                                             "with your port, the exchange's route servers or the exchange itself. It "
+                                             "must last for the sustain time. 0 = off."}),
+    ("peer_leak_pct", "Exchange peering", "Warn when one peer carries a prefix to this share of RIS peers (%)",
+     "float", {"min": 0, "max": 100, "help": "A peer normally passes your routes only to its own customers, a few RIS "
+                                             "peers. Carrying them much further (at least this share of everyone, and "
+                                             "three times its usual reach) usually means it's leaking them to its "
+                                             "transits or other peers. 0 = off."}),
     ("baseline_hours", "Outage detection", "Baseline window (hours)", "int",
      {"min": 1, "max": 168, "help": "The baseline is the 95th percentile of visibility over this window."}),
     ("bucket_seconds", "Outage detection", "Chart and detection bucket size (seconds)", "choice",
@@ -293,6 +307,15 @@ ALERT_TYPES = [
      "desc": "A new upstream appears (only used when no expected upstreams are configured).", "tuning": []},
     {"kind": "chain_change", "group": "Upstreams", "name": "New upstream chain", "sev": ("info",),
      "desc": "A transit → upstream combination appears for the first time (e.g. a new carrier picks you up).",
+     "tuning": []},
+    {"kind": "exchange_loss", "group": "Exchange peering", "name": "Exchange peers lost", "sev": ("warning",),
+     "desc": "Many of the peers at one of your internet exchanges stop carrying a prefix at once: usually your port, "
+             "the exchange's route servers or the exchange itself.", "tuning": ["exchange_loss_pct"]},
+    {"kind": "peer_leak", "group": "Exchange peering", "name": "Peer leak", "sev": ("warning",),
+     "desc": "One of your peers carries a prefix to a large share of the internet, which usually means it's leaking "
+             "your routes to its own transits or peers.", "tuning": ["peer_leak_pct"]},
+    {"kind": "new_peer", "group": "Exchange peering", "name": "New peer", "sev": ("info",),
+     "desc": "A network at one of your exchanges (or listed as a peer) starts carrying a prefix for the first time.",
      "tuning": []},
     {"kind": "origin_hijack", "group": "Hijacks and leaks", "name": "Origin hijack", "sev": ("critical",),
      "desc": "Another AS originates one of your prefixes.", "tuning": []},
@@ -450,6 +473,7 @@ def _load(path):
         asn=int(mon.get("asn") or 0),
         prefixes=[normalize_prefix(x) for x in mon.get("prefixes", [])],
         expected_upstreams=[int(x) for x in mon.get("expected_upstreams", [])],
+        peers=[int(x) for x in mon.get("peers", [])],
         owned_space=[normalize_prefix(x) for x in mon.get("owned_space", [])],
         max_unmonitored=int(mon.get("max_unmonitored", 200)),
         db_path=raw.get("storage", {}).get("db_path", "/var/lib/bgpcanary/bgpcanary.db"),
@@ -466,6 +490,8 @@ def _load(path):
         shift_window_seconds=int(det.get("shift_window_seconds", 300)),
         shift_quiet_seconds=int(det.get("shift_quiet_seconds", 300)),
         loss_alert_pct=float(det.get("loss_alert_pct", 50)),
+        exchange_loss_pct=float(det.get("exchange_loss_pct", 50)),
+        peer_leak_pct=float(det.get("peer_leak_pct", 10)),
         baseline_hours=int(det.get("baseline_hours", 24)),
         reconcile_minutes=int(det.get("reconcile_minutes", 5)),
         stale_days=int(det.get("stale_days", 14)),

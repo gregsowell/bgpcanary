@@ -81,7 +81,14 @@ form.inline { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wr
 .login label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
 .login input { width: 100%; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-.dot.ok { background: var(--ok); } .dot.bad { background: var(--crit); }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--crit); } .dot.warn { background: var(--warn); }
+.loading-banner { margin-bottom: 16px; padding: 12px 14px; border: 1px solid var(--border); border-left: 4px solid var(--warn);
+  border-radius: 8px; background: var(--warn-bg); font-size: 14px; }
+.loading-banner .bar { margin: 8px 0; max-width: 640px; }
+.loading-banner.lb-info { border-left-color: var(--info); background: var(--info-bg); }
+.peer-group { font-size: 14px; margin-top: 2px; }
+.peer-group summary { cursor: pointer; }
+.peer-group > div { font-size: 12px; margin: 4px 0 2px 4px; }
 dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
 dl.kv dt { color: var(--muted); }
 dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

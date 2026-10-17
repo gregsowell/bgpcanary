@@ -6,6 +6,8 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-16
+
 ### Fixed
 - **The visibility history took far more disk space than it should.** Every 30-second bucket stored the prefix's upstream chains and upstream counts in full again, though they change in only about 1 bucket in 100. For a prefix that RIS peers reach through hundreds of different paths, that came to about 6 KB per bucket: 8–9 GB per prefix per year, where the docs said 0.5–1 GB. They're now stored only when they change (and once a day), and the charts and event pages show exactly what they did. For two such prefixes, 90 days of history now takes 0.1 GB instead of 4.3 GB, and the dashboard's charts load 4 to 14 times faster: 0.2 s instead of 1 s for the last 24 hours, and 5 s instead of a minute for both prefixes over 90 days.
   - History stored by older versions is compacted once, in the background, after the update: a few minutes for a big database. Then the database file is rewritten to give the space back, which pauses bgpcanary for a few seconds. That needs free disk space of about twice the compacted database; without it, the log says so and it's tried again at every start. See [UPGRADING.md](docs/UPGRADING.md#updating-to-132).
@@ -213,7 +215,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/gregsowell/bgpcanary/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/gregsowell/bgpcanary/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/gregsowell/bgpcanary/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/gregsowell/bgpcanary/compare/v1.2.2...v1.2.3

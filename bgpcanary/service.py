@@ -382,7 +382,8 @@ class Service:
         short = [(d, n) for d, n in need.values() if shutil.disk_usage(d).free < n]
         if short:
             log.warning("the database file has %.0f MB of free space inside it, but there isn't room to compact it "
-                        "now: that needs %s. Free some disk space; it's tried again at the next start.", free / 1e6,
+                        "now: that needs %s. Make room there, or set SQLITE_TMPDIR to a directory on a disk that has "
+                        "it; it's tried again at the next start.", free / 1e6,
                         ", ".join(f"{n / 1e6:.0f} MB free in {d}" for d, n in short))
             return False
         log.info("compacting the database file (%.0f MB, %.0f MB of it free space); bgpcanary pauses meanwhile",

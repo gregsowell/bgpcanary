@@ -171,9 +171,10 @@ docker logs bgpcanary 2>&1 | grep -i compact       # in a container
 ```
 
 - **"there isn't room to compact it now":** rewriting the file needs free disk space of about twice the size of
-  the compacted database, part of it in the temporary directory (`/tmp` in a container, which is in memory). Free the
-  space the message names, then restart bgpcanary (`sudo systemctl restart bgpcanary`, or `docker restart
-  bgpcanary`). It tries again at every start until it's done.
+  the compacted database, part of it in the temporary directory. Free the space the message names, then restart
+  bgpcanary (`sudo systemctl restart bgpcanary`, or `docker restart bgpcanary`). It tries again at every start until
+  it's done. In a container the temporary directory is `/tmp`, which is in memory: if that's what's short, set
+  `SQLITE_TMPDIR=/var/lib/bgpcanary` in the container's environment to use the data volume instead.
 - **The backups taken before the update** keep their old size. Once you're happy with the new version, delete the
   older ones from `/var/backups/bgpcanary` (or `backups/` in the container's volume).
 

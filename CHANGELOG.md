@@ -6,6 +6,16 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-10-20
+
+### Fixed
+- **A false outage when RIPE's looking glass gave incomplete answers.** Every few minutes bgpcanary checks its routes against RIPEstat's looking glass, which catches withdrawals RIS Live missed. On 2026-10-20 the looking glass listed almost none of a prefix's routes for about an hour, with current timestamps. bgpcanary withdrew them all and reported an outage while the prefix was fine. When the looking glass recovered, its data was older than those withdrawals, so the routes never came back, and routes RIS Live announced again were withdrawn again at the next check. Now:
+  - one looking-glass answer can withdraw at most a tenth of a prefix's routes (or 10). An answer missing more is treated as incomplete, logged, and nothing is withdrawn from it. Real withdrawals arrive through RIS Live as they happen;
+  - a route the looking glass withdrew comes back as soon as it lists the route again, even from older data.
+
+  On an older version, `sudo systemctl restart bgpcanary` (or `docker restart bgpcanary`) clears such a false outage: at startup the routes are rebuilt from RIS's own data.
+- An event that cleared through data stamped earlier than its start (such as a looking-glass answer older than the outage) was recorded as ending before it began, with a negative duration. It now ends no earlier than it started.
+
 ## [1.3.2] - 2026-10-16
 
 ### Fixed
@@ -215,7 +225,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/gregsowell/bgpcanary/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/gregsowell/bgpcanary/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/gregsowell/bgpcanary/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/gregsowell/bgpcanary/compare/v1.2.3...v1.3.0

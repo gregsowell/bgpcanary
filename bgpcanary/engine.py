@@ -19,6 +19,9 @@ from .peering import Peering
 
 log = logging.getLogger("bgpcanary.engine")
 XL_HOLD = 900   # "exchange peers lost" closes once the peers have been back this long (s)
+# One looking-glass answer may withdraw at most this many of a prefix's routes, or this share of them if more: an
+# answer missing more than that is taken to be incomplete (see Engine.resync_lg)
+LG_MAX_WITHDRAW, LG_MAX_WITHDRAW_SHARE = 10, 0.1
 
 
 
@@ -123,6 +126,7 @@ class Engine:
         self.status = {"phase": "starting", "ws_connected": False, "last_msg": None,
                        "msgs": 0, "last_resync": None, "resync_changes": None, "backfill": None}
         self.lg_peers = set()   # (prefix, collector, peer) ever present in a looking-glass snapshot
+        self.lg_withdrawn = set()   # ...that the looking-glass resync withdrew, and nothing else has updated since
         self._load_seen()
         if restore:
             self._restore_open_events()
@@ -271,7 +275,9 @@ class Engine:
         return eid
 
     def _close_event(self, eid, end_ts, **fields):
-        sets = ["end_ts=?"]
+        # (never before it started: a recovery seen through data stamped earlier, such as a looking-glass answer
+        # older than the event, would otherwise give it a negative duration)
+        sets = ["end_ts=MAX(?, start_ts)"]
         vals = [end_ts]
         for k, v in fields.items():
             sets.append(f"{k}=?")
@@ -298,6 +304,8 @@ class Engine:
         table[key] = Entry(norm, ts, peer_asn if peer_asn is not None else (cur.peer_asn if cur else None))
         if changed:
             self.rib_ver[prefix] = self.rib_ver.get(prefix, 0) + 1
+        if self.lg_withdrawn and source != "resync":   # newer news than the looking glass's own withdrawal
+            self.lg_withdrawn.discard((prefix, collector, peer))
         if store and (changed or source not in ("resync",)):
             self.conn.execute(
                 "INSERT INTO updates(ts,source,collector,peer,peer_asn,prefix,kind,path,communities)"
@@ -802,7 +810,11 @@ class Engine:
                 m.add_sample(ts, v)
 
     def resync_lg(self, lg, source="resync"):
-        """Reconcile the RIB against a RIPEstat looking-glass snapshot. Returns number of changes."""
+        """Reconcile the RIB against a RIPEstat looking-glass snapshot. Returns number of changes.
+        The looking glass is a cross-check: RIS Live reports changes as they happen. Its answers can be wrong (on
+        2026-10-20 it listed almost none of a prefix's routes for an hour, with current timestamps, then fell back
+        to older data), so it never withdraws routes wholesale (see LG_MAX_WITHDRAW), and a route it withdrew
+        comes back as soon as it lists the route again, even from data older than that withdrawal."""
         latest = _parse_ts(lg.get("latest_time") or lg.get("query_time"))
         prefix = lg["resource"] if "/" in str(lg.get("resource", "")) else None
         target = {}
@@ -814,31 +826,47 @@ class Engine:
         changes = 0
         self.lg_peers_before = set(self.lg_peers)
         self.lg_peers.update(target.keys())
-        for (pref, coll, peer), (asp, comm, _) in target.items():
+        for key, (asp, comm, _) in target.items():
+            pref, coll, peer = key
             norm = paths.parse_str(asp)
             e = self.rib.get(pref, {}).get((coll, peer))
-            if e is None or (e.path != norm and e.ts < latest):
+            back = e is not None and not e.path and key in self.lg_withdrawn   # withdrawn by the looking glass itself
+            if e is None or (e.path != norm and (e.ts < latest or back)):
                 peer_asn = norm[0] if norm else None
-                if self.apply(latest, coll, peer, peer_asn, pref, "A", norm, comm, source=source):
+                if self.apply(max(latest, e.ts) if back else latest, coll, peer, peer_asn, pref, "A", norm, comm,
+                              source=source):
                     changes += 1
+                self.lg_withdrawn.discard(key)
         stale_before = latest - self.cfg.stale_days * 86400
         self.stale_removed = getattr(self, "stale_removed", 0)
         for pref in [prefix] if prefix else list(self.rib):
-            for (coll, peer), e in list(self.rib.get(pref, {}).items()):
+            table = self.rib.get(pref, {})
+            gone, stale = [], []
+            for (coll, peer), e in list(table.items()):
                 if not e.path or (pref, coll, peer) in target or e.ts >= latest:
                     continue
                 if (pref, coll, peer) in self.lg_peers_before:
-                    # the looking glass used to show this route and no longer does: withdrawn
-                    if self.apply(latest, coll, peer, e.peer_asn, pref, "W", None, source=source):
-                        changes += 1
+                    gone.append((coll, peer, e))   # the looking glass used to show this route and no longer does
                 elif self.cfg.stale_days > 0 and e.ts < stale_before:
-                    # not refreshed for weeks and not confirmed by the looking glass: a stale ("zombie") entry
-                    # left over from a missed withdrawal - drop it so it doesn't skew counts and the tree
-                    if self.apply(e.ts + 1, coll, peer, e.peer_asn, pref, "W", None, source="stale"):
-                        changes += 1
-                        self.stale_removed += 1
-                        log.info("dropped stale route %s via %s/%s (last update %s): %s", pref, coll, peer,
-                                 time.strftime("%Y-%m-%d", time.gmtime(e.ts)), " ".join(map(str, e.path)))
+                    stale.append((coll, peer, e))   # not refreshed for weeks and never confirmed by it: see below
+            held = sum(1 for e in table.values() if e.path)
+            if len(gone) + len(stale) > max(LG_MAX_WITHDRAW, held * LG_MAX_WITHDRAW_SHARE):
+                log.warning("looking glass lists only %d of the %d routes held for %s: an incomplete answer, so "
+                            "nothing is withdrawn from it (RIS Live reports real withdrawals as they happen)",
+                            sum(1 for k in target if k[0] == pref), held, pref)
+                continue
+            for coll, peer, e in gone:
+                if self.apply(latest, coll, peer, e.peer_asn, pref, "W", None, source=source):
+                    changes += 1
+                    self.lg_withdrawn.add((pref, coll, peer))
+            for coll, peer, e in stale:
+                # a stale ("zombie") entry left over from a missed withdrawal: drop it so it doesn't skew counts
+                # and the tree
+                if self.apply(e.ts + 1, coll, peer, e.peer_asn, pref, "W", None, source="stale"):
+                    changes += 1
+                    self.stale_removed += 1
+                    log.info("dropped stale route %s via %s/%s (last update %s): %s", pref, coll, peer,
+                             time.strftime("%Y-%m-%d", time.gmtime(e.ts)), " ".join(map(str, e.path)))
         self.conn.commit()
         return changes
 

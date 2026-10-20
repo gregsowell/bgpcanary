@@ -131,6 +131,20 @@ someone may be leaking or hijacking your route.
 
 - Short disconnects are normal. bgpcanary reconnects on its own and fills the gap from RIPE's archive a few hours later.
 
+## An outage that isn't real
+
+If bgpcanary reports your prefix down or nearly invisible but your network is reachable (RIPE Atlas, your own
+tests), compare with RIPE's own view:
+
+```bash
+curl -s "https://stat.ripe.net/data/looking-glass/data.json?resource=192.0.2.0/24" | grep -o '"peer":' | wc -l
+```
+
+That counts the RIS peers that have a route to it right now. If it's far more than bgpcanary shows, its view
+has drifted from RIPE's. Restart it (`sudo systemctl restart bgpcanary`, or `docker restart bgpcanary`): at startup
+the routes are rebuilt from RIS's own data. Before 1.3.3, a looking glass that gave incomplete answers could cause
+this; the log then shows `looking-glass resync: 300 changes` or similar while nothing was wrong.
+
 ## Route Views shows errors or "rate-limited"
 
 - Port 23 (telnet) outbound to `*.routeviews.org` must be allowed.

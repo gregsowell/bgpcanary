@@ -1,7 +1,8 @@
 """Server-side connectivity-tree images (PNG) for alert emails.
 
 Same model as the dashboard tree (static/replay.js): your AS at the root, your upstreams, each upstream's
-own transits/peers (always shown, so "not carrying you" is visible), then the next hop out. Each image
+own transits/peers (always shown, so "not carrying you" is visible, and for a month after one stops being
+seen next to it at all, "no longer peered"), then the next hop out. Each image
 shows one moment; colours compare it with a reference moment (normally the healthiest point before the
 event).
 """
@@ -25,7 +26,15 @@ C = {"bg": (255, 255, 255), "text": (27, 31, 36), "muted": (95, 107, 122), "bord
 FONT_DIRS = ["/usr/share/fonts/dejavu-sans-fonts", "/usr/share/fonts/dejavu", "/usr/share/fonts/truetype/dejavu",
              "/usr/share/fonts/TTF"]
 _fonts = {}
-_NBR = {}   # upstream -> (ts, [(asn, power)])
+_NBR = {}   # upstream -> (ts, [(asn, power)] worth showing, {every neighbour RIPEstat listed})
+# Each upstream's neighbours are remembered, so one it stops being seen next to (a transit it lost, a session gone)
+# stays on the tree as "no longer peered" for GONE_DAYS instead of vanishing. Recorded through HISTORY: the service's
+# writer connection, which it sets (None in a process without one: nothing is recorded then).
+NBR_KV = "upstream_neighbours"   # upstream -> {neighbour: {"first", "last", "peak", "peak_at"}} (RIPEstat data times)
+NBR_DONE_KV = "upstream_neighbours_backfilled"   # upstreams whose past month has been looked up (backfill_neighbors)
+GONE_DAYS = 30
+GONE_MIN_PEAK = 20   # ...unless it was only seen on one day with fewer RIS adjacencies than this
+HISTORY = None
 # A big upstream has thousands of neighbours (Hurricane Electric: 8000+), which made trees too tall to draw.
 # Keep MAX_NEIGHBORS of them, major transit networks first (RIPEstat no longer reports a size per neighbour);
 # the rest still appear in trees when they carry your routes, just not as always-shown branches.
@@ -62,23 +71,92 @@ def font(size, bold=False):
 
 
 # ---------------------------------------------------------------------- data
+def _day(s, default):
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "")).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return default
+
+
+def _left(d):
+    return [(n["asn"], n.get("power", 0)) for n in d.get("neighbours", []) if n.get("type") in ("left", "uncertain")]
+
+
+def remember_neighbors(conn, u, shown, at):
+    """Record that RIPEstat showed `shown` [(asn, power)] next to upstream `u` in its data of `at`; forget what
+    hasn't been seen for GONE_DAYS."""
+    hist = db.kv_get(conn, NBR_KV, {}) or {}
+    h = hist.setdefault(str(u), {})
+    for a, power in shown:
+        e = h.setdefault(str(a), {"first": at, "last": at, "peak": 0, "peak_at": at})
+        e["first"], e["last"] = min(e["first"], at), max(e["last"], at)
+        if (power or 0) > e["peak"]:
+            e["peak"], e["peak_at"] = power or 0, at
+    for a in [a for a, e in h.items() if e["last"] < time.time() - GONE_DAYS * 86400]:
+        del h[a]
+    db.kv_set(conn, NBR_KV, hist)
+    conn.commit()
+
+
 async def upstream_neighbors(sourceapp, upstreams):
-    """{upstream: [(asn, power)]} - each upstream's own transits/peers (left neighbours), cached 6 h."""
+    """{upstream: [(asn, power)]} - each upstream's own transits/peers (left neighbours), cached 6 h. Each fetch is
+    also recorded in the neighbour history (see gone_neighbors)."""
     out = {}
     for u in upstreams:
         hit = _NBR.get(u)
         if not hit or time.time() - hit[0] > 6 * 3600:
             try:
                 d = await ripe.stat("asn-neighbours", sourceapp, resource=f"AS{u}")
-                lst = [(n["asn"], n.get("power", 0)) for n in d.get("neighbours", [])
-                       if n.get("type") in ("left", "uncertain")]
-                hit = (time.time(), top_neighbors(lst, key=lambda x: x[0]))
+                lst = _left(d)
+                hit = (time.time(), top_neighbors(lst, key=lambda x: x[0]), {a for a, _ in lst})
                 _NBR[u] = hit
+                if HISTORY is not None and lst:
+                    remember_neighbors(HISTORY, u, hit[1], _day(d.get("query_endtime"), time.time()))
             except Exception as ex:
                 log.warning("asn-neighbours AS%s: %s", u, ex)
-                hit = hit or (0, [])
+                hit = hit or (0, [], set())
         out[u] = hit[1]
     return out
+
+
+async def backfill_neighbors(sourceapp, u, days=(30, 21, 14, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)):
+    """Once per upstream: RIPEstat's asn-neighbours for some days of the past month (it keeps them by day), so a
+    neighbour lost recently shows as "no longer peered" straight away. (Kept apart from the history itself, which
+    a tree opened in the meantime may already have started.)"""
+    done = (db.kv_get(HISTORY, NBR_DONE_KV, []) or []) if HISTORY is not None else None
+    if done is None or u in done:
+        return
+    for n in days:
+        at = (time.time() // 86400 - n) * 86400
+        day = time.strftime("%Y-%m-%dT00:00:00", time.gmtime(at))
+        try:
+            d = await ripe.stat("asn-neighbours", sourceapp, resource=f"AS{u}", starttime=day, endtime=day)
+        except Exception as ex:
+            log.warning("asn-neighbours AS%s on %s: %s", u, day[:10], ex)
+            continue
+        lst = _left(d)
+        if lst:
+            remember_neighbors(HISTORY, u, top_neighbors(lst, key=lambda x: x[0]), at)
+        await asyncio.sleep(1)
+    db.kv_set(HISTORY, NBR_DONE_KV, sorted(set(done) | {u}))
+    HISTORY.commit()
+    log.info("neighbour history of AS%s loaded for the past %d days", u, max(days))
+
+
+def gone_neighbors(conn, u):
+    """[(asn, info)]: neighbours of upstream `u` seen in the last GONE_DAYS that RIPEstat's latest answer doesn't
+    list at all, most recently seen first. [] until there is an answer (an empty one included: that says more
+    about RIPEstat than about the upstream)."""
+    hit = _NBR.get(u)
+    if not hit or not hit[2]:
+        return []
+    h = (db.kv_get(conn, NBR_KV, {}) or {}).get(str(u), {})
+    cutoff = time.time() - GONE_DAYS * 86400
+    # (not a link seen on one day only, and small: RIS sees short-lived adjacencies all the time)
+    gone = [(int(a), e) for a, e in h.items()
+            if int(a) not in hit[2] and e["last"] >= cutoff and (e["last"] > e["first"] or e["peak"] >= GONE_MIN_PEAK)]
+    return sorted(gone, key=lambda x: -x[1]["last"])
 
 
 def state_paths(conn, prefix, ts):
@@ -105,7 +183,7 @@ def group_peers(paths, asn, group):
 
 
 class Tree:
-    def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6):
+    def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6, gone=None):
         self.asn, self.depth = asn, depth
         root = (asn,)
         kids, maxc = {}, {}
@@ -142,6 +220,11 @@ class Tree:
                     nk = (asn, u, n)
                     add(uk, nk)
                     self.pinned[nk] = {"of": u, "power": power}
+                for n, info in (gone or {}).get(u, []):   # "no longer peered" (gone_neighbors)
+                    nk = (asn, u, n)
+                    if nk not in self.pinned:
+                        add(uk, nk)
+                        self.pinned[nk] = {"of": u, "gone": info}
         self.maxc = maxc
         # collapse: pinned children always shown, otherwise top-N by peak count, the rest folded
         self.nodes, self.disp = {}, {}
@@ -265,7 +348,7 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
     T((16, 52), f"{vis}/{total} RIS peers can see the prefix ({pct}%)", (13, True), pcol)
     # legend
     lg = [("carrying", C["accent"], None), ("lost >50%", C["warn"], None), ("dropped", C["crit"], (5, 4)),
-          ("new", C["ok"], None), ("not carrying you", C["crit"], (2, 3))]
+          ("new", C["ok"], None), ("not carrying you", C["crit"], (2, 3)), ("no longer peered", C["muted"], (1, 3))]
     x = W - 16
     for label, col, dash in reversed(lg):
         w = dr.textlength(label, font=font(11 * S)) / S
@@ -286,6 +369,8 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
 
     def state(k):
         c, b = counts.get(k, 0), base.get(k, 0)
+        if not c and tree.pinned.get(k, {}).get("gone"):
+            return "gone", C["muted"]
         if c and b:
             return ("degraded", C["warn"]) if c < b * 0.5 else ("live", C["accent"])
         if b and not c:
@@ -307,6 +392,8 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
             width, dash = max(S, wof(b) // 2), (5 * S, 4 * S)
         elif st == "never":
             width, dash, col = int(1.4 * S), (2 * S, 3 * S), _blend(col, 0.6)
+        elif st == "gone":
+            width, dash, col = int(1.4 * S), (1 * S, 3 * S), _blend(col, 0.5)
         elif st == "idle":
             width, dash = S, None
         else:
@@ -317,7 +404,7 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         st, col = state(k)
         c, b = counts.get(k, 0), base.get(k, 0)
         r = 7 if n["level"] == 0 else 3 + 4 * math.sqrt(max(c, b * 0.3 if st == "lost" else 0) / total)
-        hollow = st in ("idle", "never")
+        hollow = st in ("idle", "never", "gone")
         box = [(x - r) * S, (y - r) * S, (x + r) * S, (y + r) * S]
         if len(k) > 1 and is_x(k):   # a grouping (exchanges), not a network
             dr.rectangle(box, fill=C["bg"] if hollow else col, outline=col, width=max(1, int(1.5 * S)))
@@ -334,8 +421,9 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         lx = x + r + 5
         has_kids = bool(n["children"])
         T((lx, y - (13 if has_kids else 7)), label, (12, n["level"] <= 1 or (len(k) > 1 and is_x(k))),
-          C["muted"] if st in ("idle", "lost", "never") else C["text"])
-        cnt = ("" if n["level"] == 0 else "not carrying you" if st == "never" else f"0 (was {b})" if st == "lost"
+          C["muted"] if st in ("idle", "lost", "never", "gone") else C["text"])
+        cnt = ("" if n["level"] == 0 else "not carrying you" if st == "never" else "no longer peered" if st == "gone"
+               else f"0 (was {b})" if st == "lost"
                else f"{c} of {b}" if st == "degraded" else f"{c} (new)" if st == "new" else f"{c}" if c else "")
         if cnt:
             ccol = C["crit"] if st in ("lost", "never") else C["warn"] if st == "degraded" else \
@@ -401,14 +489,15 @@ async def event_images(cfg, sourceapp, ev, phase, now=None, peering=None):
         states = {k: group_peers(v, cfg.asn, group) for k, v in states.items()}
         base = states["before"]
         nbrs = await upstream_neighbors(sourceapp, sorted(ups))
+        gone = {u: gone_neighbors(conn, u) for u in ups}
         asns = {a for paths in states.values() for p in paths for a in p[-6:] if isinstance(a, int)} | ups | \
-               {n for lst in nbrs.values() for n, _ in lst}
+               {n for lst in nbrs.values() for n, _ in lst} | {n for lst in gone.values() for n, _ in lst}
         names = {}
         if asns:
             q = ",".join("?" * len(asns))
             names = {r["asn"]: r["name"] for r in conn.execute(f"SELECT asn, name FROM asn_names WHERE asn IN ({q})",
                                                                 list(asns))}
-        tree = Tree(cfg.asn, list(states.values()), sorted(ups), nbrs)
+        tree = Tree(cfg.asn, list(states.values()), sorted(ups), nbrs, gone=gone)
         total = max(tree.visible(p) for p in states.values())
         out = []
         for key, ts, label in moments:

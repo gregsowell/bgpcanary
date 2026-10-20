@@ -15,6 +15,27 @@
   </form>
 </div>
 {% endif %}
+{% set cf = (ev.detail|fromjson).confirm %}
+{% if cf %}
+{# an outage checked against Route Views / Atlas / the control prefixes when it opened (Service._confirm_outage) #}
+<div class="panel">
+  <h2>Checked against independent sources
+    {% if cf.verdict == 'contradicted' %}<span class="badge b-warning">not confirmed: probably RIPE's data</span>
+    {% elif cf.verdict == 'confirmed' %}<span class="badge b-critical">confirmed</span>
+    {% else %}<span class="badge b-info">couldn't tell</span>{% endif %}</h2>
+  <p style="margin-top:0">{{ cf.why[:1]|upper }}{{ cf.why[1:] }}. <span class="muted">Checked <time data-ts="{{ cf.at }}" data-sec="1"></time>.</span></p>
+  {% if cf.route_views and cf.route_views.servers %}
+  <div class="scroll"><table>
+    <tr><th>Route Views collector</th><th class="right">Paths from AS{{ cfg.asn }} now</th><th class="right">Usually</th></tr>
+    {% for s in cf.route_views.servers %}
+    <tr><td>{{ s.server }}</td>{% if s.error %}<td colspan="2" class="muted">no answer: {{ s.error }}</td>{% else %}<td class="right">{{ s.paths }}</td><td class="right">{{ s.usual if s.usual is not none else '—' }}</td>{% endif %}</tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+  {% if cf.atlas %}<p>RIPE Atlas: {{ cf.atlas.replied }} of {{ cf.atlas.probes }} probes got a reply from {{ cf.atlas.target }} (<time data-ts="{{ cf.atlas.ts }}"></time>).</p>{% endif %}
+  {% if cf.controls %}<p class="muted" style="margin-bottom:0">Control prefixes in RIS then: {% for c in cf.controls %}{{ c.prefix }} {{ c.visible }}{% if c.baseline %} of ~{{ '%.0f'|format(c.baseline) }}{% endif %} peers{% if c.down %} <span class="badge b-warning">lost</span>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+</div>
+{% endif %}
 <div class="grid g2 g-main">
   <div class="panel">
     <dl class="kv">

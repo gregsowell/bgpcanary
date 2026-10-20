@@ -1,0 +1,31 @@
+{# The dashboard's "Data sources" panel: how RIPE RIS, its looking glass, the control prefixes and Route Views look
+   right now. `h` comes from sanity.SourceHealth.state(). #}
+{% set rv_ok = h.route_views.servers|selectattr('ok')|list %}
+<div class="panel" id="data-sources" style="margin-top:16px">
+  <h2>Data sources {% if h.ok %}<span class="badge b-ok">OK</span>{% else %}<span class="badge b-warning">RIPE's data looks unreliable</span>{% endif %}</h2>
+  {% if not h.ok %}<p style="margin-top:0">{{ h.reasons|join('; ') }}.</p>{% endif %}
+  {% if h.notes %}<p class="muted" style="margin-top:0">{{ h.notes|join('; ') }}.</p>{% endif %}
+  <div class="scroll"><table>
+    <tr><th>Source</th><th>Now</th></tr>
+    <tr><td><span class="dot {{ 'bad' if not h.ris_live.connected else 'warn' if h.ris_live.drops >= 6 else 'ok' }}"></span> RIS Live <span class="muted">· RIPE's live BGP feed</span></td>
+      <td>{% if h.ris_live.connected %}connected{% else %}disconnected{% if h.ris_live.down_for %} for {{ h.ris_live.down_for|dur }}{% endif %}{% endif %}
+        · {{ h.ris_live.drops }} drop{{ 's' if h.ris_live.drops != 1 }} in the last hour{% if h.ris_live.last_msg %} · last message <time data-ts="{{ h.ris_live.last_msg }}" data-sec="1"></time>{% endif %}</td></tr>
+    {% for x in h.lg %}
+    {% set doubt = x.last_incomplete and now - x.last_incomplete < 1800 %}
+    <tr><td><span class="dot {{ 'warn' if doubt or x.behind > 5400 else 'ok' }}"></span> RIPE looking glass · {{ x.prefix }}{% if x.control %} <span class="muted">(control)</span>{% endif %}</td>
+      <td>its data is {{ x.behind|dur }} old · lists {{ x.listed }} of the {{ x.held }} routes held{% if x.last_incomplete %} · last incomplete answer (ignored) <time data-ts="{{ x.last_incomplete }}"></time>{% endif %}</td></tr>
+    {% endfor %}
+    {% for c in h.controls %}
+    <tr><td><span class="dot {{ 'bad' if c.down else 'ok' }}"></span> Control prefix {{ c.prefix }} <span class="muted">· another network's</span></td>
+      <td>{% if c.baseline %}seen by {{ c.visible }} of ~{{ '%.0f'|format(c.baseline) }} RIS peers ({{ '%.0f'|format(c.pct) }}%){% else %}{{ c.visible }} RIS peers; learning its normal level{% endif %}</td></tr>
+    {% else %}
+    <tr><td><span class="dot"></span> Control prefixes</td><td class="muted">off (Settings › Detection &amp; data sources)</td></tr>
+    {% endfor %}
+    <tr><td><span class="dot {{ 'ok' if rv_ok else 'warn' }}"></span> Route Views <span class="muted">· independent collectors</span></td>
+      <td>{% if not h.route_views.configured %}none configured, so outages can't be checked against them{% else %}{{ rv_ok|length }} of {{ h.route_views.configured }} collector{{ 's' if h.route_views.configured != 1 }} answered in the last day{% if h.route_views.blocked %} · daily limit used up: {{ h.route_views.blocked|join(', ') }}{% endif %}
+        · {{ 'outages are checked against them' if h.confirm_outages else 'outage check off' }}{% endif %}</td></tr>
+  </table></div>
+  <p class="muted" style="font-size:12px;margin-bottom:0">An outage seen in RIS is checked against Route Views (and RIPE Atlas, if set up) before it's
+    reported as critical. If they still see the prefix, or RIS lost sight of the control prefixes too, it's reported as a
+    problem with RIPE's data instead.</p>
+</div>

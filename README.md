@@ -20,9 +20,10 @@ networks.
 - **Live visibility:** how many of RIPE RIS's ~330 peers see each prefix, in 30-second steps, with 90 days of history loaded on day one.
 - **One dashboard for all your prefixes:** a combined view by default (a status table with problems first, one visibility line per prefix, combined upstream chains), or pick one or a few prefixes to see just those.
 - **Connectivity tree:**
-  - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't.
+  - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't, and for a month, which networks your upstreams are no longer peered with.
   - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
 - **Internet exchanges:** peers at your exchanges are recognized automatically from PeeringDB, and kept apart from your transit providers. They get one Exchanges branch in the tree and no false "unexpected upstream" warnings, and you're alerted when many of an exchange's peers drop at once or a peer leaks your routes.
+- **Doesn't cry wolf over RIPE's data:** an outage seen in RIS is checked against Route Views (and RIPE Atlas) before it's reported as critical, and control prefixes of other networks show when RIPE's data is at fault. A data-sources panel shows how each source looks.
 - **Detection and alerts** (email, Slack, Microsoft Teams or any webhook), each type switchable with its own thresholds:
   - outages and brief dips;
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;

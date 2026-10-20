@@ -63,6 +63,13 @@ function hideSupport() {
      data-reload="{{ '1' if request.url.path == '/' and loading.what != 'prefix' else '' }}">
   {% with ld = loading %}{% include "_loading.html" %}{% endwith %}
 </div>
+{% elif health and not health.ok %}
+{# RIPE's data looks unreliable (sanity.SourceHealth) #}
+<div class="loading-banner" id="health-banner">
+  <strong>RIPE's data looks unreliable right now</strong>
+  <div>{{ health.reasons|join('; ') }}. Outages are checked against Route Views before they're reported as critical,
+    and alerts about routes going missing say they may not be real. <a href="/#data-sources">Data sources</a></div>
+</div>
 {% endif %}
 {% block content %}{% endblock %}
 </main>

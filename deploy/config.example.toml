@@ -56,6 +56,9 @@ registry_minutes = 60
 covering_ignore = []
 # Ignore covering announcements shorter than this (0.0.0.0/0 default routes leaked into RIS feeds, etc.)
 covering_min_length = 8
+# Other networks' prefixes, watched like yours: if RIS loses most of them at the same moment as yours,
+# it's a problem with RIPE's data, not your network. [] = off.
+control_prefixes = ["1.1.1.0/24", "8.8.8.0/24"]
 
 [routeviews]
 # First server is also used for ping/traceroute (route-views.routeviews.org allows both)
@@ -71,6 +74,8 @@ probe_minutes = 360                         # routine ping + traceroute (first c
 probe_on_event = true                       # query immediately when an outage/hijack/etc. opens or closes
 followup_change_pct = 10                    # ...and re-query during it only on a major change: visibility
                                             # moving >= this % of normal, or an upstream path appearing/vanishing
+confirm_outages = true                      # check a RIS outage against Route Views (and Atlas)
+                                            # before alerting it as critical
 
 [alerts]
 min_severity = "warning"     # info | warning | critical

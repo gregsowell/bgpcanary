@@ -160,6 +160,13 @@
             addEdge(uk, nk);
             pinned.set(nk, { power: n.power, of: u });
           }
+          // neighbours it had in the last month and no longer has at all: "no longer peered"
+          for (const n of (this.D.upstream_gone || {})[u] || []) {
+            const nk = `${uk}>${n.asn}`;
+            if (pinned.has(nk)) continue;
+            addEdge(uk, nk);
+            pinned.set(nk, { of: u, gone: n });
+          }
         }
       }
       this.pinned = pinned;
@@ -300,8 +307,8 @@
       }
       // legend
       const lg = this.pp
-        ? [["one strand per prefix", th.accent, []], ["prefix missing on this branch", th.warn, [4, 3]], ["not carrying you", th.crit, [2, 3]], ["idle", th.border, []]]
-        : [["carrying routes", th.accent, []], ["lost >50%", th.warn, []], ["dropped", th.crit, [5, 4]], ["new", th.ok, []], ["not carrying you", th.crit, [2, 3]], ["idle", th.border, []]];
+        ? [["one strand per prefix", th.accent, []], ["prefix missing on this branch", th.warn, [4, 3]], ["not carrying you", th.crit, [2, 3]], ["no longer peered", th.muted, [1, 3]], ["idle", th.border, []]]
+        : [["carrying routes", th.accent, []], ["lost >50%", th.warn, []], ["dropped", th.crit, [5, 4]], ["new", th.ok, []], ["not carrying you", th.crit, [2, 3]], ["no longer peered", th.muted, [1, 3]], ["idle", th.border, []]];
       let lx = W - 16;
       ctx.font = "12px system-ui, sans-serif";
       for (let i = lg.length - 1; i >= 0; i--) {
@@ -326,6 +333,7 @@
       ctx.beginPath(); ctx.moveTo(16, 77 + extra); ctx.lineTo(W - 16, 77 + extra); ctx.stroke();
       const stateOf = k => {
         const c = counts.get(k) || 0, b = this.base.get(k) || 0;
+        if (!c && this.pinned && (this.pinned.get(k) || {}).gone) return ["gone", th.muted];
         if (c > 0 && b > 0) return c < b * 0.5 ? ["degraded", th.warn] : ["live", th.accent];
         if (c === 0 && b > 0) return ["lost", th.crit];
         if (c > 0 && b === 0) return ["new", th.ok];
@@ -358,10 +366,10 @@
         const [st, col] = stateOf(k);
         const c = counts.get(k) || 0, b = this.base.get(k) || 0;
         ctx.strokeStyle = col;
-        ctx.globalAlpha = st === "idle" ? 0.7 : st === "never" ? 0.6 : 1;
+        ctx.globalAlpha = st === "idle" ? 0.7 : st === "never" || st === "gone" ? 0.6 : 1;
         ctx.lineWidth = st === "lost" ? Math.max(1.5, wOf(b) * 0.5) : wOf(c);
-        if (st === "never") ctx.lineWidth = 1.4;
-        ctx.setLineDash(st === "lost" ? [5, 4] : st === "never" ? [2, 3] : []);
+        if (st === "never" || st === "gone") ctx.lineWidth = 1.4;
+        ctx.setLineDash(st === "lost" ? [5, 4] : st === "never" ? [2, 3] : st === "gone" ? [1, 3] : []);
         ctx.beginPath(); ctx.moveTo(x0, y0);
         const mx = (x0 + x1) / 2;
         ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1); ctx.stroke();
@@ -374,7 +382,7 @@
         const c = counts.get(k) || 0, b = this.base.get(k) || 0;
         if (this.pp && c > 0) [st, col] = partial(k) ? ["partial", th.warn] : ["live", th.accent];
         const r = n.level === 0 ? 7 : 3 + 4 * Math.sqrt(Math.max(c, st === "lost" ? b * 0.3 : 0) / total);
-        ctx.fillStyle = st === "idle" || st === "never" ? th.bg : col;
+        ctx.fillStyle = st === "idle" || st === "never" || st === "gone" ? th.bg : col;
         ctx.strokeStyle = col; ctx.lineWidth = 1.5;
         ctx.beginPath();
         if (n.xg) ctx.rect(x - r, y - r, 2 * r, 2 * r);   // a grouping (exchanges), not a network
@@ -388,7 +396,7 @@
           label = `AS${n.asn}${n.level === 0 && n.asn === this.D.asn ? " (you)" : nm ? " " + nm.slice(0, 14) : ""}`;
         }
         ctx.font = (n.level <= 1 || n.xg ? "600 " : "") + "12px system-ui, sans-serif";
-        ctx.fillStyle = st === "idle" || st === "lost" || st === "never" ? th.muted : th.text;
+        ctx.fillStyle = st === "idle" || st === "lost" || st === "never" || st === "gone" ? th.muted : th.text;
         const lxp = x + r + 5;
         ctx.fillText(label, lxp, y - (n.children.length ? 7 : 0));
         const lw = ctx.measureText(label).width;
@@ -407,7 +415,7 @@
           continue;
         }
         ctx.fillStyle = st === "lost" || st === "never" ? th.crit : st === "degraded" ? th.warn : st === "new" ? th.ok : th.muted;
-        const cnt = n.level === 0 ? "" : st === "never" ? "not carrying you" : st === "lost" ? `0 (was ${b})` : st === "degraded" ? `${c} of ${b}` :
+        const cnt = n.level === 0 ? "" : st === "never" ? "not carrying you" : st === "gone" ? "no longer peered" : st === "lost" ? `0 (was ${b})` : st === "degraded" ? `${c} of ${b}` :
           st === "new" ? `${c} (new)` : `${c}`;
         if (cnt) ctx.fillText(cnt, n.children.length ? lxp : lxp + lw + 6, n.children.length ? y + 7 : y);
         this.hit.push({ x, y, r: Math.max(r, 6), k, n, c, b });
@@ -601,7 +609,11 @@
       const ref = rp.baseMode === "start" ? "at window start" : "at comparison point";
       const pin = rp.pinned && rp.pinned.get(h.k);
       const peerAt = !h.n.xg && h.n.level === 3 && /(^|>)x>x:\d+>\d+$/.test(h.k) ? (data.exchanges || {})[h.n.asn] : null;
-      const role = pin && pin.of ? `\nNeighbour of AS${pin.of} in the global table${pin.power ? ` (${pin.power} RIS adjacencies)` : ""}` :
+      // (RIPEstat's neighbour data is by UTC day)
+      const day = t => new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+      const role = pin && pin.gone ? `\nNo longer peered with AS${pin.of}: last seen next to it in the global table on ${day(pin.gone.last)}` +
+          (pin.gone.peak ? ` (at most ${pin.gone.peak} RIS adjacencies, ${day(pin.gone.peak_at)})` : "") :
+        pin && pin.of ? `\nNeighbour of AS${pin.of} in the global table${pin.power ? ` (${pin.power} RIS adjacencies)` : ""}` :
         pin && pin.upstream ? "\nYour direct upstream" : peerAt ? `\nPeers with you (${peerAt})` : "";
       const peak = rp.maxC.get(h.k) || 0;
       const never = pin && !h.c && !h.b ? (peak ? `\nNot carrying you now (carried up to ${peak} peers earlier in this window)`

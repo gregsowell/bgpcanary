@@ -56,7 +56,7 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 
 | Alert | Severity | Notes |
 |---|---|---|
-| Outage | warning / critical | Visibility below a % of the 24 h baseline for the sustain time; critical below half |
+| Outage | warning / critical | Visibility below a % of the 24 h baseline for the sustain time; critical below half, unless Route Views still sees it ([Checking RIPE's data](#checking-ripes-data)) |
 | Brief dip | info | Shorter than the sustain time |
 | Reachability loss | critical | Most RIPE Atlas probes got no reply from one of your addresses (needs Atlas) |
 | Expected upstream missing | warning | |
@@ -83,6 +83,33 @@ updates are kept. Each setting is explained on the page.
 **Route Views limits.** Route Views allows about 100 telnet connections per collector per day from one IP
 address. bgpcanary keeps scheduled work under half of that, saves the rest for events, and pauses a collector
 for 24 h if it ever gets rate-limited. Keep the defaults unless you know you need more.
+
+### Checking RIPE's data
+
+Almost everything bgpcanary sees comes from RIPE RIS. When RIPE has a bad day, the data can say your prefix is
+gone while it's fine. So bgpcanary doesn't take RIS's word alone for an outage:
+
+- **Outages are checked against Route Views** before they're reported as critical. As soon as one opens,
+  bgpcanary asks every Route Views collector at once (they're run independently of RIPE, by the University of
+  Oregon) and compares what they see with their usual view. RIPE Atlas's latest results count too, if you use
+  Atlas. The alert waits up to 2 minutes for the answer.
+  - **Route Views still sees your paths** (or Atlas probes still reach you): the outage is reported as a
+    *warning*, "probably a problem with RIPE's data", and it won't turn critical.
+  - **Route Views lost them too:** it's confirmed, and alerted as usual.
+  - **No answer** (for example, the collectors' daily limit is used up): it's alerted as RIS shows it, saying it
+    couldn't be checked.
+
+  The event page lists what each collector saw. Turn it off with *Check outages against Route Views before
+  calling them critical*.
+- **Control prefixes:** bgpcanary also watches a couple of other networks' prefixes the same way as yours, by
+  default 1.1.1.0/24 (Cloudflare) and 8.8.8.0/24 (Google). If RIS loses most of them at the same moment as
+  yours, the problem is RIPE's data, and the outage is reported that way even without Route Views. They aren't
+  stored or alerted on. Change them under *Control prefixes*; empty turns them off.
+- **Data sources panel** (bottom of the dashboard): RIS Live's connection and drops, how old and how complete
+  RIPE's looking-glass answers are, the control prefixes, and which Route Views collectors answered. While
+  something looks wrong, a banner says so on every page. Alerts about routes going missing (dips, missing
+  upstreams, upstream shifts, exchange peers lost) say "while RIPE's data looked unreliable", and the looking
+  glass may not withdraw routes from bgpcanary's view.
 
 ## RIPE Atlas
 

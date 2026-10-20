@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-20
+
+### Added
+- **Outages are checked against Route Views before they're called critical.** As soon as RIS shows an outage, bgpcanary asks every Route Views collector at once (an independent set of route collectors, not RIPE's) and compares what they see with their usual view; RIPE Atlas's latest results count too. The alert waits up to 2 minutes for the answer. If Route Views still sees your paths, the outage is a warning, "probably a problem with RIPE's data", and it won't turn critical. If Route Views lost them too, it's confirmed as usual. The event page lists what each collector saw. On by default; Settings › Detection & data sources.
+- **Control prefixes:** two other networks' prefixes, 1.1.1.0/24 and 8.8.8.0/24 by default, watched the same way as yours (not stored or alerted on). If RIS loses most of them at the same moment as yours, the outage is reported as a problem with RIPE's data. Configurable, or off.
+- **An upstream's lost neighbours stay on the tree, as "no longer peered".** The connectivity tree shows each of your upstreams' own transits and peers, including ones that don't carry you. When one stops being seen next to your upstream at all, it now stays on the tree for 30 days, marked "no longer peered" with when it was last seen and how big the link was, instead of silently disappearing. On the first start after updating, the past month is looked up in RIPEstat, so a recent loss shows straight away.
+- **Data sources panel and banner.** The dashboard shows RIS Live's connection and drops, how old and complete RIPE's looking-glass answers are, the control prefixes, and which Route Views collectors answered. While something looks wrong, a banner says so on every page, alerts about routes going missing say "while RIPE's data looked unreliable", and the looking glass can't withdraw routes.
+
 ## [1.3.3] - 2026-10-20
 
 ### Fixed
@@ -225,7 +233,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.3.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/gregsowell/bgpcanary/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/gregsowell/bgpcanary/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/gregsowell/bgpcanary/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/gregsowell/bgpcanary/compare/v1.3.0...v1.3.1

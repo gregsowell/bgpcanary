@@ -133,8 +133,12 @@ someone may be leaking or hijacking your route.
 
 ## An outage that isn't real
 
-If bgpcanary reports your prefix down or nearly invisible but your network is reachable (RIPE Atlas, your own
-tests), compare with RIPE's own view:
+bgpcanary checks outages against Route Views before calling them critical, and watches control prefixes to
+spot problems with RIPE's data (see [Checking RIPE's data](CONFIGURATION.md#checking-ripes-data)). The
+dashboard's **Data sources** panel shows how RIS, its looking glass and Route Views look right now.
+
+If bgpcanary still reports your prefix down or nearly invisible but your network is reachable (RIPE Atlas, your
+own tests), compare with RIPE's own view:
 
 ```bash
 curl -s "https://stat.ripe.net/data/looking-glass/data.json?resource=192.0.2.0/24" | grep -o '"peer":' | wc -l

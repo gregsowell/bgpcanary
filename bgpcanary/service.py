@@ -7,7 +7,7 @@ import os
 import shutil
 import time
 
-from . import alerts, atlas, config, db, paths, registry, ripe, routeviews, transit, tree, updates
+from . import alerts, atlas, config, db, paths, registry, ripe, routeviews, sanity, transit, tree, updates
 from .engine import Engine, _parse_ts as ripe_ts, close_open
 from .peering import Peering
 
@@ -15,6 +15,8 @@ log = logging.getLogger("bgpcanary.service")
 # events that trigger an immediate Route Views snapshot + ping/traceroute burst
 BURST_KINDS = ("outage", "upstream_missing", "origin_hijack", "more_specific", "covering_prefix", "upstream_shift",
                "peer_leak")
+# events about routes going missing: what RIPE's data going missing looks like too
+ABSENCE_KINDS = ("blip", "upstream_missing", "upstream_shift", "exchange_loss")
 
 
 class Service:
@@ -42,10 +44,13 @@ class Service:
         self.pending_backfill = []   # prefixes added since the database was created
         self.replays = 0             # history loads / gap fills running (they rewrite buckets; see _compact_buckets)
         self.last_burst = 0          # last event-triggered Route Views burst (merge simultaneous events)
+        self.health = sanity.SourceHealth(self)   # how RIS, the looking glass, Route Views etc. look right now
+        self.opening = {}            # outage id -> set once its "opened" alert is out (held while it's checked)
         # Route Views telnet budget per collector per UTC day (their rate limiter blocks an IP for the day
         # once it exceeds 100 connections / 500 KB down / 100 KB up per collector)
         self.rv_budget = db.kv_get(self.conn, "rv_budget", {}) or {}
         routeviews.on_usage = self._rv_bytes
+        tree.HISTORY = self.aconn    # upstream neighbour history ("no longer peered"), written through this connection
         self.live_since = None
 
     # ------------------------------------------------------------------ lifecycle
@@ -94,6 +99,7 @@ class Service:
         self.tasks.append(asyncio.create_task(self._reconcile_loop()))
         self.tasks.append(asyncio.create_task(self._gap_loop()))
         self.tasks.append(asyncio.create_task(self._compact_buckets()))
+        self.tasks.append(asyncio.create_task(self._neighbour_history()))
         self.tasks.append(asyncio.create_task(self._transit_loop()))
         self.tasks.append(asyncio.create_task(self._registry_loop()))
         self.tasks.append(asyncio.create_task(self._snapshot_reconcile_loop()))
@@ -144,6 +150,7 @@ class Service:
             self.live = True
 
     def _on_ws_disconnect(self, ts):
+        self.health.ris_disconnected()
         if self.ws_down_since is None and self.first_sync.is_set():
             self.ws_down_since = ts
 
@@ -218,6 +225,10 @@ class Service:
             d = await self._bgplay_merged(now - 60, now)
             if d:
                 self._reconcile_snapshot(d)
+            if eng.controls:   # the control prefixes have no history: just their current routes
+                d = await self._bgplay_merged(now - 60, now, list(eng.controls))
+                if d:
+                    await asyncio.to_thread(eng.load_bgplay, d, True, False)
         else:
             if last is not None and self.cfg.backfill_days > 0:
                 self.pending_backfill = [p for p in self.cfg.prefixes if not self.conn.execute(
@@ -226,7 +237,7 @@ class Service:
                     log.info("new prefixes without history: %s (loading in the background)", self.pending_backfill)
             # Seed the RIB from BGPlay's newest snapshot (a few hours old, but it includes peers the
             # looking glass omits). The looking-glass resync then brings it up to date.
-            d = await self._bgplay_merged(now - 60, now)
+            d = await self._bgplay_merged(now - 60, now, list(self.cfg.prefixes) + list(eng.controls))
             if d:
                 await asyncio.to_thread(eng.load_bgplay, d, True, False)
                 self._restore_route_ages()
@@ -360,6 +371,25 @@ class Service:
         except Exception:
             log.exception("bucket compaction failed (it carries on at the next start)")
 
+    async def _neighbour_history(self):
+        """Shortly after startup: each upstream without a neighbour history yet gets its past month looked up
+        (tree.backfill_neighbors), then today's list, so a neighbour it lost recently shows on the tree as "no longer
+        peered" before anyone opens it."""
+        await self.first_sync.wait()
+        await asyncio.sleep(60)
+        try:
+            ups = set(self.cfg.expected_upstreams)
+            for table in (self.engine.rib.get(p, {}) for p in self.cfg.prefixes):
+                for e in list(table.values()):
+                    if e.path and len(e.path) >= 2 and e.path[-1] == self.cfg.asn:
+                        ups.add(e.path[-2])
+            ups = {u for u in ups if not self.engine.peer_group(u)}   # (peers have no tree branch of their own)
+            for u in sorted(ups):
+                await tree.backfill_neighbors(self.sourceapp, u)
+            await tree.upstream_neighbors(self.sourceapp, sorted(ups))
+        except Exception:
+            log.exception("upstream neighbour history failed")
+
     async def _vacuum(self):
         """Give the space the compaction freed inside the database file back to the disk: VACUUM rewrites the file,
         which pauses bgpcanary for a few seconds. Skipped when it would free less than a quarter of the file (the
@@ -469,13 +499,14 @@ class Service:
     async def _resync_all(self):
         eng = self.engine
         total = 0
-        for p in self.cfg.prefixes:
+        trusted = self.health.lg_trusted()   # (decided before this round: its own answers count from the next one)
+        for p in list(self.cfg.prefixes) + list(eng.controls):
             try:
                 lg = await ripe.looking_glass(p, self.sourceapp)
                 lg["resource"] = p
                 empty = not any(e.path for e in eng.rib.get(p, {}).values())
                 eng.quiet = empty
-                total += eng.resync_lg(lg)
+                total += eng.resync_lg(lg, allow_withdraw=trusted)
             except Exception as ex:
                 log.warning("looking-glass resync failed for %s: %s", p, ex)
             finally:
@@ -506,24 +537,112 @@ class Service:
 
     async def _handle_event(self, eid, phase):
         ev = dict(self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())
-        # per-type choices decide. An escalation (warning -> critical) is the first alert for "critical only"
-        # subscribers, and news for everyone who was told about the warning.
-        notify = phase in ("open", "escalate", "close") and config.should_notify(self.cfg, ev, phase)
-        if notify:
-            images = []
-            if self.cfg.email.enabled and self.cfg.email.recipients:
-                try:   # before/now connectivity-tree snapshots for the email
-                    images = await tree.event_images(self.cfg, self.sourceapp, ev, phase, peering=self.peering)
-                except Exception:
-                    log.exception("tree images for event %s failed; sending without them", eid)
-            await alerts.send(self.cfg, self.aconn, ev, phase, images=images)
-            self.aconn.execute("UPDATE events SET alerted=1 WHERE id=?", (eid,))
-            self.aconn.commit()
+        checked = False
+        if phase == "open" and ev["kind"] == "outage" and self.cfg.confirm_outages and not ev.get("historical"):
+            # checked against Route Views etc. before it's alerted (up to ~2 min); its clearing waits for this alert
+            self.opening[eid] = asyncio.Event()
+            try:
+                await asyncio.wait_for(self._confirm_outage(ev), 150)
+                checked = True
+            except Exception as ex:
+                log.warning("outage %s: checking it against Route Views failed: %s", eid, ex or type(ex).__name__)
+                m = self.engine.mons.get(ev["prefix"])
+                if m and m.event_id == eid and m.confirm == "pending":
+                    m.confirm = None
+            ev = dict(self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())
+        elif phase in ("close", "escalate") and eid in self.opening:
+            try:
+                await asyncio.wait_for(self.opening[eid].wait(), 200)
+            except asyncio.TimeoutError:
+                pass
+            ev = dict(self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())
+        if phase == "open" and ev["kind"] in ABSENCE_KINDS and not ev.get("historical"):
+            self._mark_doubtful(ev)
+        try:
+            # per-type choices decide. An escalation (warning -> critical) is the first alert for "critical only"
+            # subscribers, and news for everyone who was told about the warning.
+            notify = phase in ("open", "escalate", "close") and config.should_notify(self.cfg, ev, phase)
+            if notify:
+                images = []
+                if self.cfg.email.enabled and self.cfg.email.recipients:
+                    try:   # before/now connectivity-tree snapshots for the email
+                        images = await tree.event_images(self.cfg, self.sourceapp, ev, phase, peering=self.peering)
+                    except Exception:
+                        log.exception("tree images for event %s failed; sending without them", eid)
+                await alerts.send(self.cfg, self.aconn, ev, phase, images=images)
+                self.aconn.execute("UPDATE events SET alerted=1 WHERE id=?", (eid,))
+                self.aconn.commit()
+        finally:
+            if phase == "open" and eid in self.opening:
+                self.opening.pop(eid).set()
         if atlas.enabled(self.aconn) and (ev["kind"] == "outage" and phase in ("open", "close")
                                           or ev["kind"] == "upstream_shift" and phase == "open"):
             asyncio.get_running_loop().create_task(self._atlas_burst(eid, phase, ev["kind"]))
         if self.cfg.probe_on_event and phase in ("open", "close") and ev["kind"] in BURST_KINDS:
-            asyncio.get_running_loop().create_task(self._event_burst(eid, ev["kind"], phase, ev.get("prefix")))
+            asyncio.get_running_loop().create_task(self._event_burst(eid, ev["kind"], phase, ev.get("prefix"),
+                                                                     snapshot=not checked))
+
+    async def _confirm_outage(self, ev):
+        """Check an outage RIS shows against Route Views (every collector at once, just this prefix), the control
+        prefixes and RIPE Atlas's latest results (sanity.judge), and record the verdict on the event before it's
+        alerted. If they still see the prefix, it's a warning, "probably a problem with RIPE's data", that doesn't
+        turn critical (Engine._track)."""
+        eng, p, eid = self.engine, ev["prefix"], ev["id"]
+        m = eng.mons.get(p)
+        if m and m.event_id == eid:
+            m.confirm = "pending"
+        trouble = eng.ris_trouble()
+        if self.cfg.rv_servers:
+            self.last_burst = time.time()   # (the event's Route Views burst doesn't ask them again)
+            await asyncio.gather(*(self.snapshot_server(srv, [p], "event", eid) for srv in self.cfg.rv_servers),
+                                 return_exceptions=True)
+        rv = sanity.route_views_view(self.aconn, p, self.cfg.asn, eid, ev["start_ts"])
+        at = (sanity.atlas_view(self.aconn, sanity.targets_in(p, self.atlas.targets()), ev["start_ts"])
+              if atlas.enabled(self.aconn) else None)
+        verdict, why = sanity.judge(trouble, rv, at)
+        row = self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
+        detail = json.loads(row["detail"] or "{}")
+        detail["confirm"] = {"verdict": verdict, "why": why, "route_views": rv, "atlas": at,
+                             "controls": eng.control_status(), "health": self.health.state()["reasons"],
+                             "at": time.time()}
+        sev, title = row["severity"], row["title"]
+        if verdict == "contradicted":
+            mv, base = row["min_visible"], row["baseline"] or 0
+            sev = "warning"
+            title = (f"{p}: RIS lost sight of it ({mv}/{base:.0f} peers), but {why}: a problem with RIPE's data"
+                     if row["end_ts"] else
+                     f"{p} visibility in RIS dropped to {mv}/{base:.0f} peers, but {why}: probably a problem with "
+                     f"RIPE's data")
+            detail["note"] = (f"RIS shows this prefix's visibility dropping, but {why}. That points to a problem with "
+                              f"RIPE's data rather than your network, so this is a warning, not critical, and it won't "
+                              f"turn critical. It closes by itself when RIS sees the prefix again.")
+        elif verdict == "confirmed":
+            detail["note"] = f"Confirmed: {why}."
+        else:
+            detail["note"] = f"Couldn't be checked independently: {why}."
+        self.aconn.execute("UPDATE events SET severity=?, title=?, detail=? WHERE id=?",
+                           (sev, title, json.dumps(detail), eid))
+        self.aconn.commit()
+        if m and m.event_id == eid:
+            m.confirm, m.confirm_why = verdict, why
+            if verdict == "contradicted":
+                m.event_sev = "warning"
+        log.info("outage %s on %s checked: %s (%s)", eid, p, verdict, why)
+
+    def _mark_doubtful(self, ev):
+        """A route-gone-missing event while RIPE's data looks unreliable (sanity.SourceHealth): say so on it and in
+        its alert."""
+        h = self.health.state()
+        if h["ok"]:
+            return
+        detail = json.loads(ev["detail"] or "{}")
+        detail["health"] = h["reasons"]
+        detail["note"] = ((detail.get("note") + " ") if detail.get("note") else "") + (
+            "RIPE's data looked unreliable when this opened (" + "; ".join(h["reasons"]) + "), so it may not be real.")
+        ev["title"] = ev["title"] + " (while RIPE's data looked unreliable)"
+        ev["detail"] = json.dumps(detail)
+        self.aconn.execute("UPDATE events SET title=?, detail=? WHERE id=?", (ev["title"], ev["detail"], ev["id"]))
+        self.aconn.commit()
 
     async def _atlas_burst(self, eid, phase, kind="outage"):
         """One-off RIPE Atlas measurements: traceroutes when an outage opens / clears; pings + traceroutes when an
@@ -565,17 +684,19 @@ class Service:
                 moved.append(f"{c.replace(' ', ' -> ')} {n0} -> {n1} peers")
         return ("upstream paths shifted: " + ", ".join(moved)) if moved else None
 
-    async def _event_burst(self, eid, kind, phase, prefix=None):
+    async def _event_burst(self, eid, kind, phase, prefix=None, snapshot=True):
         """Fresh Route Views data when something breaks: immediately on open/close, then again only when the
-        routing changes significantly while an outage lasts. Routine polling is kept very slow."""
+        routing changes significantly while an outage lasts. Routine polling is kept very slow. `snapshot`: False
+        when the outage check just took the snapshots (only the ping and traceroute are left to run)."""
         now = time.time()
-        if now - self.last_burst < 300:
+        if snapshot and now - self.last_burst < 300:
             # another event (or a change-triggered re-query at the moment of recovery) just queried
             log.info("event %s %s: Route Views burst skipped (last query %.0f s ago)", eid, phase,
                      now - self.last_burst)
         else:
-            self.last_burst = now
-            await self.event_probes(eid)
+            if snapshot:
+                self.last_burst = now
+            await self.event_probes(eid, snapshot=snapshot)
         if phase != "open" or kind not in ("outage", "upstream_missing") or self.cfg.rv_followup_change_pct <= 0:
             return
         # Watch the live RIS data (free) once a minute; re-query Route Views only on a major change.
@@ -594,8 +715,9 @@ class Service:
             await self.event_probes(eid, probes=(rounds % 2 == 1))
             last_sig = self._route_signature(prefix)
 
-    async def event_probes(self, eid, probes=True):
-        await self.snapshot_all(trigger="event", event_id=eid)
+    async def event_probes(self, eid, probes=True, snapshot=True):
+        if snapshot:
+            await self.snapshot_all(trigger="event", event_id=eid)
         if probes:
             for t in self.cfg.probe_targets:
                 await self.run_probe("ping", t, "event", eid)
@@ -756,7 +878,9 @@ class Service:
             try:
                 known = {r["asn"] for r in self.aconn.execute("SELECT asn FROM asn_names")}
                 want = {self.cfg.asn} | set(self.cfg.expected_upstreams)
-                for table in list(self.engine.rib.values()):
+                for p, table in list(self.engine.rib.items()):
+                    if p in self.engine.controls:
+                        continue
                     for e in list(table.values()):
                         if e.path:
                             want.update(e.path)
@@ -765,7 +889,9 @@ class Service:
                         want.update(int(x) for x in ch.split())
                 # ASNs near the origin (upstreams/transit) first; they are the ones shown in charts
                 near = set()
-                for table in list(self.engine.rib.values()):
+                for p, table in list(self.engine.rib.items()):
+                    if p in self.engine.controls:
+                        continue
                     for e in list(table.values()):
                         if e.path:
                             near.update(e.path[-4:])

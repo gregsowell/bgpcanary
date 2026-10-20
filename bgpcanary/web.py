@@ -334,6 +334,7 @@ def render(request, name, **ctx):
                now=time.time(), role=role, is_admin=role == "admin", version=__version__,
                update=updates.state(svc.aconn) if role == "admin" else None,
                loading=loading() if request.session.get("user") else None,
+               health=svc.health.state() if request.session.get("user") else None,
                outage=bool(request.session.get("user")) and any(m.state == "down" for m in svc.engine.mons.values()))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -861,7 +862,6 @@ def replay_payload(conn, prefix, s, e):
             "names": {str(k): v for k, v in names(conn, asns).items()}}
 
 
-_NBR_CACHE = {}   # upstream asn -> (fetched_ts, [{"asn", "power"}])
 
 
 async def upstream_neighbors(data):
@@ -879,24 +879,17 @@ async def upstream_neighbors(data):
             else:
                 ups.add(a[-2])
     data["exchanges"] = exchanges
-    out = {}
-    for u in sorted(ups):
-        hit = _NBR_CACHE.get(u)
-        if not hit or time.time() - hit[0] > 6 * 3600:
-            try:
-                d = await ripe.stat("asn-neighbours", svc.sourceapp, resource=f"AS{u}")
-                lst = [{"asn": n["asn"], "power": n.get("power", 0)} for n in d.get("neighbours", [])
-                       if n.get("type") in ("left", "uncertain") and n["asn"] != cfg.asn]
-                hit = (time.time(), tree.top_neighbors(lst, key=lambda n: n["asn"]))
-                _NBR_CACHE[u] = hit
-            except Exception as ex:
-                log.warning("asn-neighbours AS%s failed: %s", u, ex)
-                hit = hit or (0, [])
-        out[str(u)] = hit[1]
+    nbrs = await tree.upstream_neighbors(svc.sourceapp, sorted(ups))
+    out = {str(u): [{"asn": a, "power": pw} for a, pw in nbrs.get(u, []) if a != cfg.asn] for u in sorted(ups)}
+    # neighbours an upstream had in the last month and no longer has at all: "no longer peered" on the tree
+    gone = {str(u): [{"asn": a, "last": e["last"], "peak": e["peak"], "peak_at": e["peak_at"]}
+                     for a, e in tree.gone_neighbors(svc.aconn, u) if a != cfg.asn] for u in sorted(ups)}
     data["upstreams"] = sorted(ups)
     data["upstream_neighbors"] = out
+    data["upstream_gone"] = {u: g for u, g in gone.items() if g}
     # names for neighbours that never appear in our own paths
-    want = {n["asn"] for lst in out.values() for n in lst} | ups | {int(a) for a in exchanges}
+    want = ({n["asn"] for lst in out.values() for n in lst} | {n["asn"] for lst in gone.values() for n in lst}
+            | ups | {int(a) for a in exchanges})
     missing = [a for a in want if str(a) not in data["names"]]
     if missing:
         known = names(svc.aconn, missing)
@@ -1482,6 +1475,12 @@ async def advanced_settings_save(request: Request):
         problems.append("The recovery level must be at or above the outage threshold")
     if not data.get("rv_servers"):
         problems.append("List at least one Route Views collector")
+    import ipaddress
+    mine = [ipaddress.ip_network(x, strict=False) for x in list(cfg.prefixes) + list(cfg.owned_space)]
+    for c in data.get("control_prefixes") or []:
+        n = ipaddress.ip_network(c, strict=False)
+        if any(n.version == m.version and n.overlaps(m) for m in mine):
+            problems.append(f"Control prefix {c} overlaps your own address space: pick another network's prefix")
     # Route Views: 100 connections/collector/day per IP; keep scheduled snapshots + probes well under that
     snaps = 1440 / data["rv_poll_minutes"] if data.get("rv_poll_minutes") else 0
     probes = 2 * 1440 / data["probe_minutes"] if data.get("probe_minutes") else 0   # ping + traceroute, first collector

@@ -64,6 +64,7 @@ class Config:
     registry_minutes: int
     covering_ignore: list
     covering_min_length: int
+    control_prefixes: list   # well-known prefixes of other networks: RIS losing them too = a RIPE data problem
     raw_retention_days: int
     rv_servers: list
     rv_poll_minutes: int
@@ -71,6 +72,7 @@ class Config:
     probe_minutes: int
     probe_on_event: bool
     rv_followup_change_pct: float
+    confirm_outages: bool    # check an outage against Route Views (and Atlas) before alerting it as critical
     alert_min_severity: str
     alert_kinds: dict   # alert type -> ALERT_MODES choice (saved in the UI; missing = from alert_min_severity)
     base_url: str
@@ -114,6 +116,8 @@ def _valid_prefixes(items, what):
 # Monitoring settings edited in the web UI (kv "monitor_settings") override [monitor] / probe targets /
 # site name from the config file. They take effect on the service restart that saving triggers.
 MONITOR_KV = "monitor_settings"
+# control prefixes: two stable, widely seen prefixes of unrelated networks (Cloudflare, Google)
+CONTROL_DEFAULT = ["1.1.1.0/24", "8.8.8.0/24"]
 
 
 def monitor_settings_dict(cfg) -> dict:
@@ -222,6 +226,16 @@ TUNING = [
                                              "queries Route Views again only when visibility moves by this much, "
                                              "or an upstream path appears or disappears. At least 5 min apart, "
                                              "max 12 per outage. 0 = only when it opens and when it clears."}),
+    ("confirm_outages", "Data sources", "Check outages against Route Views before calling them critical", "bool",
+     {"help": "When RIS shows an outage, bgpcanary asks every Route Views collector (an independent set of route "
+              "collectors) and looks at RIPE Atlas's latest results, waiting up to 2 minutes before alerting. If they "
+              "still see your prefix, it's reported as a warning, \"not confirmed: probably a problem with RIPE's "
+              "data\", and doesn't become critical."}),
+    ("control_prefixes", "Data sources", "Control prefixes (other networks' prefixes, watched the same way)",
+     "prefixes", {"help": "Well-known prefixes that have nothing to do with you, one per line. If RIS loses sight of "
+                          "most of them at the same time as yours, the problem is RIPE's data, not your network: the "
+                          "outage is reported that way and a banner says so. Pick stable, widely seen prefixes of "
+                          "different networks. Empty = off."}),
     ("backfill_days", "History and storage", "History to load for new prefixes (days)", "int",
      {"min": 0, "max": 365, "help": "Loaded from RIPEstat BGPlay when a prefix is first monitored."}),
     ("raw_retention_days", "History and storage", "Keep raw BGP updates for (days)", "int",
@@ -284,7 +298,8 @@ ALERT_KV = "alert_settings"
 # tuning = TUNING settings that shape it; check = the background check that produces it (on/off in the UI).
 ALERT_TYPES = [
     {"kind": "outage", "group": "Reachability", "name": "Outage", "sev": ("warning", "critical"),
-     "desc": "A prefix's visibility drops below the threshold for the sustain time (critical below half of normal).",
+     "desc": "A prefix's visibility drops below the threshold for the sustain time (critical below half of normal). "
+             "Checked against Route Views first: if it still sees the prefix, it's a warning about RIPE's data instead.",
      "tuning": ["outage_threshold_pct", "sustain_seconds", "recover_threshold_pct", "baseline_hours"]},
     {"kind": "blip", "group": "Reachability", "name": "Brief dip", "sev": ("info",),
      "desc": "Visibility dipped below the outage threshold but recovered within the sustain time.",
@@ -503,6 +518,7 @@ def _load(path):
         registry_minutes=int(det.get("registry_minutes", 60)),
         covering_ignore=list(det.get("covering_ignore", [])),
         covering_min_length=int(det.get("covering_min_length", 8)),
+        control_prefixes=[normalize_prefix(x) for x in det.get("control_prefixes", CONTROL_DEFAULT)],
         raw_retention_days=int(raw.get("storage", {}).get("raw_retention_days", 365)),
         rv_servers=list(rv.get("servers", ["route-views.routeviews.org"])),
         rv_poll_minutes=int(rv.get("poll_minutes", 720)),
@@ -510,6 +526,7 @@ def _load(path):
         probe_minutes=int(rv.get("probe_minutes", 360)),
         probe_on_event=bool(rv.get("probe_on_event", True)),
         rv_followup_change_pct=float(rv.get("followup_change_pct", 10)),
+        confirm_outages=bool(rv.get("confirm_outages", True)),
         alert_min_severity=al.get("min_severity", "warning"),
         alert_kinds=dict(al.get("kinds", {})),
         email=EmailCfg(

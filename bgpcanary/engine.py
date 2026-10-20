@@ -22,6 +22,8 @@ XL_HOLD = 900   # "exchange peers lost" closes once the peers have been back thi
 # One looking-glass answer may withdraw at most this many of a prefix's routes, or this share of them if more: an
 # answer missing more than that is taken to be incomplete (see Engine.resync_lg)
 LG_MAX_WITHDRAW, LG_MAX_WITHDRAW_SHARE = 10, 0.1
+CONTROL_KV = "control_baselines"   # the control prefixes' baselines, kept across restarts
+CONTROL_ADAPT_S = 6 * 3600         # a control prefix low for this long is taken to have a new normal level
 
 
 
@@ -53,6 +55,10 @@ class PrefixMon:
         self.bucket_updates = 0
         self.bucket_withdrawals = 0
         self.stored = None         # (ts, chains, upstreams) of the last bucket written (see Engine.tick)
+        # the open outage checked against Route Views / Atlas / the control prefixes (Service._confirm_outage):
+        # None, "pending", "confirmed", "contradicted" (not seen by them: RIPE's data, so it doesn't turn critical)
+        # or "unknown"; confirm_why says by what
+        self.confirm = self.confirm_why = None
         self.last_update = 0.0
 
     def add_sample(self, ts, v):
@@ -127,6 +133,19 @@ class Engine:
                        "msgs": 0, "last_resync": None, "resync_changes": None, "backfill": None}
         self.lg_peers = set()   # (prefix, collector, peer) ever present in a looking-glass snapshot
         self.lg_withdrawn = set()   # ...that the looking-glass resync withdrew, and nothing else has updated since
+        self.lg_stats = {}      # prefix -> how its last looking-glass answer looked (see resync_lg)
+        # Control prefixes (cfg.control_prefixes): other networks' prefixes, watched the same way as a check on RIS
+        # itself. Their routes live in the RIB too (not stored as updates), with a baseline each, kept across
+        # restarts. Only the live engine (restore) has them: history replays and gap fills don't need them.
+        self.controls, self._seen = {}, {}
+        if restore:
+            for c in cfg.control_prefixes:
+                n = ipaddress.ip_network(c, strict=False)
+                if not any(n.version == m.version and n.overlaps(m) for m in self.nets.values()):
+                    self.controls[c] = PrefixMon(c)
+                    self.rib.setdefault(c, {})
+        self.control_ref = (db.kv_get(conn, CONTROL_KV, {}) or {}) if self.controls else {}
+        self.control_saved = 0
         self._load_seen()
         if restore:
             self._restore_open_events()
@@ -148,6 +167,8 @@ class Engine:
                 m.state, m.event_id, m.event_sev = "down", r["id"], r["severity"]
                 m.min_vis = r["min_visible"] if r["min_visible"] is not None else 0
                 m.ref_base = r["baseline"] or detail.get("baseline")   # stored when the outage opened
+                m.confirm = (detail.get("confirm") or {}).get("verdict")
+                m.confirm_why = (detail.get("confirm") or {}).get("why")
             elif detail.get("tf_key") or detail.get("ext_key"):   # managed by transit.py / registry.py
                 k = detail.get("tf_key") or detail.get("ext_key")
                 self.anomalies[k] = {"id": r["id"], "zero_since": None, "sev": r["severity"]}
@@ -172,6 +193,8 @@ class Engine:
 
     # ------------------------------------------------------------------ helpers
     def relevant(self, prefix: str, path: list | None) -> bool:
+        if prefix in self.controls:   # another network's prefix, watched as a check on RIS (its paths aren't via you)
+            return True
         try:
             net = ipaddress.ip_network(prefix, strict=False)
         except ValueError:
@@ -187,7 +210,8 @@ class Engine:
             return True
         # Anything else our ASN originates or appears in is tracked, up to a cap, so a large network that
         # only lists some of its prefixes can't flood the RIB/DB. Hitting the cap posts one FYI notice.
-        unmonitored = sum(1 for p in self.rib if self._parent(p) is None and p not in self.mons)
+        unmonitored = sum(1 for p in self.rib
+                          if self._parent(p) is None and p not in self.mons and p not in self.controls)
         if unmonitored >= self.cfg.max_unmonitored:
             if not self.status.get("unmonitored_capped"):
                 self.status["unmonitored_capped"] = True
@@ -239,6 +263,53 @@ class Engine:
             c = self._summ[prefix] = (ver, json.dumps(chains), json.dumps(ups),
                                       {int(k): n for k, n in ups.items() if k != "None"})
         return c[1:]
+
+    # ------------------------------------------------------------------ control prefixes
+    def seen(self, prefix):
+        """RIS peers with a route to `prefix` from any origin (a control prefix: not yours)."""
+        ver = self.rib_ver.get(prefix, 0)
+        c = self._seen.get(prefix)
+        if c is None or c[0] != ver:
+            c = self._seen[prefix] = (ver, sum(1 for e in self.rib.get(prefix, {}).values() if e.path))
+        return c[1]
+
+    def control_baseline(self, prefix):
+        """A control prefix's normal visibility: the 95th percentile, as for yours. In the first minutes after a
+        restart, at least what it was before (so RIS data that's already bad at startup still shows as a drop)."""
+        cm = self.controls[prefix]
+        b, ref = cm.baseline(), self.control_ref.get(prefix)
+        return max(b or 0, ref) if ref and len(cm.samples) < 20 else b
+
+    def control_status(self):
+        out = []
+        for p in self.controls:
+            v, base = self.seen(p), self.control_baseline(p)
+            out.append({"prefix": p, "visible": v, "baseline": base, "pct": 100 * v / base if base else None,
+                        "down": bool(base) and v < base * self.cfg.outage_threshold_pct / 100})
+        return out
+
+    def ris_trouble(self):
+        """The control prefixes RIS has lost sight of, when that's most of them: a problem with RIPE's data rather
+        than with anyone's network. [] otherwise."""
+        st = [c for c in self.control_status() if c["baseline"]]
+        down = [c for c in st if c["down"]]
+        return down if st and len(down) * 2 > len(st) else []
+
+    def _tick_controls(self, now):
+        for p, cm in self.controls.items():
+            v, base = self.seen(p), self.control_baseline(p)
+            low = bool(base) and v < base * self.cfg.outage_threshold_pct / 100
+            cm.dip_start = (cm.dip_start or now) if low else None
+            # samples only while it looks normal, as for your prefixes; but after hours at a lower level, that's
+            # its new normal (another network changing its announcements), or it would look lost for good
+            if v and (not low or now - cm.dip_start >= CONTROL_ADAPT_S):
+                cm.add_sample(now, v)
+            cm.drop_samples_before(now - self.cfg.baseline_hours * 3600)
+        if self.controls and not self.historical and now - self.control_saved >= 600:
+            self.control_saved = now
+            ref = {p: self.control_baseline(p) for p in self.controls}
+            self.control_ref.update({p: b for p, b in ref.items() if b})
+            db.kv_set(self.conn, CONTROL_KV, self.control_ref)
 
     def peer_group(self, asn):
         """Where neighbour `asn` peers with you: an exchange's name or "Private peering". None for transit or an
@@ -306,7 +377,7 @@ class Engine:
             self.rib_ver[prefix] = self.rib_ver.get(prefix, 0) + 1
         if self.lg_withdrawn and source != "resync":   # newer news than the looking glass's own withdrawal
             self.lg_withdrawn.discard((prefix, collector, peer))
-        if store and (changed or source not in ("resync",)):
+        if store and (changed or source not in ("resync",)) and prefix not in self.controls:
             self.conn.execute(
                 "INSERT INTO updates(ts,source,collector,peer,peer_asn,prefix,kind,path,communities)"
                 " VALUES(?,?,?,?,?,?,?,?,?)",
@@ -392,7 +463,7 @@ class Engine:
                     m.rec_start = ts
             else:
                 m.rec_start = None
-            if m.event_sev == "warning" and v < base * 0.5:
+            if m.event_sev == "warning" and v < base * 0.5 and m.confirm not in ("pending", "contradicted"):
                 m.event_sev = "critical"
                 self.conn.execute("UPDATE events SET severity='critical', min_visible=?, title=? WHERE id=?",
                                   (v, f"{m.prefix} visibility dropped to {v}/{base:.0f} RIS peers", m.event_id))
@@ -425,10 +496,12 @@ class Engine:
                         {"baseline": base, "threshold_pct": self.cfg.outage_threshold_pct},
                         min_visible=m.dip_min, baseline=base)
             elif m.state == "down" and m.rec_start is not None and now - m.rec_start >= S:
-                self._close_event(m.event_id, m.rec_start, min_visible=m.min_vis, severity=m.event_sev,
-                                  title=f"{p} outage: visibility fell to {m.min_vis}/{base:.0f} RIS peers")
+                title = (f"{p}: RIS lost sight of it ({m.min_vis}/{base:.0f} peers), but {m.confirm_why}: a problem "
+                         f"with RIPE's data" if m.confirm == "contradicted" else
+                         f"{p} outage: visibility fell to {m.min_vis}/{base:.0f} RIS peers")
+                self._close_event(m.event_id, m.rec_start, min_visible=m.min_vis, severity=m.event_sev, title=title)
                 m.state, m.event_id, m.dip_start, m.dip_min, m.rec_start = "ok", None, None, None, None
-                m.ref_base = None
+                m.ref_base = m.confirm = m.confirm_why = None
             if m.state == "ok" and m.dip_start is None and v > 0:
                 m.add_sample(now, v)
             m.drop_samples_before(now - self.cfg.baseline_hours * 3600)
@@ -439,6 +512,8 @@ class Engine:
         out = {}
         exp = set(self.cfg.expected_upstreams)
         for prefix, table in self.rib.items():
+            if prefix in self.controls:
+                continue
             parent = self._parent(prefix)
             for (coll, peer), e in table.items():
                 if not e.path:
@@ -752,6 +827,7 @@ class Engine:
                 # peers coming and going isn't an upstream shift; they have checks of their own
                 self._detect_shift(p, m, t + self.B, v, {u: n for u, n in nb.items() if not self.peer_group(u)})
                 self._detect_peering(p, m, t + self.B, v, nb)
+            self._tick_controls(t + self.B)
             self.last_bucket += self.B
             self._detect(self.last_bucket)
             closed = True
@@ -809,13 +885,16 @@ class Engine:
             if v:
                 m.add_sample(ts, v)
 
-    def resync_lg(self, lg, source="resync"):
+    def resync_lg(self, lg, source="resync", allow_withdraw=True):
         """Reconcile the RIB against a RIPEstat looking-glass snapshot. Returns number of changes.
         The looking glass is a cross-check: RIS Live reports changes as they happen. Its answers can be wrong (on
         2026-10-20 it listed almost none of a prefix's routes for an hour, with current timestamps, then fell back
         to older data), so it never withdraws routes wholesale (see LG_MAX_WITHDRAW), and a route it withdrew
-        comes back as soon as it lists the route again, even from data older than that withdrawal."""
+        comes back as soon as it lists the route again, even from data older than that withdrawal.
+        `allow_withdraw`: False while RIPE's data looks unreliable (sanity.SourceHealth): nothing is withdrawn then.
+        How each answer looked is kept in lg_stats, for the data-sources panel."""
         latest = _parse_ts(lg.get("latest_time") or lg.get("query_time"))
+        asked = _parse_ts(lg["query_time"]) if lg.get("query_time") else time.time()
         prefix = lg["resource"] if "/" in str(lg.get("resource", "")) else None
         target = {}
         for rrc in lg.get("rrcs", []):
@@ -850,10 +929,18 @@ class Engine:
                 elif self.cfg.stale_days > 0 and e.ts < stale_before:
                     stale.append((coll, peer, e))   # not refreshed for weeks and never confirmed by it: see below
             held = sum(1 for e in table.values() if e.path)
-            if len(gone) + len(stale) > max(LG_MAX_WITHDRAW, held * LG_MAX_WITHDRAW_SHARE):
+            listed = sum(1 for k in target if k[0] == pref)
+            incomplete = len(gone) + len(stale) > max(LG_MAX_WITHDRAW, held * LG_MAX_WITHDRAW_SHARE)
+            now = time.time()
+            before = self.lg_stats.get(pref, {}).get("last_incomplete")
+            self.lg_stats[pref] = {"at": now, "latest": latest, "asked": asked, "listed": listed, "held": held,
+                                   "incomplete": incomplete, "last_incomplete": now if incomplete else before}
+            if incomplete:
                 log.warning("looking glass lists only %d of the %d routes held for %s: an incomplete answer, so "
                             "nothing is withdrawn from it (RIS Live reports real withdrawals as they happen)",
-                            sum(1 for k in target if k[0] == pref), held, pref)
+                            listed, held, pref)
+                continue
+            if not allow_withdraw:
                 continue
             for coll, peer, e in gone:
                 if self.apply(latest, coll, peer, e.peer_asn, pref, "W", None, source=source):

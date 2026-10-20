@@ -55,6 +55,8 @@ class RisLive:
         subs = []
         for p in self.engine.cfg.prefixes:
             subs.append({"type": "UPDATE", "prefix": p, "moreSpecific": True, "lessSpecific": True})
+        for p in self.engine.controls:   # other networks' prefixes, as a check on RIS itself: just the prefix
+            subs.append({"type": "UPDATE", "prefix": p, "moreSpecific": False, "lessSpecific": False})
         subs.append({"type": "UPDATE", "path": f"{self.engine.asn}"})   # our ASN anywhere in a path
         subs.append({"type": "RIS_PEER_STATE"})
         return subs

@@ -358,9 +358,13 @@ ALERT_TYPES = [
      "check": "registry", "desc": "A route object for your space was added, changed or removed.", "tuning": []},
     {"kind": "asset_change", "group": "Background checks", "name": "as-set change (FYI)", "sev": ("info",),
      "check": "registry", "desc": "Your ASN was added to or removed from an as-set.", "tuning": []},
+    {"kind": "path_change", "group": "Path finder", "name": "Watched path changed (FYI)", "sev": ("info",),
+     "desc": "The path your traffic takes to a network on the Path finder's watch list changed (its scheduled "
+             "traceroute showed a different path twice in a row), or the path back from it (RIPE Atlas). Only for "
+             "watched targets set to alert.", "tuning": []},
 ]
 ALERT_MODES = ("on", "warning", "critical", "off")   # on = every severity; warning / critical = that and above
-FYI_ALERT_KINDS = ("transit_filter", "filter_sim", "irr_change", "asset_change")
+FYI_ALERT_KINDS = ("transit_filter", "filter_sim", "irr_change", "asset_change", "path_change")
 _SEV = {"info": 0, "warning": 1, "critical": 2}
 
 

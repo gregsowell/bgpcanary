@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Path finder · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>Path finder</h1>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+<form class="toolbar" method="get" action="/pathfinder">
+  <input name="q" value="{{ q }}" placeholder="IP address, prefix, AS number or host name" maxlength="100" required style="min-width:280px" {{ '' if q else 'autofocus' }}>
+  {% if cfg.rv_servers and can_check %}<label title="Asks each Route Views collector for their prefix (one of its ~100 daily connections; answers are reused for 30 minutes), and adds the paths toward yours from their latest scheduled snapshots"><input type="checkbox" name="rv" value="1" {{ 'checked' if rv }}> also ask Route Views</label>{% endif %}
+  <button type="submit">Find paths</button>
+  <span class="muted">The known AS paths between your network (AS{{ cfg.asn }}) and another one.{% if trace_ok and can_check %} For an address or host name, a traceroute from this server shows which one your traffic takes.{% endif %}</span>
+</form>
+{% if q %}
+<div id="pf" data-q="{{ q }}" data-prefix="{{ prefix }}" data-origin="{{ origin }}" data-rv="{{ '1' if rv }}"
+     data-atlas="{{ '1' if atlas_on }}" data-admin="{{ '1' if is_admin }}" data-credits="{{ back_credits }}">
+  <div class="msg" data-pf="status">Finding paths…</div>
+  <div class="panel" data-pf="result" hidden>
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1" data-pf="title"></h2>
+      <span data-pf="pick"></span>
+      {% if is_admin %}<button type="button" data-pf="watch-open">{{ 'Watching · change' if this_watch else 'Watch' }}</button>{% endif %}
+    </div>
+    {% if is_admin %}
+    <form class="pf-watchform" method="post" action="/pathfinder/watch" data-pf="watch-form" hidden>
+      <input type="hidden" name="q" value="{{ this_watch.query if this_watch else q }}">
+      <label>Name <input name="label" value="{{ this_watch.label if this_watch else '' }}" placeholder="optional, e.g. Cloudflare DNS" maxlength="60"></label>
+      <label>Check every <select name="minutes">{% for m in minutes %}<option value="{{ m }}" {{ 'selected' if (this_watch.minutes if this_watch else 60) == m }}>{{ m // 60 ~ ' h' if m >= 60 else m ~ ' min' }}</option>{% endfor %}</select></label>
+      <label><input type="checkbox" name="alert" value="1" {{ 'checked' if not this_watch or this_watch.alert }}> alert when the path changes</label>
+      <label title="A RIPE Atlas traceroute from their network to yours, at most every {{ back_minutes // 60 }} hours (about {{ back_credits }} credits each){% if not atlas_on %}. RIPE Atlas isn't set up.{% endif %}"><input type="checkbox" name="back" value="1" {{ 'checked' if this_watch and this_watch.back }} {{ 'disabled' if not atlas_on }}> also trace back from them (RIPE Atlas, every {{ back_minutes // 60 }} h, ~{{ back_credits }} credits)</label>
+      <button class="primary" type="submit">{{ 'Save' if this_watch else 'Watch it' }}</button>
+      <span class="muted" style="font-size:12px">The watch traces it on schedule, keeps its history, and alerts on a path change seen twice in a row (Settings › Alert channels › Path finder).</span>
+    </form>
+    {% endif %}
+    <div class="muted" data-pf="summary"></div>
+    <div class="pf-legend" data-pf="legend"></div>
+    <div class="rp-wrap" data-pf="wrap"><canvas data-pf="canvas"></canvas><div class="rp-tip" data-pf="tip"></div></div>
+  </div>
+  <div class="panel scroll" data-pf="list" hidden>
+    <h2>Paths</h2>
+    <table data-pf="table"></table>
+  </div>
+  <div class="panel scroll" data-pf="trace" hidden>
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1" data-pf="trace-title">Your traffic to them: traceroute from this server</h2>
+      <button type="button" data-pf="retrace">Run</button>
+    </div>
+    <div data-pf="trace-summary"></div>
+    <div data-pf="trace-latency"></div>
+    <table data-pf="hops" style="margin-top:8px"></table>
+  </div>
+  <div class="panel scroll" data-pf="back" hidden>
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">Their traffic back to you: RIPE Atlas</h2>
+      <button type="button" data-pf="back-run" hidden>Trace back from them</button>
+    </div>
+    <div data-pf="back-summary"></div>
+    <div data-pf="back-results"></div>
+  </div>
+  <div class="panel scroll" data-pf="history" hidden>
+    <h2>History <span class="muted" style="font-weight:400;font-size:13px">what each lookup, traceroute and trace back showed{% if this_watch %}, and the watch's checks every {{ this_watch.minutes // 60 ~ ' h' if this_watch.minutes >= 60 else this_watch.minutes ~ ' min' }}{% endif %}</span></h2>
+    <div data-pf="history-body"></div>
+  </div>
+</div>
+<script src="/static/pathfinder.js?v={{ version }}" defer></script>
+{% endif %}
+
+{% if watches %}
+<div class="panel scroll" id="watched">
+  <h2>Watched</h2>
+  <table>
+    <tr><th>Target</th><th>Your traffic's path</th><th>Back to you</th><th>Checked</th><th></th></tr>
+    {% for w in watches %}{% set st = w.state %}
+    <tr>
+      <td><a href="/pathfinder?q={{ w.query|urlencode }}">{{ w.label or w.query }}</a>{% if w.label %} <span class="muted mono">{{ w.query }}</span>{% endif %}
+        {% if st.them %}<div class="muted" style="font-size:12px">AS{{ st.them }} {{ (wnames.get(st.them) or '')[:30] }}</div>{% endif %}</td>
+      <td class="mono" style="font-size:12px">{% if st.active %}{% for a in st.active.path %}AS{{ a }}{{ ' → ' if not loop.last }}{% endfor %}{% if not st.active.complete %} …{% endif %}
+          <div class="muted" style="font-family:inherit">since <time data-ts="{{ st.active_since }}"></time>{% if st.active_pending %} · <span style="color:var(--warn)">a different path in {{ st.active_pending.n }} check{{ 's' if st.active_pending.n != 1 }}</span>{% endif %}</div>
+        {% elif st.trace_error %}<span class="muted" style="font-family:inherit">{{ st.trace_error }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="mono" style="font-size:12px">{% if not w.back %}<span class="muted" style="font-family:inherit">off</span>
+        {% elif st.back %}{% for a in st.back.path %}AS{{ a }}{{ ' → ' if not loop.last }}{% endfor %}{% if not st.back.complete %} …{% endif %}
+          <div class="muted" style="font-family:inherit">since <time data-ts="{{ st.back_since }}"></time></div>
+        {% elif st.back_error %}<span class="muted" style="font-family:inherit">{{ st.back_error }}</span>{% else %}<span class="muted" style="font-family:inherit">waiting for RIPE Atlas</span>{% endif %}</td>
+      <td>{% if w.last_check %}<time data-ts="{{ w.last_check }}"></time>{% else %}<span class="muted">not yet</span>{% endif %}
+        <div class="muted" style="font-size:12px">every {{ w.minutes // 60 ~ ' h' if w.minutes >= 60 else w.minutes ~ ' min' }}{{ ' · alerts' if w.alert }}</div>
+        {% if st.error %}<div style="color:var(--crit);font-size:12px">{{ st.error }}</div>{% endif %}</td>
+      <td style="white-space:nowrap">{% if is_admin %}
+        <form method="post" action="/pathfinder/watch/{{ w.id }}/check" class="inline"><button type="submit">Check now</button></form>
+        <form method="post" action="/pathfinder/watch/{{ w.id }}/delete" class="inline" data-msg="Stop watching {{ w.label or w.query }}? Its history is kept." onsubmit="return confirm(this.dataset.msg)"><input type="hidden" name="back" value="/pathfinder{{ '?q=' ~ q|urlencode if q }}"><button type="submit">Remove</button></form>
+      {% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if is_admin %}
+<form class="panel toolbar" method="post" action="/pathfinder/settings" style="margin-top:16px">
+  <label>Who can run traceroutes, RIPE Atlas traces and Route Views lookups here
+    <select name="checks">{% for k, label in check_choices.items() %}<option value="{{ k }}" {{ 'selected' if k == checks }}>{{ label }}</option>{% endfor %}</select></label>
+  <button type="submit">Save</button>
+  <span class="muted" style="font-size:12px">They send traffic from this server or use your RIPE Atlas credits and Route Views' daily allowance. Anyone signed in can still look paths up.</span>
+</form>
+{% endif %}
+
+<p class="muted" style="font-size:12px;margin-top:16px">How the paths are found: RIS doesn't show the paths between two networks
+  directly. It shows each RIS peer's AS path toward your prefix and toward theirs, and every network on such a path has a
+  route of its own to that destination. Your traffic's paths go up from your AS through the networks that carry your
+  prefix, and through your upstreams' other neighbours (from RIPEstat, as on the connectivity tree), to the first network
+  with a route of its own to theirs, then along that route. Their traffic's paths are their own route to you when RIS sees
+  it, or the same climb from their side through their main upstreams. So these are the paths the data supports, not every
+  path that exists. The traceroute from this server shows which one your traffic takes; a RIPE Atlas traceroute from a probe
+  in their network (or their main upstream) shows theirs. Their side comes from RIPEstat's looking glass (and Route Views,
+  if asked), yours from bgpcanary's live view. Traceroute hops are mapped to networks with Team Cymru's IP-to-ASN service,
+  and hops at internet exchanges with PeeringDB.</p>
+{% endblock %}

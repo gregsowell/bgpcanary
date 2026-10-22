@@ -18,8 +18,8 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (REPO, __version__, alerts, atlas, auth, config, db, evidence, paths, peering, registry, ripe, transit,
-               tree, updates)
+from . import (REPO, __version__, alerts, atlas, auth, config, db, evidence, pathfinder, paths, peering, registry, ripe,
+               tracer, transit, tree, updates, watch)
 from .service import Service
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -190,7 +190,8 @@ SETUP_PATHS = ("/settings/monitor", "/restarting", "/account/password", "/settin
 async def _need_login(request, exc):
     if request.url.path.startswith("/api/"):
         return JSONResponse({"error": "login required"}, status_code=401)
-    return RedirectResponse(f"/login?next={request.url.path}", status_code=303)
+    here = request.url.path + (f"?{request.url.query}" if request.url.query else "")   # (a shared link keeps its query)
+    return RedirectResponse(f"/login?next={quote(here, safe='/')}", status_code=303)
 
 
 @app.exception_handler(MustChangePassword)
@@ -419,7 +420,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
                       need_https=cookies_need_https(request))
     throttle.success(ip, username, device)
     row = start_session(request, username)
-    if not next.startswith("/") or next.startswith("//"):
+    if not next.startswith("/") or next.startswith(("//", "/\\")):   # (only ever a page on this site)
         next = "/"
     resp = RedirectResponse("/account/password" if row and row["must_change"] else next, status_code=303)
     resp.set_cookie(DEVICE_COOKIE, _devices.dumps({"u": username, "id": device or secrets.token_urlsafe(12)}),
@@ -892,21 +893,8 @@ async def upstream_neighbors(data):
             | ups | {int(a) for a in exchanges})
     missing = [a for a in want if str(a) not in data["names"]]
     if missing:
-        known = names(svc.aconn, missing)
-        for a in missing:
-            if a in known:
-                data["names"][str(a)] = known[a]
-        todo = [a for a in missing if str(a) not in data["names"]][:40]
-
-        async def fetch(a):
-            try:
-                nm = await ripe.as_name(a, svc.sourceapp)
-                svc.aconn.execute("INSERT OR REPLACE INTO asn_names(asn,name,fetched) VALUES(?,?,?)", (a, nm, time.time()))
-                data["names"][str(a)] = nm
-            except Exception:
-                pass
-        await asyncio.gather(*(fetch(a) for a in todo))
-        svc.aconn.commit()
+        for a, nm in (await svc.as_names(missing)).items():
+            data["names"][str(a)] = nm
     return data
 
 
@@ -1021,6 +1009,148 @@ async def paths_page(request: Request, prefix: str = None):
         ok, why = svc.rv_allowed(srv, "scheduled")
         rv.append({"server": srv, "ok": ok, "why": why, "conns": b.get("conns", 0), "kb": b.get("bytes_in", 0) / 1000})
     return render(request, "paths.html", prefix=prefix, cur=cur, snaps=snaps, names=nm, others=others, rv=rv)
+
+
+# ------------------------------------------------------------------------------------------------ path finder
+def _pf_error(ex):
+    return JSONResponse({"error": str(ex)}, status_code=ex.status)
+
+
+def _pf_may_check(request):
+    if not pathfinder.may_check(svc.aconn, request.state.role):
+        raise pathfinder.PathError(pathfinder.check_refusal(svc.aconn), 403)
+
+
+@app.get("/pathfinder", response_class=HTMLResponse)
+async def pathfinder_page(request: Request, q: str = "", prefix: str = "", origin: str = "", rv: int = 0,
+                          msg: str = "", err: int = 0):
+    user(request)
+    ws = watch.watches(svc.aconn)
+    nm = names(svc.aconn, {a for w in ws for v in (w["state"].get("active"), w["state"].get("back")) if v
+                           for a in v["path"]} | {w["state"].get("them") for w in ws})
+    can = pathfinder.may_check(svc.aconn, request.state.role)
+    return render(request, "pathfinder.html", q=q.strip()[:100], prefix=prefix.strip()[:50], origin=origin.strip()[:10],
+                  rv=bool(rv) and can, trace_ok=tracer.supported(), can_check=can,
+                  checks=pathfinder.settings(svc.aconn)["checks"], check_choices=pathfinder.CHECKS,
+                  watches=ws, this_watch=watch.find(svc.aconn, q) if q.strip() else None, wnames=nm,
+                  minutes=watch.MINUTES, back_minutes=watch.BACK_MINUTES, atlas_on=atlas.enabled(svc.aconn),
+                  back_credits=atlas.COST["traceroute"] * 2 * pathfinder.BACK_PROBES, msg=msg, err=err)
+
+
+async def _pf_lookup(request, q, prefix="", origin=0, rv=False):
+    if rv:
+        _pf_may_check(request)
+    return await pathfinder.lookup(svc, q, prefix.strip() or None, origin, routeviews_too=rv)
+
+
+@app.get("/api/pathfinder")
+async def api_pathfinder(request: Request, q: str = "", prefix: str = "", origin: int = 0, rv: int = 0):
+    """The known AS paths between your network and the one `q` (an IP address, prefix, AS number or host name) is
+    in; see pathfinder.py. `prefix`: which of an AS's prefixes; `origin`: which AS, when several announce it; `rv`:
+    ask Route Views' collectors too."""
+    user(request)
+    try:
+        res = await _pf_lookup(request, q, prefix, origin, bool(rv))
+    except pathfinder.PathError as ex:
+        return _pf_error(ex)
+    pathfinder.record(svc.aconn, res["key"], "known", pathfinder.known_value(res))
+    res["may_check"] = pathfinder.may_check(svc.aconn, request.state.role)
+    return res
+
+
+@app.post("/api/pathfinder/trace")
+async def api_pathfinder_trace(request: Request, q: str = Form(...), prefix: str = Form(""), origin: int = Form(0)):
+    """Traceroute from this server toward `q` (its address, or an address in its prefix), matched against the known
+    paths; see pathfinder.trace."""
+    user(request)
+    try:
+        _pf_may_check(request)
+        res = await _pf_lookup(request, q, prefix, origin)
+        tr = await pathfinder.trace(svc, res["trace_to"], res["paths"], res["target"]["asn"])
+    except pathfinder.PathError as ex:
+        return _pf_error(ex)
+    pathfinder.record(svc.aconn, res["key"], "active", pathfinder.active_value(tr))
+    return tr
+
+
+@app.post("/api/pathfinder/back")
+async def api_pathfinder_back(request: Request, q: str = Form(...), prefix: str = Form(""), origin: int = Form(0)):
+    """Start a RIPE Atlas traceroute to your address from probes in their network (or their main upstreams)."""
+    u = user(request)
+    try:
+        _pf_may_check(request)
+        res = await _pf_lookup(request, q, prefix, origin)
+        return await pathfinder.back_start(svc, res["target"]["asn"], res["main"], user=u)
+    except pathfinder.PathError as ex:
+        return _pf_error(ex)
+
+
+@app.get("/api/pathfinder/back/{msm}")
+async def api_pathfinder_back_result(request: Request, msm: int, q: str, prefix: str = "", origin: int = 0):
+    """What a trace back from them has shown so far, matched against the known paths."""
+    user(request)
+    try:
+        res = await _pf_lookup(request, q, prefix, origin)
+        out = await pathfinder.back_result(svc, msm, res["target"]["asn"], res["paths"])
+    except pathfinder.PathError as ex:
+        return _pf_error(ex)
+    pathfinder.record(svc.aconn, res["key"], "back", pathfinder.back_value(out["results"]))
+    return out
+
+
+@app.get("/api/pathfinder/history")
+async def api_pathfinder_history(request: Request, q: str, prefix: str = "", origin: int = 0):
+    """What every lookup, traceroute and trace back for this target has shown, newest first (pathfinder.history)."""
+    user(request)
+    try:
+        key = pathfinder.key_of(q, prefix.strip() or None, origin or None)
+    except ValueError as ex:
+        return JSONResponse({"error": str(ex)}, status_code=400)
+    rows = pathfinder.history(svc.aconn, key)
+    asns = {a for r in rows for a in (r["value"].get("path") or [])}
+    asns |= {int(x) for r in rows for p in [r["value"].get("shortest")] if p for x in p.split()}
+    return {"key": key, "rows": rows, "names": {str(k): v for k, v in names(svc.aconn, asns).items()}}
+
+
+@app.post("/pathfinder/watch")
+async def pathfinder_watch(request: Request, q: str = Form(...), label: str = Form(""), minutes: int = Form(60),
+                           alert: str = Form(""), back: str = Form("")):
+    u = admin(request)
+    try:
+        watch.save(svc.aconn, q, label, minutes, bool(alert), bool(back), u)
+    except ValueError as ex:
+        return RedirectResponse(f"/pathfinder?{urlencode({'q': q, 'msg': str(ex), 'err': 1})}", status_code=303)
+    w = watch.find(svc.aconn, q)
+    msg = "Saved." if w and w["last_check"] else "Watching it. The first check runs within a minute."
+    return RedirectResponse(f"/pathfinder?{urlencode({'q': q, 'msg': msg})}", status_code=303)
+
+
+@app.post("/pathfinder/watch/{wid}/delete")
+async def pathfinder_unwatch(request: Request, wid: int, back: str = Form("/pathfinder")):
+    admin(request)
+    watch.remove(svc.aconn, wid)
+    return RedirectResponse(back if back.startswith("/pathfinder") else "/pathfinder", status_code=303)
+
+
+@app.post("/pathfinder/watch/{wid}/check")
+async def pathfinder_watch_check(request: Request, wid: int):
+    admin(request)
+    w = watch.get(svc.aconn, wid)
+    if not w:
+        raise HTTPException(404)
+    await watch.check(svc, w)
+    return RedirectResponse(f"/pathfinder?{urlencode({'q': w['query'], 'msg': 'Checked just now.'})}", status_code=303)
+
+
+@app.post("/pathfinder/settings")
+async def pathfinder_settings(request: Request, checks: str = Form(...)):
+    u = admin(request)
+    if checks not in pathfinder.CHECKS:
+        raise HTTPException(400)
+    db.kv_set(svc.aconn, pathfinder.SETTINGS_KV, {**pathfinder.settings(svc.aconn), "checks": checks})
+    svc.aconn.commit()
+    log.info("path finder checks: %s (set by %s)", checks, u)
+    return RedirectResponse(f"/pathfinder?{urlencode({'msg': 'Saved.'})}", status_code=303)
 
 
 @app.get("/updates", response_class=HTMLResponse)

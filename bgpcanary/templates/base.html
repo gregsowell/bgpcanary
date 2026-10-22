@@ -22,6 +22,7 @@
       <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
       <a href="/events" class="{{ 'active' if path.startswith('/events') }}">Events</a>
       <a href="/paths" class="{{ 'active' if path.startswith('/paths') }}">Paths</a>
+      <a href="/pathfinder" class="{{ 'active' if path.startswith('/pathfinder') }}" title="The known AS paths between your network and another one">Path finder</a>
       <a href="/updates" class="{{ 'active' if path.startswith('/updates') }}">Updates</a>
       <a href="/registry" class="{{ 'active' if path.startswith('/registry') }}">Registry</a>
       <a href="/probes" class="{{ 'active' if path.startswith('/probes') or path.startswith('/snapshots') }}" title="Ping, traceroute and BGP snapshots from Route Views">Route Views</a>

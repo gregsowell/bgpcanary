@@ -49,6 +49,11 @@
       {% if d.example_path %}<dt>Example path</dt><dd class="mono">{{ d.example_path|join(' ') }}</dd>{% endif %}
       {% if d.path %}<dt>Path</dt><dd class="mono">{{ d.path|join(' ') }}</dd>{% endif %}
       {% if d.peers %}<dt>Peers</dt><dd>{{ d.peers }}</dd>{% endif %}
+      {% if d.pathfinder %}
+      <dt>Path {{ d.direction }}</dt><dd class="mono">{% for a in d.now %}AS{{ a }}{{ ' → ' if not loop.last }}{% endfor %}</dd>
+      <dt>Before</dt><dd class="mono">{% for a in d.was %}AS{{ a }}{{ ' → ' if not loop.last }}{% endfor %}</dd>
+      <dt>Path finder</dt><dd><a href="/pathfinder?q={{ d.pathfinder|urlencode }}">{{ d.pathfinder }}: paths, history and traceroute</a></dd>
+      {% endif %}
       {% if d.note %}<dt>Details</dt><dd>{{ d.note }}</dd>{% endif %}
       {% if d.object %}<dt>{{ 'Object (now)' if d.before else 'Registry object' }}</dt><dd><pre style="margin:0">{{ d.object }}</pre></dd>{% endif %}
       {% if d.before %}<dt>Object (before)</dt><dd><pre style="margin:0">{{ d.before }}</pre></dd>{% endif %}

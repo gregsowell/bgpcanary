@@ -73,6 +73,7 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 | Unmonitored prefix from your ASN | warning | |
 | Transit not carrying you | info | An upstream's transit carries the upstream's routes but not yours, usually a prefix filter |
 | Registry problem / filter simulation / IRR / as-set change | info–critical | From the registry watch |
+| Watched path changed | info | A network on the [Path finder](#path-finder)'s watch list: the path to it (or back from it) changed in two checks in a row |
 
 ## Detection & data sources (Settings › Detection & data sources)
 
@@ -130,6 +131,38 @@ daily credit use as you type.
 - One per line, optionally followed by a label and a `[group]`, e.g. `203.0.113.2  Carrier A peering [border-1]`.
 - Your side of each carrier's peering link makes a good target: traffic to it arrives over that carrier, so each carrier gets its own latency/loss record.
 - Each target costs roughly 10,000 credits/day at the defaults. Set the **daily credit cap** to match.
+
+## Path finder
+
+The **Path finder** page shows the known AS paths between your network and another one: type an IP address, a
+prefix, an AS number or a host name. The paths are put together from what RIS peers see toward each of you (the
+page explains how); the shortest is highlighted, and the ones in use are marked:
+
+- **Your traffic to them:** a traceroute from the bgpcanary server, run straight away for an address or host name,
+  and on request toward an address in the prefix for an AS or prefix. It needs no root or extra packages (ICMP
+  where ordinary users may send it, else UDP), shows each hop's network, its exchange (from PeeringDB) and its
+  reverse DNS name, and which network adds how much delay. If the server reaches the internet from an address
+  that isn't in your prefixes (behind NAT on your upstream's link, say), the page says so.
+- **Their traffic back to you:** on request, a one-off RIPE Atlas traceroute to your probe target (Settings ›
+  Monitored network) from up to 3 probes inside their network, or, if Atlas has none there, inside one of their
+  main upstreams: the path back from there. About 60 credits a probe, counted against your daily cap. Needs
+  [RIPE Atlas](#ripe-atlas).
+- **Route Views too:** tick *also ask Route Views* to add each collector's view of their prefix (one of its ~100
+  daily connections per lookup, reused for 30 minutes, and never more than 80% of a collector's day) and the
+  paths toward you from the latest scheduled snapshots.
+
+**History:** every lookup, traceroute and trace back is kept per target, as periods ("this path from 09:00 to
+17:30"), for 400 days; the page lists what changed.
+
+**Watch list** (admins): *Watch* a target to have it checked every 15 minutes to 24 hours. Each check looks it up
+and traces it; a path that's different in two checks in a row counts as a change, goes into its history and, if
+the watch alerts, sends a *Watched path changed* alert. A watch can also trace back from them with RIPE Atlas, at
+most every 6 hours (~180 credits each time).
+
+**Who can run checks:** traceroutes, RIPE Atlas traces and Route Views lookups send traffic from the server or use
+your credits and Route Views' allowance, so the bottom of the Path finder page (admins only) sets who may run
+them: everyone signed in (the default), admins only, or nobody. Looking paths up is always open to everyone
+signed in.
 
 ## The config file
 

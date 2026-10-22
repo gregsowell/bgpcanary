@@ -307,6 +307,10 @@ The image has a health check, so `docker ps` shows `(healthy)`. For outside moni
 
 - The app runs as uid 10001 with no Linux capabilities, and works on a read-only root filesystem (the compose
   file sets that up). It writes only to its volume and `/tmp`.
+- The Path finder's traceroute needs no capabilities either: it sends UDP probes (ICMP where the container allows
+  unprivileged ping) and reads the routers' answers from the socket. It works on the default bridge network and in
+  rootless Podman. Networking that re-sends packets instead of forwarding them hides the hops, and the page says so;
+  see [Troubleshooting](TROUBLESHOOTING.md#path-finder-the-traceroute-shows-nothing-or-stops-early).
 - Images are built by GitHub Actions from the tagged source, tested on both architectures, and published with a
   signed build provenance. To check that an image came from this repository:
 

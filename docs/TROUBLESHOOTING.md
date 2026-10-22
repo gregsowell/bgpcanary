@@ -155,6 +155,25 @@ this; the log then shows `looking-glass resync: 300 changes` or similar while no
 - If a collector is rate-limited, bgpcanary pauses it for 24 h by itself. Don't lower the polling intervals below the defaults.
 - A traceroute that ends early with "target answers ping" is fine: routers near your network just don't answer traceroute.
 
+## Path finder: the traceroute shows nothing, or stops early
+
+The traceroute runs from the bgpcanary server itself, without root: ICMP echo where the system lets ordinary users
+send it, otherwise UDP to ports 33434 and up. The routers' "time exceeded" answers have to get back to the server.
+
+- **Every hop is `*`:** a firewall drops the outgoing probes (ICMP echo, or UDP to high ports), or the ICMP answers
+  coming back. Allow ICMP "time exceeded" and "destination unreachable" in.
+- **"Every probe reached the target in one hop":** something between the server and the internet sends the
+  packets on itself instead of forwarding them, so their TTL is lost (some container and VPN networking does
+  this). It works on a server install, or in a container with rootful networking or `--network host`.
+- **"Network is unreachable" for an IPv6 address:** the server has no IPv6 route.
+- **"This server reaches the internet from ..., not from your prefixes":** the server's traffic leaves from an
+  address that isn't in your prefixes, for example your router's address on its link to an upstream (NAT), or the
+  server is hosted somewhere else. If the trace leaves through one of your upstreams, it's still marked on the tree
+  as how traffic leaves through that upstream; otherwise it isn't marked.
+- **A network missing from the trace:** routers that don't answer traceroute show as `*`, so their network can be
+  missing. The page still matches the trace to a known path if the missing networks fit in those silent hops, and
+  says which ones it didn't see.
+
 ## Alerts don't arrive
 
 - Use **Settings › Alert channels › Send test email / Test** and read the error shown.

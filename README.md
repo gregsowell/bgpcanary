@@ -22,6 +22,10 @@ networks.
 - **Connectivity tree:**
   - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't, and for a month, which networks your upstreams are no longer peered with.
   - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
+- **Path finder:**
+  - enter an IP address, prefix, AS number or host name to see the known AS paths between your network and theirs as a tree, built from what RIS (and optionally Route Views) peers see toward each of you, with the shortest one highlighted;
+  - a traceroute from the bgpcanary server marks the path your traffic takes, each hop with its network, exchange (from PeeringDB), name and the delay it adds, and a RIPE Atlas probe in their network traces the path back to you;
+  - each target's history, and a watch list that re-checks targets on a schedule and alerts when the path in use changes.
 - **Internet exchanges:** peers at your exchanges are recognized automatically from PeeringDB, and kept apart from your transit providers. They get one Exchanges branch in the tree and no false "unexpected upstream" warnings, and you're alerted when many of an exchange's peers drop at once or a peer leaks your routes.
 - **Doesn't cry wolf over RIPE's data:** an outage seen in RIS is checked against Route Views (and RIPE Atlas) before it's reported as critical, and control prefixes of other networks show when RIPE's data is at fault. A data-sources panel shows how each source looks.
 - **Detection and alerts** (email, Slack, Microsoft Teams or any webhook), each type switchable with its own thresholds:
@@ -120,7 +124,7 @@ rate limits are respected, and the RIPEstat requests identify themselves. Please
 | [RIPE RIS Live](https://ris-live.ripe.net/) | Real-time BGP updates from ~330 peers (the main detector) |
 | [RIPEstat](https://stat.ripe.net/) | Current state (looking glass), per-second history (BGPlay), AS names and neighbours |
 | [Route Views](https://www.routeviews.org/) | `show ip bgp`, ping and traceroute from their collectors (telnet; kept within their daily limits) |
-| [RADb IRR](https://www.radb.net/), [PeeringDB](https://www.peeringdb.com/), RPKI via RIPEstat | Registry watch; which of your neighbors are peers at your internet exchanges |
+| [RADb IRR](https://www.radb.net/), [PeeringDB](https://www.peeringdb.com/), RPKI via RIPEstat | Registry watch; which of your neighbors are peers at your internet exchanges; whose port a traceroute hop at an exchange is |
 | [RIPE Atlas](https://atlas.ripe.net/) (optional) | Ping and traceroute from probes worldwide; needs your own API key and credits |
 | [Team Cymru](https://www.team-cymru.com/ip-asn-mapping) | IP-to-ASN lookups for traceroute hops |
 

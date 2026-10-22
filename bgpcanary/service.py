@@ -7,7 +7,8 @@ import os
 import shutil
 import time
 
-from . import alerts, atlas, config, db, paths, registry, ripe, routeviews, sanity, transit, tree, updates
+from . import (alerts, atlas, config, db, pathfinder, paths, registry, ripe, routeviews, sanity, transit, tree, updates,
+               watch)
 from .engine import Engine, _parse_ts as ripe_ts, close_open
 from .peering import Peering
 
@@ -41,6 +42,7 @@ class Service:
         self.transit = transit.TransitCheck(self)
         self.registry = registry.RegistryWatch(self)
         self.atlas = atlas.Atlas(self)   # optional RIPE Atlas data-plane checks (idle until an API key is set)
+        pathfinder.init_db(self.conn)    # Path finder: watched targets and what each lookup / traceroute showed
         self.pending_backfill = []   # prefixes added since the database was created
         self.replays = 0             # history loads / gap fills running (they rewrite buckets; see _compact_buckets)
         self.last_burst = 0          # last event-triggered Route Views burst (merge simultaneous events)
@@ -67,6 +69,7 @@ class Service:
         self.tasks.append(asyncio.create_task(self._prune_loop()))
         self.tasks.append(asyncio.create_task(self.atlas.loop()))
         self.tasks.append(asyncio.create_task(updates.loop(self.aconn)))
+        self.tasks.append(asyncio.create_task(watch.loop(self)))
 
     async def stop(self):
         for t in self.tasks:
@@ -748,13 +751,13 @@ class Service:
         self._rv_save()
 
     def rv_allowed(self, server, trigger):
-        """(ok, reason). Scheduled work may use 50% of the daily limits; the rest is kept for
-        outage-triggered and manual snapshots/probes (up to 95%)."""
+        """(ok, reason). Scheduled work may use 50% of the daily limits and Path finder lookups 80%; the rest is
+        kept for outage-triggered and manual snapshots/probes (up to 95%)."""
         b = self._rv_state(server)
         if b.get("blocked_until", 0) > time.time():
             return False, "rate-limited by Route Views until " + time.strftime("%Y-%m-%d %H:%M %Z",
                                                                               time.localtime(b["blocked_until"]))
-        frac = 0.5 if trigger == "scheduled" else 0.95
+        frac = 0.5 if trigger == "scheduled" else 0.8 if trigger == "pathfinder" else 0.95
         for k, lim in self.RV_LIMITS.items():
             if b.get(k, 0) >= lim * frac:
                 return False, f"daily Route Views budget for this collector used ({k} {b.get(k, 0)}/{lim})"
@@ -872,6 +875,29 @@ class Service:
             await asyncio.sleep(max(self.cfg.probe_minutes, 1) * 60)
 
     # ------------------------------------------------------------------ housekeeping
+    async def as_names(self, asns, limit=40):
+        """{asn: name} from the name cache, with up to `limit` of the missing ones looked up in RIPEstat now (and
+        kept)."""
+        want = list(dict.fromkeys(int(a) for a in asns if a is not None and str(a).isdigit()))
+        got = {}
+        if want:
+            q = ",".join("?" * len(want))
+            got = {r["asn"]: r["name"] for r in self.aconn.execute(f"SELECT asn,name FROM asn_names WHERE asn IN ({q})",
+                                                                   want)}
+        todo = [a for a in want if a not in got][:limit]
+
+        async def fetch(a):
+            try:
+                nm = await ripe.as_name(a, self.sourceapp)
+                self.aconn.execute("INSERT OR REPLACE INTO asn_names(asn,name,fetched) VALUES(?,?,?)", (a, nm, time.time()))
+                got[a] = nm
+            except Exception:
+                pass
+        if todo:
+            await asyncio.gather(*(fetch(a) for a in todo))
+            self.aconn.commit()
+        return got
+
     async def _names_loop(self):
         await asyncio.sleep(30)
         while True:

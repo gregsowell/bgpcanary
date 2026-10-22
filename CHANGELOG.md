@@ -6,6 +6,24 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-22
+
+### Added
+- **Path finder** (new page in the menu): enter an IP address, prefix, AS number or host name, and see the known AS paths between your network and theirs as a tree, from your AS out to theirs.
+  - RIS can't show the paths between two networks directly, so they're put together from what RIS peers see toward each of you. Your traffic's paths climb from your AS through the networks that carry your prefix (and your upstreams' other neighbours, as on the connectivity tree) to the first one with a route of its own to theirs. Their traffic's paths are their own route to you when RIS sees it, or the same climb through their main upstreams.
+  - The shortest known path is highlighted, and every path is listed with which way it goes and how many RIS paths point along it. For an AS, its biggest prefix is used, or the one you pick; for a prefix announced by several networks, the origin you pick.
+  - **Your traffic:** a traceroute from the bgpcanary server marks the path it actually takes (or adds it, dashed, when it's one RIS doesn't show). Each hop shows its network, its reverse DNS name and, on an internet exchange's LAN, the exchange and whose port it is (from PeeringDB, instead of whoever announces that LAN). A breakdown shows which network adds how much delay. Networks hidden behind routers that don't answer, or that answer from another network's addresses, are allowed for when matching.
+  - **Their traffic back to you:** on request, a RIPE Atlas traceroute to your address from probes inside their network, or, if Atlas has none there, inside their main upstream (about 60 credits a probe, up to 3 probes). Marked on the tree in its own color.
+  - **Route Views too**, on request: each collector's view of their prefix (one connection per collector per lookup, reused for 30 minutes, at most 80% of a collector's daily allowance) and the paths toward you from the latest scheduled snapshots.
+  - **History:** what every lookup, traceroute and trace back showed is kept per target for 400 days, as periods, and listed on the page.
+  - **Watch list** (admins): targets checked again every 15 minutes to 24 hours, optionally traced back from their side every 6 hours. A different path in two checks in a row counts as a change: it's kept in the history and, if the watch alerts, sent as a new alert type, *Watched path changed* (Settings › Alert channels).
+  - **Who can run checks:** an admin chooses who may run traceroutes, RIPE Atlas traces and Route Views lookups: everyone signed in (the default), admins only, or nobody. Looking paths up stays open to everyone.
+  - The traceroute needs no root or extra packages: it works under the systemd sandbox and in the container image (ICMP where ordinary users may ping, else UDP). At most 10 a minute from people, one at a time, to public addresses only.
+
+### Changed
+- Signing in from a link (for example a shared Path finder page) brings you back to that exact page, query and all.
+- The container image is built on the latest Alpine and Python 3.13 security fixes.
+
 ## [1.4.0] - 2026-10-20
 
 ### Added
@@ -233,7 +251,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/gregsowell/bgpcanary/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/gregsowell/bgpcanary/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/gregsowell/bgpcanary/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/gregsowell/bgpcanary/compare/v1.3.1...v1.3.2

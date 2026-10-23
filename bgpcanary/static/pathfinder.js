@@ -32,7 +32,9 @@
   const short = a => { const n = nameOf(a).split(/[ ,]/)[0]; return n && n.toUpperCase() !== `AS${a}` ? n.slice(0, 14) : ""; };
   const label = a => `AS${a}` + (a === D.me ? " (you)" : short(a) ? " " + short(a) : "");
   const chip = a => `<span title="${esc(nameOf(a))}">AS${a}${short(a) ? " <span class=\"muted\">" + esc(short(a)) + "</span>" : ""}</span>`;
-  const pathHtml = asns => asns.map(chip).join(" → ");
+  const UNSEEN = "Not in the traceroute: its routers didn't answer, or answered from another network's addresses";
+  // (in brackets: networks a traceroute didn't show, put in from RIS)
+  const pathHtml = (asns, unseen = []) => asns.map(a => unseen.includes(a) ? `<span title="${UNSEEN}">(${chip(a)})</span>` : chip(a)).join(" → ");
   const hops = p => p.asns.length - 1;
   const key = a => a.join(" ");
   const ago = ts => { const s = Date.now() / 1000 - ts; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; };
@@ -172,9 +174,10 @@
       const t = label(n.asn), up = n.kids.length > 0;   // (above its edges; yours to the left of it)
       if (n.depth === 0) text(t, x - r - 6 - ctx.measureText(t).width, y, th.text);
       else text(t, x + r + 5, y - (up ? 8 : 0), lit ? th.text : th.muted);
-      if (D.paths.some(p => p.stopped === n.key)) {
+      const st = D.paths.find(p => p.stopped === n.key);   // (a trace back from their upstream starts there)
+      if (st) {
         ctx.font = "11px system-ui, sans-serif";
-        text("traceroute stopped here", x + r + 5, y + (up ? 6 : 13), th.warn);
+        text(st.back ? "traced back from here" : "traceroute stopped here", x + r + 5, y + (up ? 6 : 13), st.back ? th.muted : th.warn);
       }
     }
   }
@@ -320,7 +323,7 @@
       : top && top.idx === n - 1 ? ", the shortest known path" : "";
     return m.how === "exact" || m.how === "gaps" ? `${who} takes <strong>path ${n}</strong>${what}.${hid}`
       : m.how === "part" ? `It stopped in AS${m.asns[m.upto - 1]}, following <strong>path ${n}</strong> that far.${hid}`
-      : `That's not one of the paths RIS shows: it's added to the tree as <strong>path ${n}</strong> (dashed).`;
+      : `That's not one of the paths RIS shows: it's added to the tree as <strong>path ${n}</strong> (dashed).${hid}`;
   };
   const markOf = (color, nth = 0) => marks.filter(m => m.color === color)[nth];
 
@@ -332,7 +335,7 @@
     let s = "";
     if (T.direct) s = `<div class="msg err">Every probe reached ${esc(T.target)} in one hop, so their TTL didn't take effect on the way out: something between this server and the internet sends the packets on itself instead of forwarding them (some container and VPN networking does). The traceroute works on a server install, or in a container with rootful networking or <code>--network host</code>.</div>`;
     else {
-      if (T.asns.length) s += `<div>Networks on the way: ${pathHtml(T.asns)}${T.added_you ? ` <span class="muted">(your own routers answered from private or your upstream's addresses, so AS${D.me} is put first)</span>` : ""}</div>`;
+      if (T.asns.length) s += `<div>Networks on the way: ${pathHtml(T.asns, T.assumed || [])}${T.added_you ? ` <span class="muted">(your own routers answered from private or your upstream's addresses, so AS${D.me} is put first)</span>` : ""}</div>`;
       if (!T.from_you) s += `<div class="msg" style="margin-top:8px">This server reaches the internet from ${esc(T.egress || "an address")}${T.egress_asn ? " (AS" + T.egress_asn + ")" : ""}, not from your prefixes, so this traceroute shows that network's path rather than yours. It isn't marked on the tree.</div>`;
       else if (!T.own_space) s += `<div class="msg" style="margin-top:8px">This server reaches the internet from ${esc(T.egress || "an address")}${T.egress_asn ? `, an address of AS${T.egress_asn}` : ""}, not from one of your prefixes, so this is how traffic leaves through your upstream AS${T.asns[1]}. Your own prefixes' traffic goes the same way unless your routers send it elsewhere.</div>`;
       const mk = markOf("ok");
@@ -371,7 +374,7 @@
     out.innerHTML = R.results.map(r => {
       const mk = r.match ? markOf("back", nth++) : null;
       const head = `Probe <a href="https://atlas.ripe.net/probes/${r.probe}/" target="_blank" rel="noopener">#${r.probe}</a> in AS${r.asn ?? "?"}${r.cc ? ` (${esc(r.cc)})` : ""}: `
-        + (r.asns.length ? pathHtml(r.asns) + " (written from you)" : "no network answered") + (r.reached ? "" : ` <span class="muted">· didn't reach ${esc(I.target)}</span>`);
+        + (r.asns.length ? pathHtml(r.asns, r.assumed || []) + " (written from you)" : "no network answered") + (r.reached ? "" : ` <span class="muted">· didn't reach ${esc(I.target)}</span>`);
       const body = r.from_you ? (mk ? matchText(r.match, "Their traffic back to you", mk.idx + 1, r.hops) : "")
         : `<span class="muted">It didn't get as far as your network or your upstreams, so it isn't marked on the tree.</span>`;
       return `<details style="margin-top:10px" open><summary>${head}</summary><div style="margin:6px 0">${body}</div>${latency(r.hops, false)}<table style="margin-top:8px">${hopsTable(r.hops)}</table></details>`;

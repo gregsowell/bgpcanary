@@ -524,31 +524,69 @@ def trace_asns(hops, asn_of):
     return seq, gaps
 
 
-def follows(path, seq, gaps):
-    """How far `path` goes along a traceroute's networks: they're in it in order, from its start, with others in
-    between only where the traceroute's hops went dark, at most one per dark hop (gaps). 0 if it doesn't."""
+def _along(path, seq, gaps):
+    """How far a traceroute's networks (`seq`) go along `path` from its start, with others in between only where the
+    traceroute's hops went dark, at most one per dark hop (`gaps`): (networks of `seq` on it, networks of `path`
+    that far)."""
     j = 0
     for i, a in enumerate(seq):
         try:
             k = path.index(a, j)
         except ValueError:
-            return 0
+            return i, j
         if (k != 0) if i == 0 else k - j > (gaps[i - 1] if i - 1 < len(gaps) else 0):
-            return 0
+            return i, j
         j = k + 1
-    return j
+    return len(seq), j
 
 
-def match_trace(known, seq, gaps, them):
+def follows(path, seq, gaps):
+    """How far `path` goes along a traceroute's networks: they're in it in order, from its start, with others in
+    between only where the traceroute's hops went dark, at most one per dark hop (gaps). 0 if it doesn't."""
+    i, j = _along(path, seq, gaps)
+    return j if i == len(seq) else 0
+
+
+def hidden_next(seq, gaps, me, nbrs, to_me):
+    """A traceroute's networks written from you (`seq`, `gaps` as trace_asns gives them): the network next to yours
+    has to be one of your neighbours. When it isn't, the ones in between were hidden (their routers didn't answer, or
+    answered from the next network's addresses, as with a link numbered from your upstream's provider). Put in the
+    networks that network's own route to you goes through, as RIS sees it (`to_me`, as _routes gives it), when they
+    fit in the dark hops. Returns (seq, gaps, the networks put in)."""
+    if len(seq) < 2 or seq[0] != me or seq[1] in nbrs:
+        return seq, gaps, []
+    room = max(gaps[0], 1)
+    for r, _ in to_me.get(seq[1], Counter()).most_common():
+        mid = list(r[-2:0:-1])   # (between it and you, written from you)
+        if len(mid) <= room and not set(mid) & set(seq):
+            return [me] + mid + seq[1:], [0] * len(mid) + [room - len(mid)] + gaps[1:], mid
+    return seq, [room] + gaps[1:], []
+
+
+def match_trace(known, seq, gaps, them, unseen=()):
     """Which known path (dicts with "asns" and "seen", as connect() gives them) a traceroute's networks (from yours)
     follow: {"asns", "how": "exact" | "gaps" (some of its networks were hidden behind silent hops) | "part" (it
     stopped before them, following that path so far) | "new" (not a known path), "upto": how many of the path's
-    networks it covered, "hidden": networks on it the traceroute didn't see}. None for less than two networks."""
+    networks it covered, "hidden": networks on it the traceroute didn't see, "shown": the networks it did show, "dark":
+    how many hops went dark between each two of those}. None for less than two networks.
+    `unseen`: networks put into `seq` that the traceroute didn't show (see hidden_next). A new path gets the networks
+    hidden behind its dark hops from the known path it follows furthest, before it leaves it."""
     if len(seq) < 2:
         return None
+    shown, dark, d = seq[:1], [], 0
+    for a, g in zip(seq[1:], gaps):   # (a network put in takes the place of a dark hop)
+        d += g + (a in unseen)
+        if a not in unseen:
+            shown.append(a)
+            dark.append(d)
+            d = 0
+    seen = {"shown": shown, "dark": dark}
+
+    def hid(p):
+        return [a for a in p if a not in seq or a in unseen]
     for e in known:
         if e["asns"] == seq:
-            return {"asns": seq, "how": "exact", "upto": len(seq), "hidden": []}
+            return {"asns": seq, "how": "exact", "upto": len(seq), "hidden": hid(seq), **seen}
     reached, best, upto = seq[-1] == them, None, 0
     for e in known:
         n = follows(e["asns"], seq, gaps)
@@ -556,8 +594,14 @@ def match_trace(known, seq, gaps, them):
             best, upto = e, n
     if best:
         return {"asns": best["asns"], "how": "gaps" if reached else "part", "upto": upto,
-                "hidden": [a for a in best["asns"][:upto] if a not in seq]}
-    return {"asns": seq, "how": "new", "upto": len(seq), "hidden": []}
+                "hidden": hid(best["asns"][:upto]), **seen}
+    p, far = seq, 1
+    for e in known:
+        i, j = _along(e["asns"], seq, gaps)
+        q = e["asns"][:j] + seq[i:]
+        if i > far and len(set(q)) == len(q):
+            p, far = q, i
+    return {"asns": p, "how": "new", "upto": len(p), "hidden": hid(p), **seen}
 
 
 async def _ix_nets(conn):
@@ -696,7 +740,8 @@ async def trace(svc, ip, known=(), them=None, limit=True):
     """Traceroute from this server to `ip`: each hop with its network, exchange and name, the networks it went
     through in order ("asns", "gaps"), whether it shows your traffic's path ("from_you": this server's address is in
     your prefixes, or it leaves through your own network or one of your upstreams; your AS is put first when your
-    routers answered from other addresses), and which of the `known` paths it follows ("match"). `limit`: count it
+    routers answered from other addresses, and a neighbour of yours it didn't show is put in from RIS: "assumed",
+    see hidden_next), and which of the `known` paths it follows ("match"). `limit`: count it
     against TRACES_PER_MINUTE (a person asking; scheduled checks just wait their turn). PathError if it can't run."""
     cfg = svc.cfg
     if not tracer.supported():
@@ -737,26 +782,46 @@ async def trace(svc, ip, known=(), them=None, limit=True):
     if added:   # (between you and a neighbour, nothing's hidden; else the dark hops before it may hide some)
         lead = next((i for i, h in enumerate(res["hops"]) if h["asn"]), 0)
         seq, gaps = [cfg.asn] + seq, [0 if seq[0] in nbrs else max(lead, 1)] + gaps
-    elif len(seq) > 1 and seq[0] == cfg.asn and seq[1] not in nbrs:
-        # the network next to yours has to be one of your neighbours: when it isn't, one is hidden (its routers
-        # answered from the next network's addresses, as with a link numbered from your upstream's provider)
-        gaps[0] = max(gaps[0], 1)
+    seq, gaps, put = hidden_next(seq, gaps, cfg.asn, nbrs, _routes(_clean(mine, cfg.asn)))
     from_you = bool(seq) and (own or via_up)
     out_asn = asn_of.get(egress) if egress else None
     nm = await svc.as_names(seq + ([out_asn] if out_asn else []))
     res.update(target=str(a), asns=seq, gaps=gaps, from_you=from_you, own_space=own, added_you=added, egress=egress,
-               egress_asn=out_asn, names={str(k): v for k, v in nm.items()},
-               match=match_trace(list(known), seq, gaps, them) if from_you and not res["direct"] else None)
+               egress_asn=out_asn, names={str(k): v for k, v in nm.items()}, assumed=put,
+               match=match_trace(list(known), seq, gaps, them, put) if from_you and not res["direct"] else None)
     return res
 
 
+def _value(m, **extra):
+    v = {"path": m["asns"][:m["upto"]], "complete": m["how"] != "part", "shown": m["shown"], "dark": m["dark"], **extra}
+    if m["hidden"]:   # (networks on it the traceroute didn't show)
+        v["hidden"] = m["hidden"]
+    return v
+
+
 def active_value(tr):
-    """What a traceroute says about the path in use, for the history: the known path it follows (or its own),
-    complete or only so far."""
+    """What a traceroute says about the path in use, for the history and watches: the known path it follows (or its
+    own), complete or only so far, and what the traceroute itself showed (see same())."""
     m = tr.get("match")
-    if not m:
-        return None
-    return {"path": m["asns"][:m["upto"]], "complete": m["how"] != "part"}
+    return _value(m) if m else None
+
+
+def _fits(v, other):
+    """Whether what v's traceroute showed fits `other`'s path: its networks on it in order, with others in between
+    only where its hops went dark. (A value kept before 1.5.2: its whole path, as it is.)"""
+    shown, dark = v.get("shown", v["path"]), v.get("dark", [])
+    i, j = _along(other["path"], shown, dark)
+    return i == len(shown) and (j == len(other["path"]) or not v["complete"])
+
+
+def same(old, new):
+    """Whether two path values (active_value / back_value) show the same path, as far as their traceroutes tell:
+    equal, or one only got part of the way along the other, or what one showed fits the other with the rest hidden
+    behind its silent hops. A router that answers only some of the time isn't a change of path."""
+    a, b = old["path"], new["path"]
+    if a == b or not new["complete"] and a[:len(b)] == b or not old["complete"] and b[:len(a)] == a:
+        return True
+    return _fits(new, old) or _fits(old, new)
 
 
 # ---------------------------------------------------------------------------------------------- their way back
@@ -797,7 +862,8 @@ async def back_start(svc, them, main=(), user=""):
 
 async def back_result(svc, msm, them, known=()):
     """What a back_start measurement has shown so far: {"done", "results": [{"probe", "asn", "cc", "ts", "reached",
-    "hops", "asns" (written from you, as the paths are), "gaps", "match", "from_you"}], "names"}."""
+    "hops", "asns" (written from you, as the paths are), "gaps", "assumed" (as in trace()), "match", "from_you"}],
+    "names"}."""
     m = svc.aconn.execute("SELECT * FROM atlas_msm WHERE id=? AND purpose='pathfinder'", (msm,)).fetchone()
     if not m:
         raise PathError("No such measurement.", 404)
@@ -812,7 +878,7 @@ async def back_result(svc, msm, them, known=()):
                              "p.prb_id=r.prb_id WHERE r.msm_id=? ORDER BY r.ts", (msm,)).fetchall()
     cfg, out, asns = svc.cfg, [], set()
     mine, _, _ = my_paths(svc, 6 if ":" in (m["target"] or "") else 4)
-    nbrs = my_neighbours(cfg, mine)
+    nbrs, to_me = my_neighbours(cfg, mine), _routes(_clean(mine, cfg.asn))
     for r in rows:
         hops = [{"ttl": h.get("h"), "ip": h.get("ip"), "rtt": h.get("rtt")} for h in json.loads(r["hops"] or "[]")]
         asn_of = await label_hops(svc, hops)
@@ -822,14 +888,12 @@ async def back_result(svc, msm, them, known=()):
             seq, gaps = [pa] + seq, [next((i for i, h in enumerate(hops) if h.get("asn")), 0)] + gaps
         if seq and seq[-1] != cfg.asn and seq[-1] in nbrs:
             seq, gaps = seq + [cfg.asn], gaps + [0]   # (got as far as your upstream: your routers just didn't answer)
-        elif len(seq) > 1 and seq[-1] == cfg.asn and seq[-2] not in nbrs:
-            gaps[-1] = max(gaps[-1], 1)   # (a neighbour of yours hidden there, as in trace())
-        rev, rgaps = seq[::-1], gaps[::-1]
+        rev, rgaps, put = hidden_next(seq[::-1], gaps[::-1], cfg.asn, nbrs, to_me)   # (as in trace())
         ok = bool(rev) and rev[0] == cfg.asn
         asns.update(rev)
         out.append({"probe": r["prb_id"], "asn": r["probe_asn"], "cc": r["cc"], "ts": r["ts"],
-                    "reached": bool(r["reached"]), "hops": hops, "asns": rev, "gaps": rgaps, "from_you": ok,
-                    "match": match_trace(list(known), rev, rgaps, them) if ok else None})
+                    "reached": bool(r["reached"]), "hops": hops, "asns": rev, "gaps": rgaps, "assumed": put,
+                    "from_you": ok, "match": match_trace(list(known), rev, rgaps, them, put) if ok else None})
     nm = await svc.as_names(asns)
     return {"done": len(out) >= (m["probes"] or 0) or time.time() - m["created"] > 900, "results": out,
             "names": {str(k): v for k, v in nm.items()}}
@@ -840,27 +904,32 @@ def back_value(results):
     that got through, complete or as far as it went."""
     for r in results:
         if r.get("match"):
-            m = r["match"]
-            return {"path": m["asns"][:m["upto"]], "complete": m["how"] != "part", "probe_asn": r["asn"]}
+            return _value(r["match"], probe_asn=r["asn"])
     return None
 
 
 # ---------------------------------------------------------------------------------------------- history
 def record(conn, target, kind, value, ts=None):
     """Keep what was seen for `target`: the "known" paths, the "active" path from a traceroute, the path "back". A new
-    row when it differs from the last one; otherwise the last row's time moves on. Returns True if it changed."""
+    row when it differs from the last one; otherwise the last row's time moves on. A traceroute's path counts as the
+    same one when same() says so, and the fuller view of it is kept."""
     if value is None:
-        return False
+        return
     ts = ts or time.time()
     v = json.dumps(value, sort_keys=True, separators=(",", ":"))
     row = conn.execute("SELECT id, value FROM pf_hist WHERE target=? AND kind=? ORDER BY id DESC LIMIT 1",
                        (target, kind)).fetchone()
     if row and row["value"] == v:
         conn.execute("UPDATE pf_hist SET last=? WHERE id=?", (ts, row["id"]))
+    elif row and kind != "known" and same(json.loads(row["value"]), value):
+        old = json.loads(row["value"])
+        if value["complete"] and (not old["complete"] or len(value["path"]) > len(old["path"])):
+            old = value   # (the fuller view of the same path)
+        conn.execute("UPDATE pf_hist SET last=?, value=? WHERE id=?",
+                     (ts, json.dumps(old, sort_keys=True, separators=(",", ":")), row["id"]))
     else:
         conn.execute("INSERT INTO pf_hist(target,kind,first,last,value) VALUES(?,?,?,?,?)", (target, kind, ts, ts, v))
     conn.commit()
-    return not row or row["value"] != v
 
 
 def known_value(res):

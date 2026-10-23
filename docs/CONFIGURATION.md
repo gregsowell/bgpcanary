@@ -164,9 +164,10 @@ What marks the paths in use:
 17:30"), for 400 days; the page lists what changed.
 
 **Watch list** (admins): *Watch* a target to have it checked every 15 minutes to 24 hours. Each check looks it up
-and traces it; a path that's different in two checks in a row counts as a change, goes into its history and, if
-the watch alerts, sends a *Watched path changed* alert. A watch can also trace back from them with RIPE Atlas, at
-most every 6 hours (~180 credits each time).
+and traces it; a path that's different in two checks in a row counts as a change (a router that answers
+traceroutes only some of the time doesn't make one), goes into its history and, if the watch alerts, sends a
+*Watched path changed* alert. A watch can also trace back from them with RIPE Atlas, at most every 6 hours (~180
+credits each time).
 
 **Who can run checks:** traceroutes, RIPE Atlas traces and Route Views lookups send traffic from the server or use
 your credits and Route Views' allowance, so the bottom of the Path finder page (admins only) sets who may run

@@ -6,6 +6,15 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-10-23
+
+### Fixed
+- **Path finder: a traceroute that didn't show your upstream drew the next network as your neighbour.** Your upstream's routers may not answer a traceroute, or may answer from the next network's addresses (a link numbered from that network's space). Then the traceroute, from this server or a RIPE Atlas trace back from their side, seems to go straight from that network to you. When it wasn't one of the known paths, the page drew it that way, for example your upstream's provider connected straight to you. Now:
+  - the network RIS shows it reaching you through is put in, shown in brackets as not seen by the traceroute;
+  - on a path RIS doesn't know, networks hidden behind silent hops further along are filled in the same way, from the known path it follows that far.
+- **Path finder watches: false "path changed" alerts from a router that answers traceroutes only some of the time.** When it answered, the path showed its network; when it didn't, the path seemed to skip it, and two checks in a row either way counted as a change. A traceroute's path now counts as the same when what it showed fits the other one, with the networks it didn't show hidden behind its silent hops. The history keeps one period for it, with the fullest view. A network put in as above doesn't count as a change either, so updating doesn't set off an alert.
+- A trace back from a probe in their upstream was labelled "traceroute stopped here" where it starts. It now says "traced back from here".
+
 ## [1.5.1] - 2026-10-22
 
 ### Fixed
@@ -265,7 +274,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/gregsowell/bgpcanary/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/gregsowell/bgpcanary/compare/v1.3.3...v1.4.0

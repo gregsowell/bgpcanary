@@ -54,19 +54,6 @@ def remove(conn, wid):
     conn.commit()
 
 
-def same(old, new):
-    """Whether two path values (pathfinder.active_value / back_value) show the same path: equal, or one of them only
-    got part of the way along the other."""
-    a, b = old["path"], new["path"]
-    if a == b:
-        return True
-    if not new["complete"]:
-        return a[:len(b)] == b
-    if not old["complete"]:
-        return b[:len(a)] == a
-    return False
-
-
 def path_text(path, names):
     return " → ".join(f"AS{a}" + (f" {names[str(a)].split()[0][:14]}" if names.get(str(a)) else "") for a in path)
 
@@ -82,13 +69,13 @@ def _confirm(svc, w, kind, new, res, now):
         st[kind], st[kind + "_since"] = new, now
         st.pop(kind + "_pending", None)
         return
-    if same(cur, new):
+    if pathfinder.same(cur, new):
         if new["complete"] and len(new["path"]) >= len(cur["path"]):
             st[kind] = new   # (a fuller view of the same path)
         st.pop(kind + "_pending", None)
         return
     pend = st.get(kind + "_pending")
-    if pend and same(pend["value"], new):
+    if pend and pathfinder.same(pend["value"], new):
         pend["n"] += 1
         if new["complete"]:
             pend["value"] = new

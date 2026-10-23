@@ -173,6 +173,9 @@ send it, otherwise UDP to ports 33434 and up. The routers' "time exceeded" answe
 - **A network missing from the trace:** routers that don't answer traceroute show as `*`, so their network can be
   missing. The page still matches the trace to a known path if the missing networks fit in those silent hops, and
   says which ones it didn't see.
+- **Your upstream missing, its provider right next to you:** your upstream's router answered from an address of its
+  provider's (a link numbered from the provider's space), or not at all. Your neighbour has to be there, so the page
+  puts in the one RIS shows that provider reaching you through, in brackets, as not seen by the trace.
 
 ## Alerts don't arrive
 

@@ -25,6 +25,7 @@
   let BASE = [];       // its paths; D.paths = these + the traceroutes' own paths when they aren't among them
   let TR = null;       // /api/pathfinder/trace
   let BK = null;       // the trace back: {info: /api/pathfinder/back, res: /api/pathfinder/back/<msm>}
+  let backing = false; // a trace back under way
   let marks = [];      // colored strands: {color, idx (into D.paths), len (networks covered; Infinity = all)}
   let tree = null, hover = -1, hits = [];
 
@@ -366,7 +367,7 @@
     let s = `RIPE Atlas measurement <a href="https://atlas.ripe.net/measurements/${I.msm}/" target="_blank" rel="noopener">#${I.msm}</a>: ${I.probes.length} probe${I.probes.length > 1 ? "s" : ""} `
       + (I.inside ? `inside ${chip(I.from_asn)}` : `in ${chip(I.from_asn)}, their main upstream (RIPE Atlas has no probe in AS${D.target.asn} itself), so this is the way back from there`)
       + ` tracing to ${esc(I.target)} (~${I.credits} credits).`;
-    if (!R || !R.results.length) s += ` <span class="muted">Waiting for the results (usually 1–3 minutes)…</span>`;
+    if (!R || !R.results.length) s += ` <span class="muted">Waiting for the results (usually 1–3 minutes). Their path back is drawn on the tree, in purple, when they're in.</span>`;
     else if (!R.done) s += ` <span class="muted">${R.results.length} in, waiting for the rest…</span>`;
     box.innerHTML = s;
     if (!R) { out.innerHTML = ""; return; }
@@ -381,19 +382,38 @@
     }).join("");
   }
 
+  // the trace back offered next to the tree too: RIS can't show their side, and it's easy to miss further down
+  function backbar() {
+    const cr = root.dataset.credits, drawn = marks.some(m => m.color === "back");
+    let text = "", button = "";
+    if (!root.dataset.atlas) {
+      if (root.dataset.admin) text = `Their path back to you can be drawn on the tree too, with RIPE Atlas: <a href="/settings/atlas">set it up</a> (Settings › RIPE Atlas).`;
+    } else if (D.may_check && !drawn) {
+      if (backing) text = "<strong>Tracing their path back to you with RIPE Atlas…</strong> usually 1–3 minutes. It's drawn here, in purple, when it's in.";
+      else if (BK && BK.info.error) text = `Their path back to you couldn't be traced: ${esc(BK.info.error)}`;
+      else if (BK) { text = "RIPE Atlas's trace back didn't get as far as your network or your upstreams, so there's nothing to draw (details below)."; button = `Try again (up to ~${cr} credits)`; }
+      else { text = "<strong>Their traffic's path back to you isn't drawn yet:</strong> RIS doesn't show it. A RIPE Atlas probe in their network can trace it."; button = `Trace it back with RIPE Atlas (up to ~${cr} credits)`; }
+    }
+    $("backbar").hidden = !text;
+    $("backbar-text").innerHTML = text;
+    $("back-run2").hidden = !button;
+    $("back-run2").textContent = button;
+  }
+
   async function back() {
-    $("back-run").disabled = true;
+    $("back-run").disabled = true; backing = true; backbar();
     const info = await api("/api/pathfinder/back", { method: "POST", body: query() });
     if (!info) return;
     BK = { info, res: null };
     backRender();
-    if (info.error) { $("back-run").disabled = false; return; }
+    const stop = () => { $("back-run").disabled = false; backing = false; backbar(); };
+    if (info.error) { stop(); return; }
     const t0 = Date.now();
     const poll = async () => {
       const res = await api(`/api/pathfinder/back/${info.msm}?${query()}`);
-      if (res && !res.error) { BK.res = res; remark(); backRender(); }
-      if (res && !res.error && res.done) { $("back-run").disabled = false; history(); return; }
-      if (Date.now() - t0 > 12 * 60e3) { $("back-run").disabled = false; $("back-summary").insertAdjacentHTML("beforeend", ` <span class="muted">Stopped waiting; see the measurement on RIPE Atlas.</span>`); return; }
+      if (res && !res.error) { BK.res = res; remark(); backRender(); backbar(); }
+      if (res && !res.error && res.done) { stop(); history(); return; }
+      if (Date.now() - t0 > 12 * 60e3) { stop(); $("back-summary").insertAdjacentHTML("beforeend", ` <span class="muted">Stopped waiting; see the measurement on RIPE Atlas.</span>`); return; }
       setTimeout(poll, 10000);
     };
     setTimeout(poll, 20000);
@@ -447,15 +467,17 @@
     else if (!D.may_check) $("back-summary").innerHTML = '<div class="muted">RIPE Atlas traces here are limited to admins, or turned off.</div>';
     else {
       $("back-run").hidden = false;
-      $("back-run").textContent = `Trace back from them (~${root.dataset.credits} credits)`;
-      $("back-summary").innerHTML = `<div class="muted">A RIPE Atlas traceroute to you from probes inside AS${D.target.asn}${D.main.length ? `, or else in their main upstream (${D.main.map(a => "AS" + a).join(", ")})` : ""}: the path their traffic takes back to you.</div>`;
+      $("back-run").textContent = `Trace back from them (up to ~${root.dataset.credits} credits)`;
+      $("back-summary").innerHTML = `<div class="pf-backnote"><strong>Click “Trace back from them” to draw their traffic's path back to you on the tree, in purple.</strong> RIS shows how traffic gets to them, not how theirs comes back, and the two often differ. A RIPE Atlas probe inside AS${D.target.asn}${D.main.length ? ` (or else in their main upstream${D.main.length > 1 ? "s" : ""}, ${D.main.map(a => "AS" + a).join(", ")})` : ""} traces to your address, for up to ~${root.dataset.credits} credits.</div>`;
     }
+    backbar();
   }
 
   $("canvas").addEventListener("mousemove", tip);
   $("canvas").addEventListener("mouseleave", () => { $("tip").style.display = "none"; });
   $("retrace").addEventListener("click", trace);
   $("back-run").addEventListener("click", back);
+  $("back-run2").addEventListener("click", back);
   const wo = $("watch-open");
   if (wo) wo.addEventListener("click", () => { const f = $("watch-form"); f.hidden = !f.hidden; });
   window.addEventListener("resize", () => draw());

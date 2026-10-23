@@ -113,6 +113,13 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
           align-items: center; font-size: 13px; margin-top: 10px; max-width: 860px; }
 .pf-lat .bar > span { background: var(--ok); }
 .pf-b-back { background: rgba(155, 77, 202, .14); color: #9b4dca; }
+/* the trace back from their side: offered next to the tree and in its own panel, in the purple it's drawn in */
+.pf-backbar, .pf-backnote { padding: 9px 12px; border-left: 4px solid #9b4dca; border-radius: 6px;
+                            background: rgba(155, 77, 202, .09); font-size: 13px; }
+.pf-backbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 2px 0 10px; }
+.pf-backbar > span { flex: 1 1 320px; }
+button.pf-backbtn { background: #9b4dca; border-color: #9b4dca; color: #fff; font-weight: 600; }
+button.pf-backbtn:disabled { opacity: .6; cursor: default; }
 .toolbar label { color: var(--muted); font-size: 13px; }
 .rp-gifbox { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .rp-gifbox input[type=datetime-local] { padding: 4px 6px; }

@@ -6,6 +6,11 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-10-23
+
+### Changed
+- **Path finder: tracing their path back to you is easy to find.** Their traffic's way back to you only gets onto the tree when RIPE Atlas traces it, and the button for that sat at the bottom of the page. Now a purple button right by the tree offers it (the path is drawn in purple too), with the most it can cost, and says when it's under way. The RIPE Atlas panel says what the trace does. An admin whose bgpcanary has no RIPE Atlas set up gets a link to set it up instead.
+
 ## [1.5.2] - 2026-10-23
 
 ### Fixed
@@ -274,7 +279,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/gregsowell/bgpcanary/compare/v1.4.0...v1.5.0

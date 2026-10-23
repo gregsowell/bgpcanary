@@ -152,10 +152,10 @@ What marks the paths in use:
   where ordinary users may send it, else UDP), shows each hop's network, its exchange (from PeeringDB) and its
   reverse DNS name, and which network adds how much delay. If the server reaches the internet from an address
   that isn't in your prefixes (behind NAT on your upstream's link, say), the page says so.
-- **Their traffic back to you:** on request, a one-off RIPE Atlas traceroute to your probe target (Settings ›
-  Monitored network) from up to 3 probes inside their network, or, if Atlas has none there, inside one of their
-  main upstreams: the path back from there. About 60 credits a probe, counted against your daily cap. Needs
-  [RIPE Atlas](#ripe-atlas).
+- **Their traffic back to you:** on request (the purple button next to the tree), a one-off RIPE Atlas traceroute
+  to your probe target (Settings › Monitored network) from up to 3 probes inside their network, or, if Atlas has
+  none there, inside one of their main upstreams: the path back from there, drawn on the tree in purple. About 60
+  credits a probe, counted against your daily cap. Needs [RIPE Atlas](#ripe-atlas).
 - **Route Views too:** tick *also ask Route Views* to add each collector's view of their prefix (one of its ~100
   daily connections per lookup, reused for 30 minutes, and never more than 80% of a collector's day) and the
   paths toward you from the latest scheduled snapshots.

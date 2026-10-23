@@ -3,14 +3,16 @@
 name="bgpcanary"
 description="bgpcanary BGP visibility monitor"
 
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+
 export BGPCANARY_CONFIG="/etc/bgpcanary/config.toml"
 
 directory="/opt/bgpcanary"
 command="/opt/bgpcanary/venv/bin/uvicorn"
 command_args="bgpcanary.web:app --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log"
 command_user="bgpcanary:bgpcanary"
-command_background="yes"
-pidfile="/run/bgpcanary/bgpcanary.pid"
 output_log="/var/log/bgpcanary.log"
 error_log="/var/log/bgpcanary.err"
 umask=0027

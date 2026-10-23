@@ -35,7 +35,8 @@ done
 [ "$(id -u)" = 0 ] || { echo "Run as root: sudo $0 $*"; exit 1; }
 
 . /etc/os-release
-EL="${PLATFORM_ID#platform:}"
+EL="${PLATFORM_ID:-}"
+EL="${EL#platform:}"
 case "$EL" in
   el9|el10) OS=el ;;
   *)
@@ -137,7 +138,7 @@ if [ "$OS" = el ]; then
   command -v curl >/dev/null || PKGS+=(curl)   # EL9 minimal ships curl-minimal, which conflicts with the curl package
   dnf -y -q install "${PKGS[@]}" >/dev/null
 else
-  PKGS=("$PY" py3-pip nginx openssl sqlite ttf-dejavu tar curl ca-certificates runuser findutils)
+  PKGS=("$PY" py3-pip nginx openssl sqlite ttf-dejavu tar curl ca-certificates runuser findutils coreutils)
   apk add --quiet --no-cache "${PKGS[@]}"
   [ -f /etc/nginx/http.d/default.conf ] && mv /etc/nginx/http.d/default.conf /etc/nginx/http.d/default.conf.orig 2>/dev/null || true
 fi

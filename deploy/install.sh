@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# bgpcanary installer for Rocky Linux / AlmaLinux / RHEL 9 and 10. Run as root from the source directory:
+# bgpcanary installer for Rocky Linux / AlmaLinux / RHEL 9 and 10, and Alpine Linux.
+# Run as root from the source directory:
 #
 #   sudo ./deploy/install.sh [--fqdn bgp.example.com] [--asn 64500] [--prefix 192.0.2.0/24 ...]
 #                            [--upstream 64501 ...] [--probe 192.0.2.1 ...] [--atlas-probe]
@@ -33,6 +34,31 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" = 0 ] || { echo "Run as root: sudo $0 $*"; exit 1; }
 
+. /etc/os-release
+EL="${PLATFORM_ID#platform:}"
+case "$EL" in
+  el9|el10) OS=el ;;
+  *)
+    if [ "${ID:-}" = "alpine" ]; then
+      OS=alpine
+    else
+      echo "bgpcanary supports Rocky Linux, AlmaLinux, RHEL 9 or 10, and Alpine Linux (this is ${PRETTY_NAME:-unknown})."
+      exit 1
+    fi
+    ;;
+esac
+
+# Paths that differ between EL and Alpine
+if [ "$OS" = el ]; then
+  NGINX_CONF_DIR="/etc/nginx/conf.d"
+  CERT_FILE="/etc/pki/tls/certs/bgpcanary.crt"
+  KEY_FILE="/etc/pki/tls/private/bgpcanary.key"
+else
+  NGINX_CONF_DIR="/etc/nginx/http.d"
+  CERT_FILE="/etc/ssl/bgpcanary/bgpcanary.crt"
+  KEY_FILE="/etc/ssl/private/bgpcanary.key"
+fi
+
 # Backups live in a directory only root can write. The service account owns $DATA, so anything root did in
 # there (writing, chown, pruning) could be pointed at other files by a compromised service. Here the database
 # is read as the service user (so it can only ever yield what the service could read anyway) and root only
@@ -53,12 +79,7 @@ keep_newest() {   # keep_newest N PATTERN : delete all but the newest N files in
   find "$BK" -maxdepth 1 -type f -name "$2" -printf '%T@ %p\n' 2>/dev/null | sort -rn | tail -n +"$(($1 + 1))" \
     | cut -d' ' -f2- | while IFS= read -r f; do rm -f -- "$f"; done
 }
-. /etc/os-release
-EL="${PLATFORM_ID#platform:}"
-case "$EL" in
-  el9|el10) ;;
-  *) echo "bgpcanary supports Rocky Linux, AlmaLinux and RHEL 9 or 10 (this is ${PRETTY_NAME:-unknown})."; exit 1 ;;
-esac
+
 VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$SRC/bgpcanary/__init__.py")
 for a in "$ASN" "${UPSTREAMS[@]}"; do
   [[ "$a" =~ ^[0-9]+$ ]] || { echo "Not an AS number: '$a' (use digits, e.g. --asn 64500 --upstream 64501)"; exit 1; }
@@ -68,28 +89,40 @@ echo "bgpcanary $VERSION installer on $PRETTY_NAME"
 # ---------------------------------------------------------------- upgrade from the pre-1.0 name (bgpmon)
 if [ -d /opt/bgpmon ] && [ ! -d "$APP" ]; then
   echo "==> migrating the old 'bgpmon' installation to 'bgpcanary' (data, settings and users are kept)"
-  systemctl disable -q --now bgpmon 2>/dev/null || true
+  if [ "$OS" = el ]; then
+    systemctl disable -q --now bgpmon 2>/dev/null || true
+    rm -f /etc/systemd/system/bgpmon.service
+  else
+    rc-service bgpmon stop 2>/dev/null || true
+    rc-update del bgpmon 2>/dev/null || true
+    rm -f /etc/init.d/bgpmon
+  fi
   mv /var/lib/bgpmon "$DATA"
   for x in "" -wal -shm; do   # the write-ahead log belongs to the database: rename it with it, never delete it
     [ -f "$DATA/bgpmon.db$x" ] && mv "$DATA/bgpmon.db$x" "$DATA/bgpcanary.db$x"
   done
   mv /etc/bgpmon "$ETC"
   sed -i 's|^db_path = "/var/lib/bgpmon/bgpmon.db"|db_path = "/var/lib/bgpcanary/bgpcanary.db"|' "$ETC/config.toml"
-  [ -f /etc/pki/tls/certs/bgpmon.crt ] && mv /etc/pki/tls/certs/bgpmon.crt /etc/pki/tls/certs/bgpcanary.crt
-  [ -f /etc/pki/tls/private/bgpmon.key ] && mv /etc/pki/tls/private/bgpmon.key /etc/pki/tls/private/bgpcanary.key
-  [ -z "$FQDN" ] && [ -f /etc/nginx/conf.d/bgpmon.conf ] && \
-    FQDN=$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' /etc/nginx/conf.d/bgpmon.conf)
-  rm -f /etc/nginx/conf.d/bgpmon.conf /etc/systemd/system/bgpmon.service /usr/bin/bgpmon-admin
-  id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
+  [ -f /etc/pki/tls/certs/bgpmon.crt ] && mv /etc/pki/tls/certs/bgpmon.crt "$CERT_FILE"
+  [ -f /etc/pki/tls/private/bgpmon.key ] && mv /etc/pki/tls/private/bgpmon.key "$KEY_FILE"
+  [ -z "$FQDN" ] && [ -f "$NGINX_CONF_DIR/bgpmon.conf" ] && \
+    FQDN=$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' "$NGINX_CONF_DIR/bgpmon.conf")
+  rm -f "$NGINX_CONF_DIR/bgpmon.conf" /usr/bin/bgpmon-admin
+  if [ "$OS" = el ]; then
+    id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
+    systemctl daemon-reload
+    userdel bgpmon 2>/dev/null || true
+  else
+    id bgpcanary &>/dev/null || { addgroup -S bgpcanary && adduser -S -D -H -h "$DATA" -s /sbin/nologin -G bgpcanary bgpcanary; }
+    deluser bgpmon 2>/dev/null || true
+  fi
   chown -R bgpcanary:bgpcanary "$DATA"
   chown -R root:bgpcanary "$ETC"
   rm -rf /opt/bgpmon
-  userdel bgpmon 2>/dev/null || true
-  systemctl daemon-reload
 fi
 
-if [ -z "$FQDN" ] && [ -f /etc/nginx/conf.d/bgpcanary.conf ]; then   # upgrade: keep the existing name
-  FQDN=$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' /etc/nginx/conf.d/bgpcanary.conf)
+if [ -z "$FQDN" ] && [ -f "$NGINX_CONF_DIR/bgpcanary.conf" ]; then   # upgrade: keep the existing name
+  FQDN=$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' "$NGINX_CONF_DIR/bgpcanary.conf")
 fi
 [ -n "$FQDN" ] || FQDN=$(hostname -f 2>/dev/null || cat /proc/sys/kernel/hostname)   # (minimal systems lack `hostname`)
 toml_list() { local out="" x; for x in "$@"; do out+="${out:+, }$x"; done; echo "[$out]"; }
@@ -97,12 +130,17 @@ toml_strs() { local out="" x; for x in "$@"; do out+="${out:+, }\"$x\""; done; e
 CHARTJS_URL="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
 
 echo "==> packages"
-# Python 3.11+ is required: EL10's python3 is 3.12; on EL9 (python3 = 3.9) the python3.12 package is used
 PY=python3
-[ "$EL" = el9 ] && PY=python3.12
-PKGS=("$PY" nginx policycoreutils-python-utils openssl sqlite dejavu-sans-fonts tar)
-command -v curl >/dev/null || PKGS+=(curl)   # EL9 minimal ships curl-minimal, which conflicts with the curl package
-dnf -y -q install "${PKGS[@]}" >/dev/null
+if [ "$OS" = el ]; then
+  [ "$EL" = el9 ] && PY=python3.12
+  PKGS=("$PY" nginx policycoreutils-python-utils openssl sqlite dejavu-sans-fonts tar)
+  command -v curl >/dev/null || PKGS+=(curl)   # EL9 minimal ships curl-minimal, which conflicts with the curl package
+  dnf -y -q install "${PKGS[@]}" >/dev/null
+else
+  PKGS=("$PY" py3-pip nginx openssl sqlite ttf-dejavu tar curl ca-certificates runuser findutils)
+  apk add --quiet --no-cache "${PKGS[@]}"
+  [ -f /etc/nginx/http.d/default.conf ] && mv /etc/nginx/http.d/default.conf /etc/nginx/http.d/default.conf.orig 2>/dev/null || true
+fi
 
 # Check prefixes / probe addresses, and an existing config file, before changing anything (stdlib only)
 "$PY" - "${PREFIXES[@]}" -- "${PROBES[@]}" <<'PYCHECK' || exit 1
@@ -135,11 +173,19 @@ if [ -f "$ETC/config.toml" ] && ! check_config "$ETC/config.toml"; then
 fi
 
 echo "==> user and directories"
-id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
+if [ "$OS" = el ]; then
+  id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
+else
+  id bgpcanary &>/dev/null || { addgroup -S bgpcanary && adduser -S -D -H -h "$DATA" -s /sbin/nologin -G bgpcanary bgpcanary; }
+  addgroup nginx bgpcanary 2>/dev/null || true
+fi
 install -d -o bgpcanary -g bgpcanary -m 750 "$DATA"
 install -d -o root -g bgpcanary -m 750 "$ETC"
 install -d -o root -g root -m 700 "$BK"
 install -d -m 755 "$APP"
+if [ "$OS" = alpine ]; then
+  mkdir -p /run/bgpcanary && chown bgpcanary:bgpcanary /run/bgpcanary
+fi
 if [ -d "$DATA/backups" ] && [ ! -L "$DATA/backups" ]; then
   # before 1.2.2 backups were kept in $DATA/backups: move them to $BK (read as the service user, as above)
   echo "==> moving backups to $BK"
@@ -176,7 +222,9 @@ mv "$APP/bgpcanary.new" "$APP/bgpcanary"
 install -d -m 755 "$APP/deploy"   # kept so the update / uninstall / probe commands work later
 if [ "$SRC" != "$APP" ]; then
   for f in install.sh update.sh uninstall.sh atlas-probe.sh; do install -m 755 "$SRC/deploy/$f" "$APP/deploy/"; done
-  for f in config.example.toml nginx-bgpcanary.conf bgpcanary.service; do install -m 644 "$SRC/deploy/$f" "$APP/deploy/"; done
+  for f in config.example.toml nginx-bgpcanary.conf bgpcanary.service bgpcanary.initd; do
+    [ -f "$SRC/deploy/$f" ] && install -m 644 "$SRC/deploy/$f" "$APP/deploy/"
+  done
 fi
 
 mkdir -p "$APP/bgpcanary/static/vendor"
@@ -190,18 +238,14 @@ vendor() {   # vendor FILE URL SHA256 : download a front-end library once and ch
   mv -f "$dst.part" "$dst"
 }
 vendor chart.umd.min.js "$CHARTJS_URL" 81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f
-# GIF encoder for the path-tree replay export (the worker must be same-origin)
 vendor gif.js https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js a8b111071bb3b123c302e6182c01d6b3550f93a4b627398b07c46875d84090bb
 vendor gif.worker.js https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js ca9e3048557ec05d619e18b83403cd3669c88939e5fa2d6034ce7625d445970d
 
 echo "==> python environment"
-# (re)create the venv if missing or built with an older Python than the one required
 if [ ! -x "$APP/venv/bin/python" ] || ! "$APP/venv/bin/python" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
   rm -rf "$APP/venv"
   "$PY" -m venv "$APP/venv"
 fi
-# exact versions, only files whose hashes are in requirements.txt, and only pre-built wheels (no build step that
-# could fetch unpinned build tools)
 "$APP/venv/bin/pip" install -q --disable-pip-version-check --require-hashes --only-binary :all: -r "$APP/requirements.txt"
 
 echo "==> config"
@@ -226,7 +270,6 @@ chmod 640 "$ETC/config.toml"
 
 cat > /usr/bin/bgpcanary-admin <<'EOF'
 #!/bin/sh
-# runs the bgpcanary command line as the service user (runuser is part of every EL system; sudo may not be)
 [ "$(id -u)" = 0 ] || { echo "Run as root: sudo bgpcanary-admin $*" >&2; exit 1; }
 cd /opt/bgpcanary && exec runuser -u bgpcanary -- env BGPCANARY_CONFIG=/etc/bgpcanary/config.toml /opt/bgpcanary/venv/bin/python -m bgpcanary.cli "$@"
 EOF
@@ -235,38 +278,55 @@ ln -sf "$APP/deploy/update.sh" /usr/bin/bgpcanary-update
 ln -sf "$APP/deploy/uninstall.sh" /usr/sbin/bgpcanary-uninstall
 
 echo "==> TLS (self-signed unless a certificate already exists)"
-if [ ! -f /etc/pki/tls/certs/bgpcanary.crt ]; then
+mkdir -p "$(dirname "$CERT_FILE")" "$(dirname "$KEY_FILE")"
+if [ ! -f "$CERT_FILE" ]; then
   openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
-    -keyout /etc/pki/tls/private/bgpcanary.key -out /etc/pki/tls/certs/bgpcanary.crt \
+    -keyout "$KEY_FILE" -out "$CERT_FILE" \
     -subj "/CN=$FQDN" -addext "subjectAltName=DNS:$FQDN" 2>/dev/null
-  chmod 600 /etc/pki/tls/private/bgpcanary.key
+  chmod 600 "$KEY_FILE"
 fi
 
 echo "==> nginx"
-# HTTP/2 syntax: "http2 on;" from nginx 1.25.1 (EL10); "listen ... http2" before that (EL9)
 NGV=$(nginx -v 2>&1 | sed -n 's|.*nginx/\([0-9.]*\).*|\1|p')
 if [ "$(printf '%s\n1.25.1\n' "$NGV" | sort -V | head -1)" = 1.25.1 ]; then H2_LISTEN=""; H2_ON="http2 on;"; else H2_LISTEN=" http2"; H2_ON=""; fi
 sed -e "s/__FQDN__/$FQDN/g" -e "s/__H2_LISTEN__/$H2_LISTEN/g" -e "s/__H2_ON__/$H2_ON/g" \
-    "$SRC/deploy/nginx-bgpcanary.conf" > /etc/nginx/conf.d/bgpcanary.conf
-chmod 644 /etc/nginx/conf.d/bgpcanary.conf
-setsebool -P httpd_can_network_connect 1 2>/dev/null || true
-nginx -t -q
-systemctl enable -q --now nginx
-systemctl reload nginx
+    -e "s|/etc/pki/tls/certs/bgpcanary.crt|$CERT_FILE|g" \
+    -e "s|/etc/pki/tls/private/bgpcanary.key|$KEY_FILE|g" \
+    "$SRC/deploy/nginx-bgpcanary.conf" > "$NGINX_CONF_DIR/bgpcanary.conf"
+chmod 644 "$NGINX_CONF_DIR/bgpcanary.conf"
 
-echo "==> firewall"
-if systemctl is-active -q firewalld; then
-  firewall-cmd -q --permanent --add-service=http --add-service=https
-  firewall-cmd -q --reload
+if [ "$OS" = el ]; then
+  setsebool -P httpd_can_network_connect 1 2>/dev/null || true
+  nginx -t -q
+  systemctl enable -q --now nginx
+  systemctl reload nginx
+  echo "==> firewall"
+  if systemctl is-active -q firewalld; then
+    firewall-cmd -q --permanent --add-service=http --add-service=https
+    firewall-cmd -q --reload
+  fi
+else
+  nginx -t -q
+  rc-update add nginx default
+  rc-service nginx reload 2>/dev/null || rc-service nginx start
 fi
 
 echo "==> service"
-install -m 644 "$SRC/deploy/bgpcanary.service" /etc/systemd/system/bgpcanary.service
-systemctl daemon-reload
-systemctl enable -q bgpcanary
-systemctl restart bgpcanary
-sleep 2
-systemctl --no-pager --lines=0 status bgpcanary | head -3
+if [ "$OS" = el ]; then
+  install -m 644 "$SRC/deploy/bgpcanary.service" /etc/systemd/system/bgpcanary.service
+  systemctl daemon-reload
+  systemctl enable -q bgpcanary
+  systemctl restart bgpcanary
+  sleep 2
+  systemctl --no-pager --lines=0 status bgpcanary | head -3
+else
+  install -m 755 "$SRC/deploy/bgpcanary.initd" /etc/init.d/bgpcanary
+  rc-service bgpcanary zap 2>/dev/null || true
+  rc-update add bgpcanary default
+  rc-service bgpcanary restart
+  sleep 2
+  rc-service bgpcanary status
+fi
 
 echo "==> default admin account"
 CREDS=$(/usr/bin/bgpcanary-admin ensure-admin)
@@ -284,14 +344,13 @@ if [ -n "$CREDS" ]; then
   echo "  (also saved to $ETC/initial-admin-password; you must change the password at first login)"
 else
   echo "    users already exist; no default account created"
-  # the generated password stops working once it's changed: don't leave it lying around after that
-  # (only when the user list could be read: if that fails, keep the file)
   if [ -f "$ETC/initial-admin-password" ] && USERS=$(/usr/bin/bgpcanary-admin users) && [ -n "$USERS" ] \
      && ! grep -q "(must change password)" <<<"$USERS"; then
     rm -f "$ETC/initial-admin-password"
     echo "    removed $ETC/initial-admin-password (its temporary password has been changed)"
   fi
 fi
+
 if [ "$ATLAS_PROBE" = 1 ]; then
   echo "==> RIPE Atlas software probe"
   bash "$SRC/deploy/atlas-probe.sh" || echo "    probe install failed; bgpcanary itself is fine. Retry: sudo $APP/deploy/install.sh --atlas-probe-only"

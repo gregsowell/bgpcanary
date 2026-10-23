@@ -124,9 +124,10 @@ async def check(svc, w):
         _store(conn, w, now)
         return
     key, them = res["key"], res["target"]["asn"]
-    pathfinder.record(conn, key, "known", pathfinder.known_value(res), now)
-    st.update(error=None, them=them, shortest=res["paths"][0]["asns"] if res["paths"] else None,
-              paths=len(res["paths"]), traced=res["trace_to"])
+    known = pathfinder.known_value(res)
+    pathfinder.record(conn, key, "known", known, now)
+    st.update(error=None, them=them, paths=len(known["paths"]), traced=res["trace_to"],
+              shortest=[int(a) for a in known["shortest"].split()] if known["shortest"] else None)
     if res["can_trace"]:
         try:
             tr = await pathfinder.trace(svc, res["trace_to"], res["paths"], them, limit=False)

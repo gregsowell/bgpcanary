@@ -106,9 +106,13 @@
   route of its own to that destination. Your traffic's paths go up from your AS through the networks that carry your
   prefix, and through your upstreams' other neighbours (from RIPEstat, as on the connectivity tree), to the first network
   with a route of its own to theirs, then along that route. Their traffic's paths are their own route to you when RIS sees
-  it, or the same climb from their side through their main upstreams. So these are the paths the data supports, not every
-  path that exists. The traceroute from this server shows which one your traffic takes; a RIPE Atlas traceroute from a probe
-  in their network (or their main upstream) shows theirs. Their side comes from RIPEstat's looking glass (and Route Views,
-  if asked), yours from bgpcanary's live view. Traceroute hops are mapped to networks with Team Cymru's IP-to-ASN service,
+  it, or the same climb from their side. A network sends traffic up to its providers for anywhere, but across to a peer
+  only for that peer's own customers, so the climb goes on only through providers (your transits, and the networks in
+  front of each one on many paths), and a peer's route counts only when it stays among that peer's customers. Your
+  exchange peers and listed peers (Settings › Monitored network) are peers. RIS rarely sees a peering, so where PeeringDB
+  has you, or one of your transits, at an exchange with them, that link is shown dotted as a possible path. So these are
+  the paths the data supports, not every path that exists. The traceroute from this server shows which one your traffic
+  takes; a RIPE Atlas traceroute from a probe in their network (or their main upstream) shows theirs. Their side comes
+  from RIPEstat's looking glass (and Route Views, if asked), yours from bgpcanary's live view. Traceroute hops are mapped to networks with Team Cymru's IP-to-ASN service,
   and hops at internet exchanges with PeeringDB.</p>
 {% endblock %}

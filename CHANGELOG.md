@@ -6,6 +6,20 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-22
+
+### Fixed
+- **Path finder: paths through a peer that wouldn't carry the traffic.** A network sends traffic to its providers for anywhere, but to a peer only for that peer's own customers. The Path finder didn't allow for that, so it could show your traffic going through one of your exchange peers, or one of your upstream's peers, on to a network that peer merely peers with: a path no traffic takes. Now:
+  - your exchange peers (from PeeringDB) and the peers listed under Settings › Monitored network count as peers, and your expected upstreams as transit. A peer's route is used only when it stays among that peer's own customers;
+  - the same goes for your upstreams' other neighbours (judged by how much of each upstream's traffic they carry, from RIPEstat) and for the other network's side;
+  - which network is in front of which is now counted once per RIS peer's network, not per session (some networks feed RIS from a dozen sessions), and a RIS peer's own direct link no longer counts as a sign that it's anyone's provider.
+
+### Added
+- **Possible peerings** on the Path finder. RIS rarely sees a peering, so where PeeringDB has you, or one of your transits, at an internet exchange with the other network, that direct link is added as a possible path, drawn dotted. When the traceroute goes through it, the page says so, and at which exchange. A peer you listed yourself always gets its direct path.
+
+### Changed
+- When RIS doesn't show their own route to you, their traffic's paths now also come through a peer of theirs that has you among its customers, not only through their main upstreams. A network that peers with almost everyone no longer shows only your side.
+
 ## [1.5.0] - 2026-10-22
 
 ### Added
@@ -251,7 +265,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/gregsowell/bgpcanary/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/gregsowell/bgpcanary/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/gregsowell/bgpcanary/compare/v1.3.2...v1.3.3

@@ -68,8 +68,10 @@
         nodes.get(k0).kids.push(k);
       } else p.stopped = k0;
     });
-    // the shortest path through a branch first, then the one most RIS paths point along
-    const rank = k => { const n = nodes.get(k); return [Math.min(...n.paths.map(i => P[i].asns.length)), -Math.max(...n.paths.map(i => P[i].seen)), Math.min(...n.paths)]; };
+    // the shortest path through a branch first (possible peerings after the known paths), then the one most RIS paths
+    // point along
+    const len = i => P[i].asns.length + (P[i].possible ? 100 : 0);
+    const rank = k => { const n = nodes.get(k); return [Math.min(...n.paths.map(len)), -Math.max(...n.paths.map(i => P[i].seen)), Math.min(...n.paths)]; };
     for (const n of nodes.values()) n.kids.sort((a, b) => { const x = rank(a), y = rank(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; });
     let rows = 0;
     const place = k => {
@@ -117,13 +119,14 @@
       ctx.stroke();
     };
     const edges = [...tree.nodes.values()].filter(n => n.parent);
-    for (const n of edges) {   // every known path, quietly
+    for (const n of edges) {   // every known path, quietly (dashed: only traceroutes', dotted: only possible peerings)
       const [x0, y0] = pos(tree.nodes.get(n.parent)), [x1, y1] = pos(n);
-      const extra = n.paths.every(i => D.paths[i].trace || D.paths[i].back);
-      ctx.strokeStyle = th.muted; ctx.globalAlpha = 0.45; ctx.lineWidth = 1.5; ctx.setLineDash(extra ? [4, 3] : []);
+      const extra = n.paths.every(i => D.paths[i].trace || D.paths[i].back), maybe = n.paths.every(i => D.paths[i].possible);
+      ctx.strokeStyle = th.muted; ctx.globalAlpha = maybe ? 0.75 : 0.45; ctx.lineWidth = 1.5;
+      ctx.setLineDash(extra ? [4, 3] : maybe ? [1, 4] : []); ctx.lineCap = maybe ? "round" : "butt";
       curve(x0, y0, x1, y1, 0);
     }
-    ctx.globalAlpha = 1; ctx.setLineDash([]);
+    ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt";
     for (const n of edges) {   // the colored paths on top, side by side where they share an edge
       const s = strands(n);
       if (!s.length) continue;
@@ -191,6 +194,8 @@
 
   // ---- the list of paths --------------------------------------------------------------------------------------------
   const way = p => p.trace ? "the traceroute's path (RIS doesn't show it)" : p.back ? "a RIPE Atlas probe's path back (RIS doesn't show it)"
+    : p.possible ? `possible peering: ${p.asns.length > 2 ? `AS${p.asns[1]} and they're` : "you're"} both at ${esc(p.possible.join(", "))} (PeeringDB)`
+    : p.listed ? "your listed peer (Settings › Monitored network)"
     : p.own ? "their own route to you (RIS sees it)"
     : p.nbr ? "your traffic to them, through a neighbour of your upstream (RIPEstat)"
     : p.dirs.length > 1 ? "both ways" : p.dirs[0] === "out" ? "your traffic to them" : "their traffic to you";
@@ -199,7 +204,7 @@
       const tags = marks.map(m => m.idx !== i ? "" : m.color === "accent" ? ' <span class="badge b-info">shortest</span>'
         : m.color === "ok" ? ' <span class="badge b-ok">traceroute</span>' : ' <span class="badge pf-b-back">back to you</span>').join("");
       return `<tr data-i="${i}"><td class="right">${i + 1}</td><td>${pathHtml(p.asns)}${tags}</td>`
-        + `<td class="right">${hops(p)}</td><td>${way(p)}</td><td class="right">${p.trace || p.back ? "" : p.seen}</td></tr>`;
+        + `<td class="right">${hops(p)}</td><td>${way(p)}</td><td class="right">${p.trace || p.back || p.possible || p.listed ? "" : p.seen}</td></tr>`;
     });
     $("table").innerHTML = `<tr><th class="right">#</th><th>AS path (you → them)</th><th class="right">AS hops</th><th>Which way</th>`
       + `<th class="right" title="How many RIS (and Route Views) peers' paths point along it">Seen in</th></tr>` + rows.join("");
@@ -227,11 +232,13 @@
       location.href = u.toString();
     });
     const rv = D.rv_servers && D.rv_servers.length;
-    const parts = [P.length ? `${P.length} known path${P.length > 1 ? "s" : ""}; the shortest is ${hops(P[0])} AS hop${hops(P[0]) > 1 ? "s" : ""}` : "No path can be put together"];
+    const K = P.filter(p => !p.possible), maybe = P.length - K.length;
+    const parts = [K.length ? `${K.length} known path${K.length > 1 ? "s" : ""}; the shortest is ${hops(K[0])} AS hop${hops(K[0]) > 1 ? "s" : ""}` : "No path can be put together"];
     parts.push(`from ${D.mine} paths toward you and ${D.theirs} toward ${esc(t.prefix)}` + (rv ? ` (Route Views: ${D.mine_rv} and ${D.theirs_rv} of them)` : " (RIS)"));
     let inb = D.inbound === "own" ? "Their own route to you is visible in RIS."
-      : D.inbound === "main" ? `Their traffic to you goes through their main upstream${D.main.length > 1 ? "s" : ""} (${D.main.map(a => "AS" + a).join(", ")}), as far as RIS shows.`
-      : D.theirs ? "Their own route to you isn't visible in RIS, and no single upstream carries most of their routes (they peer widely), so only your traffic's paths are shown." : "";
+      : D.inbound === "climb" ? `Their own route to you isn't visible in RIS, so their traffic's paths are worked out from their side${D.main.length ? `, through their main upstream${D.main.length > 1 ? "s" : ""} (${D.main.map(a => "AS" + a).join(", ")}) or a peer of theirs that has you among its customers` : ", through a peer of theirs that has you among its customers"}.`
+      : D.theirs ? "Their own route to you isn't visible in RIS, and none of the networks in front of them would carry their traffic to you (as RIS shows them), so only your traffic's paths are shown." : "";
+    if (maybe) inb += ` Also ${maybe} possible peering${maybe > 1 ? "s" : ""} (dotted): PeeringDB has you or one of your transits at an exchange with them, and RIS rarely sees a peering. A traceroute shows whether it's used.`;
     let rvs = "";
     if (rv) {
       const bad = D.rv_servers.filter(s => s.error);
@@ -241,6 +248,7 @@
     $("summary").innerHTML = `${parts.join(", ")}. ${inb}${rvs}` + (D.notes || []).map(n => `<div class="msg" style="margin:8px 0 0">${esc(n)}</div>`).join("");
     $("legend").innerHTML = [["shortest known path", "var(--accent)", ""], ["your traffic's path (traceroute from this server)", "var(--ok)", ""],
                             ["their path back to you (RIPE Atlas)", "#9b4dca", ""], ["other known paths", "var(--muted)", "opacity:.5"]]
+      .concat(maybe ? [["possible peering (PeeringDB)", "none", "height:0;border-radius:0;border-top:3px dotted var(--muted)"]] : [])
       .map(([l, c, x]) => `<span><i style="background:${c};${x}"></i>${l}</span>`).join("");
   }
 
@@ -254,7 +262,8 @@
   }
   function remark() {
     D.paths = BASE.map(p => Object.assign({}, p));
-    marks = BASE.length ? [{ color: "accent", idx: 0, len: Infinity }] : [];
+    const first = BASE.findIndex(p => !p.possible);   // (the shortest known path; possible peerings aren't known)
+    marks = first >= 0 ? [{ color: "accent", idx: first, len: Infinity }] : [];
     if (TR && TR.match) marks.push({ color: "ok", ...place(TR.match, "trace") });
     if (BK && BK.res) for (const r of BK.res.results) if (r.match) marks.push({ color: "back", ...place(r.match, "back") });
     const any = D.paths.length > 0;
@@ -301,10 +310,15 @@
          : h.asn ? chip(h.asn) : h.ip ? `<span class="muted">${h.private ? "private" : "unannounced"}</span>` : "") + "</td></tr>").join("");
   }
 
-  const matchText = (m, who, n) => {
+  const matchText = (m, who, n, hs) => {
     if (!m) return "";
+    const p = D.paths[n - 1], top = markOf("accent");
     const hid = m.hidden.length ? ` It didn't see ${m.hidden.map(a => "AS" + a).join(", ")}: ${m.hidden.length > 1 ? "their" : "its"} routers didn't answer, or answered from another network's addresses.` : "";
-    return m.how === "exact" || m.how === "gaps" ? `${who} takes <strong>path ${n}</strong>${n === 1 ? ", the shortest known path" : ""}.${hid}`
+    // a possible peering it went through: the exchange its hops were at, when PeeringDB knows the address
+    const at = p.possible && (hs || []).map(h => h.ix).find(x => x && p.possible.includes(x));
+    const what = p.possible ? `, the possible peering${at ? " at " + esc(at) : ""}: it's there, though RIS doesn't show it`
+      : top && top.idx === n - 1 ? ", the shortest known path" : "";
+    return m.how === "exact" || m.how === "gaps" ? `${who} takes <strong>path ${n}</strong>${what}.${hid}`
       : m.how === "part" ? `It stopped in AS${m.asns[m.upto - 1]}, following <strong>path ${n}</strong> that far.${hid}`
       : `That's not one of the paths RIS shows: it's added to the tree as <strong>path ${n}</strong> (dashed).`;
   };
@@ -322,7 +336,7 @@
       if (!T.from_you) s += `<div class="msg" style="margin-top:8px">This server reaches the internet from ${esc(T.egress || "an address")}${T.egress_asn ? " (AS" + T.egress_asn + ")" : ""}, not from your prefixes, so this traceroute shows that network's path rather than yours. It isn't marked on the tree.</div>`;
       else if (!T.own_space) s += `<div class="msg" style="margin-top:8px">This server reaches the internet from ${esc(T.egress || "an address")}${T.egress_asn ? `, an address of AS${T.egress_asn}` : ""}, not from one of your prefixes, so this is how traffic leaves through your upstream AS${T.asns[1]}. Your own prefixes' traffic goes the same way unless your routers send it elsewhere.</div>`;
       const mk = markOf("ok");
-      if (T.match && mk) s += `<div style="margin-top:6px">${matchText(T.match, "Your traffic to them", mk.idx + 1)}</div>`;
+      if (T.match && mk) s += `<div style="margin-top:6px">${matchText(T.match, "Your traffic to them", mk.idx + 1, T.hops)}</div>`;
       if (!T.reached) s += `<div class="muted" style="margin-top:6px">${esc(T.target)} itself didn't answer${last ? `; the last hop that did is ${last.ttl}` : ""}. Many hosts and firewalls don't.</div>`;
     }
     box.innerHTML = s + `<div class="muted" style="font-size:12px;margin-top:6px">${T.mode === "icmp" ? "ICMP echo" : "UDP"} probes from this server${T.egress ? " (" + esc(T.egress) + ")" : ""}, <time data-ts="${Date.now() / 1000}"></time>.</div>`;
@@ -358,7 +372,7 @@
       const mk = r.match ? markOf("back", nth++) : null;
       const head = `Probe <a href="https://atlas.ripe.net/probes/${r.probe}/" target="_blank" rel="noopener">#${r.probe}</a> in AS${r.asn ?? "?"}${r.cc ? ` (${esc(r.cc)})` : ""}: `
         + (r.asns.length ? pathHtml(r.asns) + " (written from you)" : "no network answered") + (r.reached ? "" : ` <span class="muted">· didn't reach ${esc(I.target)}</span>`);
-      const body = r.from_you ? (mk ? matchText(r.match, "Their traffic back to you", mk.idx + 1) : "")
+      const body = r.from_you ? (mk ? matchText(r.match, "Their traffic back to you", mk.idx + 1, r.hops) : "")
         : `<span class="muted">It didn't get as far as your network or your upstreams, so it isn't marked on the tree.</span>`;
       return `<details style="margin-top:10px" open><summary>${head}</summary><div style="margin:6px 0">${body}</div>${latency(r.hops, false)}<table style="margin-top:8px">${hopsTable(r.hops)}</table></details>`;
     }).join("");

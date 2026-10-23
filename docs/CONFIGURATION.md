@@ -136,7 +136,16 @@ daily credit use as you type.
 
 The **Path finder** page shows the known AS paths between your network and another one: type an IP address, a
 prefix, an AS number or a host name. The paths are put together from what RIS peers see toward each of you (the
-page explains how); the shortest is highlighted, and the ones in use are marked:
+page explains how); the shortest is highlighted, and the ones in use are marked.
+
+The paths follow how networks pass traffic on: up to a provider for anywhere, but across to a peer only for that
+peer's own customers. So it matters which of your neighbours are peers. Your exchange peers (from PeeringDB, see
+[Exchange peers](#exchange-peers)) and the peers listed under Settings › Monitored network count as peers,
+and your expected upstreams as transit. A peering rarely shows in RIS, so where PeeringDB has you, or one of your
+transits, at an exchange with them, that direct link is added as a *possible peering* (dotted) until a traceroute
+shows whether it's used. A listed peer always gets its direct path.
+
+What marks the paths in use:
 
 - **Your traffic to them:** a traceroute from the bgpcanary server, run straight away for an address or host name,
   and on request toward an address in the prefix for an AS or prefix. It needs no root or extra packages (ICMP

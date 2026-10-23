@@ -23,7 +23,7 @@ networks.
   - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't, and for a month, which networks your upstreams are no longer peered with.
   - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
 - **Path finder:**
-  - enter an IP address, prefix, AS number or host name to see the known AS paths between your network and theirs as a tree, built from what RIS (and optionally Route Views) peers see toward each of you, with the shortest one highlighted;
+  - enter an IP address, prefix, AS number or host name to see the known AS paths between your network and theirs as a tree, built from what RIS (and optionally Route Views) peers see toward each of you, with the shortest one highlighted. The paths follow how networks pass traffic on (a peer carries it only to its own customers), and peerings that RIS can't see but PeeringDB makes possible are shown dotted;
   - a traceroute from the bgpcanary server marks the path your traffic takes, each hop with its network, exchange (from PeeringDB), name and the delay it adds, and a RIPE Atlas probe in their network traces the path back to you;
   - each target's history, and a watch list that re-checks targets on a schedule and alerts when the path in use changes.
 - **Internet exchanges:** peers at your exchanges are recognized automatically from PeeringDB, and kept apart from your transit providers. They get one Exchanges branch in the tree and no false "unexpected upstream" warnings, and you're alerted when many of an exchange's peers drop at once or a peer leaks your routes.

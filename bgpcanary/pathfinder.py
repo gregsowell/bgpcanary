@@ -8,9 +8,16 @@ The paths between the two networks are put together from those, the way traffic 
     (RIPEstat's asn-neighbours, as on the connectivity tree) count too: they can carry your traffic out even when
     they don't carry your prefix.
   * their traffic to you: their own route to your prefix, when RIS sees it (they're a RIS peer, or on the way to
-    one). Otherwise the same climb from their side, but only through their main upstreams (in front of them in at
-    least a tenth of the paths): a big network peers with hundreds of others, and those don't carry its traffic on.
-A path found both ways is listed once. Route Views' collectors can be asked too, for more vantage points.
+    one). Otherwise the same climb from their side.
+Networks pass traffic on the way they're paid to: up to a provider for anywhere, but across to a peer only for that
+peer's own customers. So a climb goes on only through providers (your transits, and each network's main upstreams: in
+front of it on at least a tenth of the paths toward it, counted once per vantage point's network), and a route met
+across a peering is used only when it stays inside that peer's customer cone. Your exchange peers and listed peers
+(peering.py) are peers. A path found both ways is listed once. Route Views' collectors can be asked too, for more
+vantage points.
+
+RIS rarely sees a peering (a peer's routes only reach its customers). So where PeeringDB has you, or one of your
+transits, at an exchange with them, that direct link is added as a possible path; so is a peer you listed yourself.
 
 Which path is in use: a traceroute from this server (tracer.py) for your traffic, and a RIPE Atlas traceroute from
 a probe inside their network (or else their main upstream) for theirs. What each lookup and traceroute showed is
@@ -53,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_pf_hist ON pf_hist(target, kind, id);
 """
 _cache = {}        # RIPEstat answers: (call, params) -> (time, data)
 _ix = {"at": 0, "nets": [], "ips": {}}   # those prefixes parsed; exchange hop address -> (time, its member)
+_ixof = {}         # network -> (time, {ix_id: exchange name}) from PeeringDB
 _rv = {}           # (collector, prefix) -> (time, [path strings])
 _ptr = {}          # address -> (time, reverse DNS name or "")
 _dns = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="pathfinder-dns")   # (slow resolvers wait here)
@@ -267,36 +275,79 @@ def _routes(ps):
     return m
 
 
-def _climb(ps, routes, via=None):
+def _fronts(ps):
+    """Who is right in front of each network on these paths: AS -> Counter of the network before it, counted once
+    per vantage point's network (some networks feed RIS from a dozen sessions, which would make them look like
+    everyone's upstream), and not counting a network's own view of its own link (that says nothing about it being
+    anyone else's way there)."""
+    seen = defaultdict(set)
+    for a in ps:
+        for i in range(1, len(a)):
+            if a[0] != a[i - 1]:
+                seen[(a[i], a[i - 1])].add(a[0])
+    m = defaultdict(Counter)
+    for (b, x), vantage in seen.items():
+        m[b][x] = len(vantage)
+    return m
+
+
+def _main(fronts, b, a):
+    """Whether `a` is one of `b`'s main upstreams: right in front of it on at least MAIN_SHARE of the paths through
+    it. A provider is, on most of them; a peer only on its own customers' paths, so it isn't."""
+    f = fronts.get(b)
+    return bool(f) and f[a] >= MAIN_SHARE * sum(f.values())
+
+
+def _downhill(route, fronts, into=None):
+    """Whether a network's route stays inside its customer cone, each network on it a main upstream of the next
+    (`fronts`: who is in front of whom toward that destination; `into(x)`: whether x is a provider of the
+    destination itself, where that's known better than `fronts` can tell: your own transits and peers). That's all
+    a network gives its peers: a peer carries your traffic only to its own customers, never on to its providers or
+    its other peers."""
+    last = len(route) - 2
+    return all(into(a) if into and i == last else _main(fronts, b, a)
+               for i, (a, b) in enumerate(zip(route, route[1:])))
+
+
+def _climb(ps, routes, fronts, other, first_up=None, into=None):
     """Up each path from its destination end to the first network with a route of its own toward the other end,
-    then along that route: Counter of the resulting paths (destination end first). `via`: only paths whose next
-    network up is one of these."""
+    then along that route: Counter of the resulting paths (destination end first). Traffic goes up to a provider
+    for anything, but across to a peer only for that peer's customer cone. So the climb goes on only through main
+    upstreams (`first_up(x)` decides the first step; `fronts`: who is in front of whom on `ps`), and a route met
+    across any other link has to be downhill (`other`: who is in front of whom toward the other end; `into`: see
+    _downhill)."""
     out = Counter()
     for a in ps:
         up = a[::-1]
-        if via is not None and (len(up) < 2 or up[1] not in via):
-            continue
         for k, x in enumerate(up[:CLIMB + 1]):
+            rise = k == 0 or (first_up(x) if k == 1 and first_up else _main(fronts, up[k - 1], x))
             if x in routes:
                 for r, _ in routes[x].most_common(ROUTES):
                     p = tuple(up[:k]) + r
-                    if len(set(p)) == len(p):
+                    if len(set(p)) == len(p) and (rise or _downhill(r, other, into)):
                         out[p] += 1
                 break
+            if not rise:
+                break   # (a peer's providers aren't yours)
     return out
 
 
-def connect(me, mine, them, theirs, neighbours=None):
+def connect(me, mine, them, theirs, neighbours=None, peers=(), transits=()):
     """The known AS paths between `me` and `them`, each written from you to them, shortest first:
     {"paths": [{"asns": [me, ..., them], "dirs": ["in", "out"], "seen": n, "own": bool, "nbr": bool}],
-     "inbound": "own" | "main" | "none", "main": [their main upstreams]}.
+     "inbound": "own" | "climb" | "none", "main": [their main upstreams]}.
     `mine` / `theirs`: RIS peers' AS paths toward your prefixes / toward theirs (vantage point first).
-    `neighbours`: {upstream: [its neighbours]} from RIPEstat, for more ways out of your upstreams.
+    `peers`: your exchange and listed peers; `transits`: your configured upstreams. Without either, a neighbour of
+    yours counts as a way out when it's one of your main upstreams.
+    `neighbours`: {upstream: [(its neighbour, RIPEstat's power)]}, for more ways out of your upstreams.
     "dirs": "out" = your traffic to them, "in" = their traffic to you. "seen": how many RIS paths point that way.
     "own": their own route to you, as a RIS peer sees it. "nbr": through a neighbour of your upstream that RIS
-    doesn't see carrying your prefix (from RIPEstat's neighbour list)."""
+    doesn't see carrying your prefix (from RIPEstat's neighbour list).
+    Paths follow how networks pass traffic on (see _climb): a peer of yours, or of your upstream's, carries it only
+    to its own customers. "inbound": "own" = their own route to you; "climb" = up from their side the same way."""
     mine, theirs = _clean(mine, me), _clean(theirs, them)
     to_me, to_them = _routes(mine), _routes(theirs)
+    fr_me, fr_them = _fronts(mine), _fronts(theirs)
     found = {}
 
     def add(p, d, n, own=False, nbr=False):
@@ -306,33 +357,80 @@ def connect(me, mine, them, theirs, neighbours=None):
         e["own"] = e["own"] or own
         e["nbr"] = e["nbr"] and nbr
 
-    for p, n in _climb(mine, to_them).items():
+    def way_out(x):   # (one of your neighbours that carries your traffic anywhere: one of your transits)
+        return x in transits or x not in peers and _main(fr_me, me, x)
+
+    for p, n in _climb(mine, to_them, fr_me, fr_them, way_out).items():
         add(p, "out", n)
     for u, nbrs in (neighbours or {}).items():
-        # an upstream's other neighbours: a way out, if they have a route of their own toward them
-        for x, head in [(u, (me,))] + [(v, (me, u)) for v in nbrs]:
+        if not way_out(u):
+            continue
+        # an upstream's other neighbours: a way out, if they have a route of their own toward them. One of its
+        # main upstreams (by RIPEstat's power) for any route; any other only within its customer cone.
+        total = sum(pw for _, pw in nbrs) or 1
+        for x, head, rise in [(u, (me,), True)] + [(v, (me, u), pw >= MAIN_SHARE * total) for v, pw in nbrs]:
             if x == me or x not in to_them or any(k[:len(head) + 1] == head + (x,) for k in found):
                 continue
             for r, _ in to_them[x].most_common(1):
                 p = head + r
-                if len(set(p)) == len(p):
+                if len(set(p)) == len(p) and (rise or _downhill(r, fr_them)):
                     add(p, "out", 0, nbr=True)
-    inbound, main = "none", []
+    inbound = "none"
+    main = sorted(x for x, _ in fr_them.get(them, Counter()).most_common(6) if _main(fr_them, them, x))
     if them in to_me:   # their own route to you
         inbound = "own"
         for r, n in to_me[them].most_common(ROUTES + 1):
             add(r[::-1], "in", n, own=True)
-    elif theirs:
-        left = Counter(a[-2] for a in theirs if len(a) >= 2)
-        main = sorted(x for x, n in left.most_common(6) if n >= MAIN_SHARE * len(theirs))
-        for p, n in _climb(theirs, to_me, set(main)).items():
+    elif theirs:   # (a peer of yours carries their traffic to you only when they're in its customer cone)
+        got = _climb(theirs, to_me, fr_them, fr_me, into=way_out)
+        for p, n in got.items():
             add(p[::-1], "in", n)
-        if main:
-            inbound = "main"
+        inbound = "climb" if got else "none"
     out = sorted(found.values(), key=lambda e: (len(e["asns"]), -e["seen"], "out" not in e["dirs"], e["asns"]))
     for e in out:
         e["dirs"] = sorted(e["dirs"])
     return {"paths": out, "inbound": inbound, "main": main}
+
+
+def possible_paths(me, them, transits, ixes, known, my_exchanges=()):
+    """Direct links RIS can't see, but PeeringDB says could be there: you and them at the same exchange (from your
+    exchange list: `my_exchanges` [{"name", "members"}]), or one of your `transits` and them (`ixes`: {asn: {ix_id:
+    name}}). Peering routes are only passed on to customers, so RIS rarely sees them. A traceroute shows whether
+    they're in use. [{"asns", "dirs", "seen": 0, "possible": [exchange names]}], not among the `known` paths."""
+    have = {tuple(e["asns"]) for e in known}
+    out = []
+    shared = sorted(x["name"] for x in my_exchanges if them in (x.get("members") or ()))
+    if shared and (me, them) not in have:
+        out.append({"asns": [me, them], "possible": shared})
+    for u in transits:
+        shared = sorted(set(ixes.get(u, {}).values()) & set(ixes.get(them, {}).values()))
+        if shared and u not in (me, them) and (me, u, them) not in have:
+            out.append({"asns": [me, u, them], "possible": shared})
+    for e in out:
+        e.update(dirs=["in", "out"], seen=0, own=False, nbr=False)
+    return out
+
+
+async def exchanges_of(asns):
+    """The exchanges each network is at, from PeeringDB: {asn: {ix_id: name}}, kept for a day."""
+    now, asns = time.time(), list(dict.fromkeys(asns))
+    todo = [a for a in asns if a not in _ixof or now - _ixof[a][0] > 86400]
+    if todo:
+        try:
+            async with httpx.AsyncClient(timeout=30, headers={"User-Agent": f"bgpcanary/{__version__}"}) as c:
+                r = await c.get(f"{PEERINGDB}/netixlan", params={"asn__in": ",".join(map(str, todo)),
+                                                                 "fields": "asn,ix_id,name"})
+                r.raise_for_status()
+                got = defaultdict(dict)
+                for x in r.json().get("data", []):   # ("Metro-IX North: Metro-IX North Peering LAN")
+                    got[x["asn"]][x["ix_id"]] = (x.get("name") or f"IX {x['ix_id']}").split(":")[0].strip()
+            if len(_ixof) > 1000:
+                _ixof.clear()
+            for a in todo:
+                _ixof[a] = (now, dict(got.get(a, {})))
+        except Exception as ex:
+            log.info("PeeringDB exchanges of %s: %s", todo, ex)
+    return {a: _ixof[a][1] for a in asns if a in _ixof}
 
 
 async def lookup(svc, q, prefix=None, origin=0, routeviews_too=False):
@@ -370,10 +468,21 @@ async def lookup(svc, q, prefix=None, origin=0, routeviews_too=False):
     fam = ipaddress.ip_network(t["prefix"]).version
     mine, mine_pfx, mine_rv = my_paths(svc, fam, routeviews_too)
     nbrs = my_neighbours(cfg, mine)
-    ups = sorted(a for a in nbrs if not svc.engine.peer_group(a))   # (exchange peers aren't looked up, as on the tree)
+    peers = {a for a in nbrs if svc.engine.peer_group(a)}   # (your exchanges' members and listed peers)
+    ups = sorted(nbrs - peers)   # (exchange peers aren't looked up, as on the tree)
     from . import tree
     upn = await tree.upstream_neighbors(svc.sourceapp, ups)
-    res = connect(cfg.asn, mine, them, theirs, {u: [a for a, _ in upn.get(u, [])] for u in ups})
+    res = connect(cfg.asn, mine, them, theirs, {u: list(upn.get(u, [])) for u in ups}, peers,
+                  set(cfg.expected_upstreams))
+    if them in cfg.peers and not any(e["asns"] == [cfg.asn, them] for e in res["paths"]):
+        # a peer listed under Settings › Monitored network: a direct link RIS may well not see
+        res["paths"].insert(0, {"asns": [cfg.asn, them], "dirs": ["in", "out"], "seen": 0, "own": False, "nbr": False,
+                                "listed": True})
+    # direct links RIS can't see but PeeringDB makes possible (you or one of your transits at their exchange)
+    fr = _fronts(_clean(mine, cfg.asn))
+    outs = [u for u in ups if u in cfg.expected_upstreams or _main(fr, cfg.asn, u)]
+    ixes = await exchanges_of(outs + [them]) if outs else {}
+    res["paths"] += possible_paths(cfg.asn, them, outs, ixes, res["paths"], svc.peering.exchanges())
     notes = []
     st = svc.engine.status.get("phase") or ""
     if st in ("starting", "connecting to RIS Live", "finishing the history load") or svc.engine.status.get("history"):
@@ -755,8 +864,10 @@ def record(conn, target, kind, value, ts=None):
 
 
 def known_value(res):
-    return {"paths": sorted(" ".join(map(str, e["asns"])) for e in res["paths"]),
-            "shortest": " ".join(map(str, res["paths"][0]["asns"])) if res["paths"] else None}
+    """The known paths, for the history (not the possible peerings: those come from PeeringDB, not from routes)."""
+    known = [e for e in res["paths"] if not e.get("possible")]
+    return {"paths": sorted(" ".join(map(str, e["asns"])) for e in known),
+            "shortest": " ".join(map(str, known[0]["asns"])) if known else None}
 
 
 def history(conn, target, limit=60):

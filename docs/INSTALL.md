@@ -1,11 +1,13 @@
 # Installing bgpcanary
 
-This page covers installing on a server. To run bgpcanary with Docker or Podman instead (on amd64 or arm64),
-see [DOCKER.md](DOCKER.md).
+This page covers installing on a server. To run bgpcanary with Docker or Podman instead (on amd64 or arm64), see [DOCKER.md](DOCKER.md).
 
 ## Requirements
 
-- **Operating system:** Rocky Linux, AlmaLinux or Red Hat Enterprise Linux **9 or 10**, x86-64. A fresh minimal install is ideal; bgpcanary brings its own nginx configuration.
+- **Operating system:**
+  - Rocky Linux, AlmaLinux or Red Hat Enterprise Linux **9 or 10**, x86-64.
+  - Alpine Linux (v3.18+), x86-64.
+  - A fresh minimal install is ideal; bgpcanary brings its own nginx configuration.
 - **Size:** 2 vCPU, 2 GB RAM and 20 GB disk is plenty for a few prefixes. The database grows by roughly 0.1–0.3 GB per prefix per year, plus RIPE Atlas results if you use Atlas. Updates keep the last three backups in `/var/backups/bgpcanary`.
 - **Outbound network access:**
 
@@ -21,9 +23,22 @@ see [DOCKER.md](DOCKER.md).
 
 ## Install
 
+### 1. Install prerequisites
+
+**On Rocky Linux / AlmaLinux / RHEL:**
 ```bash
 sudo dnf -y install git
-git clone https://github.com/gregsowell/bgpcanary.git
+```
+
+**On Alpine Linux:**
+```bash
+doas apk add bash git
+```
+
+### 2. Run the installer
+
+```bash
+git clone [https://github.com/gregsowell/bgpcanary.git](https://github.com/gregsowell/bgpcanary.git)
 cd bgpcanary
 sudo ./deploy/install.sh --fqdn bgp.example.com
 ```
@@ -34,7 +49,7 @@ The installer takes a few minutes. It:
 - installs the app in `/opt/bgpcanary`;
 - creates a self-signed certificate;
 - configures nginx;
-- starts the `bgpcanary` service;
+- starts the `bgpcanary` service (`systemd` on EL, `OpenRC` on Alpine);
 - creates an `admin` login with a random password, which it prints and also saves in `/etc/bgpcanary/initial-admin-password`.
 
 Prefer not to use git? Download the release `.tar.gz` from the [Releases page](https://github.com/gregsowell/bgpcanary/releases), then:
@@ -58,7 +73,7 @@ sudo ./deploy/install.sh --fqdn bgp.example.com --asn 64500 \
 | `--fqdn` | Host name for the web UI and certificate |
 | `--asn` | Your AS number |
 | `--prefix` | A prefix you announce (repeat for each; IPv4 and IPv6) |
-| `--upstream` | The AS number of a provider you buy transit from (repeat for each) |
+| `--upstream` | The AS number of a provider you buy transit from (repeat for each)
 | `--probe` | An address in your space that answers ping, for Route Views and RIPE Atlas tests |
 | `--atlas-probe` | Also install the RIPE Atlas software probe (see [Configuration](CONFIGURATION.md#ripe-atlas)) |
 

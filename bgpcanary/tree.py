@@ -441,7 +441,7 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
 
 # ---------------------------------------------------------------------- per-event images
 TREE_KINDS = ("outage", "upstream_missing", "unexpected_upstream", "origin_hijack", "more_specific", "upstream_shift",
-              "exchange_loss", "peer_leak")
+              "upstream_down", "exchange_loss", "peer_leak")
 
 
 def _monitored_parent(cfg, prefix):

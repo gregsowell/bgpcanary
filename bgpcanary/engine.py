@@ -24,6 +24,10 @@ XL_HOLD = 900   # "exchange peers lost" closes once the peers have been back thi
 LG_MAX_WITHDRAW, LG_MAX_WITHDRAW_SHARE = 10, 0.1
 CONTROL_KV = "control_baselines"   # the control prefixes' baselines, kept across restarts
 CONTROL_ADAPT_S = 6 * 3600         # a control prefix low for this long is taken to have a new normal level
+# Upstream down: an upstream's typical reach is the median of the RIS peers it carried a prefix to over UPD_TYPICAL
+# (UPD_WINDOW: how far back "before" is looked for); only one that typically carries at least UPD_MIN (and a tenth of
+# everyone) is judged; it's back once it carries UPD_BACK of that again, for UPD_HOLD (so one that flaps is one event)
+UPD_WINDOW, UPD_TYPICAL, UPD_MIN, UPD_BACK, UPD_HOLD = 1800, 6 * 3600, 20, 0.5, 600
 
 
 
@@ -51,6 +55,9 @@ class PrefixMon:
         self._base = (-1, None)    # (version, baseline) last computed
         self.ups_hist = deque()    # (ts, {upstream: peers}) per bucket, for upstream-shift detection
         self.shift_hits = 0        # consecutive buckets over the shift threshold
+        self.upd_hist = deque()    # (ts, {upstream: peers}, {upstream: {network in front of it: peers}}), UPD_WINDOW
+        self.upd_hits = {}         # upstream -> consecutive buckets carrying almost none of the prefix
+        self.upd_long = deque()    # (ts, {upstream: peers}) over UPD_TYPICAL, for each upstream's typical reach
         self.bucket_min = None
         self.bucket_updates = 0
         self.bucket_withdrawals = 0
@@ -248,20 +255,24 @@ class Engine:
         return c[1]
 
     def _rib_summary(self, prefix):
-        """For a bucket row: (chains JSON, upstreams JSON, {neighbour: RIS peers reaching you through it}). Counted
-        again only after the prefix's paths change: a replayed week has 20,160 buckets, most of them quiet."""
+        """For a bucket row: (chains JSON, upstreams JSON, {neighbour: RIS peers reaching you through it},
+        {neighbour: {the network in front of it: RIS peers}}). Counted again only after the prefix's paths change:
+        a replayed week has 20,160 buckets, most of them quiet."""
         ver = self.rib_ver.get(prefix, 0)
         c = self._summ.get(prefix)
         if c is None or c[0] != ver:
-            chains, ups = {}, {}
+            chains, ups, fronts = {}, {}, {}
             for e in self.rib.get(prefix, {}).values():
                 if e.path and e.path[-1] == self.asn:
                     ch = paths.chain(e.path)
                     chains[ch] = chains.get(ch, 0) + 1
                     u = str(paths.upstream(e.path))
                     ups[u] = ups.get(u, 0) + 1
+                    if len(e.path) >= 3:
+                        f = fronts.setdefault(e.path[-2], {})
+                        f[e.path[-3]] = f.get(e.path[-3], 0) + 1
             c = self._summ[prefix] = (ver, json.dumps(chains), json.dumps(ups),
-                                      {int(k): n for k, n in ups.items() if k != "None"})
+                                      {int(k): n for k, n in ups.items() if k != "None"}, fronts)
         return c[1:]
 
     # ------------------------------------------------------------------ control prefixes
@@ -588,7 +599,7 @@ class Engine:
             if not ups:
                 continue  # prefix not visible at all - that's an outage, not a missing upstream
             for u in self.cfg.expected_upstreams:
-                if not ups.get(u):
+                if not ups.get(u) and f"ud|{p}|{u}" not in self.anomalies:   # (an upstream-down event says more)
                     key = f"upstream_missing|{p}|{u}"
                     out[key] = ["upstream_missing", "warning", p,
                                 f"Expected upstream AS{u} is not carrying {p}", 0, now, {"key": key, "asn": u}]
@@ -608,13 +619,123 @@ class Engine:
             eid = self._new_event(kind, sev, prefix, first, title, detail)
             self.anomalies[key] = {"id": eid, "zero_since": None, "sev": sev}
         for key, a in list(self.anomalies.items()):
-            if key in counts or key.startswith(("tf|", "reg|", "shift|", "xl|", "pl|")):   # managed elsewhere
+            if key in counts or key.startswith(("tf|", "reg|", "shift|", "xl|", "pl|", "ud|")):   # managed elsewhere
                 continue
             if a["zero_since"] is None:
                 a["zero_since"] = now
             elif now - a["zero_since"] >= self.cfg.sustain_seconds:
                 self._close_event(a["id"], a["zero_since"])
                 del self.anomalies[key]
+
+    def _label(self, asn):
+        """'AS64500 (EXAMPLE-NET)', with the first word of its name when bgpcanary has looked it up."""
+        try:
+            r = self.conn.execute("SELECT name FROM asn_names WHERE asn=?", (asn,)).fetchone()
+        except Exception:
+            r = None
+        nm = (r["name"] or "").split(" ")[0] if r else ""
+        return f"AS{asn}" + (f" ({nm})" if nm and nm.upper() != f"AS{asn}" else "")
+
+    def _labels(self, asns):
+        """'AS1 (A)', 'AS1 (A) and AS2 (B)', 'AS1 (A), AS2 (B) and AS3 (C)'."""
+        s = [self._label(a) for a in asns]
+        return s[0] if len(s) == 1 else ", ".join(s[:-1]) + " and " + s[-1]
+
+    def _detect_upstream_down(self, p, m, now, v, ups, fronts):
+        """Upstream down: one of your upstreams carrying almost none of a prefix's paths any more (at most
+        upstream_down_pct of its typical reach, two buckets in a row) while the prefix stays visible through the
+        others. It lost its own upstream(s), or its link to you went down. The event says which networks stopped
+        carrying you on from it, and which of its other transits don't carry your prefix (from the transit filter
+        check); live, the service adds what RIPEstat shows of the upstream's own prefixes before it's alerted.
+        `fronts`: {upstream: {the network in front of it: RIS peers}}."""
+        pct, hist = self.cfg.upstream_down_pct, m.upd_hist
+        base = m.baseline() or v
+        healthy = m.state == "ok" and v >= base * self.cfg.outage_threshold_pct / 100
+        usual = {}
+        for _, h_ups, _ in hist:
+            for u, n in h_ups.items():
+                usual[u] = max(usual.get(u, 0), n)
+        opened = {int(k.split("|")[2]) for k in self.anomalies if k.startswith(f"ud|{p}|")}
+        for u in set(usual) | opened:
+            key, n = f"ud|{p}|{u}", ups.get(u, 0)
+            a = self.anomalies.get(key)
+            if a:
+                ref = a.get("ref") or usual.get(u) or 1
+                a["low"] = n if a.get("low") is None else min(a["low"], n)
+                back = n >= ref * UPD_BACK
+                a["since"] = (a.get("since") or now) if back else None
+                if back and now - a["since"] >= max(self.cfg.sustain_seconds, UPD_HOLD):
+                    self._close_event(a["id"], a["since"],
+                                      title=f"{p}: your upstream {self._label(u)} lost almost all of its paths "
+                                            f"({ref:.0f} → {a['low']} RIS peers) and has recovered ({n})")
+                    del self.anomalies[key]
+                continue
+            top = self._collapsed(m, u, n, usual.get(u, 0), base) if healthy else 0
+            m.upd_hits[u] = m.upd_hits.get(u, 0) + 1 if top else 0
+            if m.upd_hits[u] < 2:   # two buckets in a row, so a single resync or odd snapshot doesn't count
+                continue
+            m.upd_hits[u] = 0
+            # the last bucket it carried you normally in: who carried you on from it then, and where things stood
+            good = next((h for h in reversed(hist) if h[1].get(u, 0) >= top * 0.9), None) or (
+                max(hist, key=lambda h: h[1].get(u, 0)) if hist else None)
+            was, fb, fa = (good[1] if good else {}), dict((good[2] if good else {}).get(u, {})), fronts.get(u, {})
+            dropped = [t for t, k in sorted(fb.items(), key=lambda x: -x[1])
+                       if k >= 3 and fa.get(t, 0) <= k * pct / 100]
+            still = sorted(((t, k) for t, k in fa.items() if k and t not in dropped), key=lambda x: -x[1])
+            # its other transits that don't pass your prefix on from it (open transit-filter notices)
+            filtered = sorted({int(k.split("|")[3]) for k in self.anomalies if k.startswith(f"tf|{p}|{u}|")} - set(fb))
+            took = [w for w, k in sorted(ups.items(), key=lambda x: -(x[1] - was.get(x[0], 0)))
+                    if w != u and k > was.get(w, 0)][:2]
+            lbl = self._label(u)
+            note = [f"Your upstream {lbl} normally carries {p} to about {top} RIS peers; now it carries it to {n}."]
+            if dropped:
+                note.append(f"{self._labels(dropped)}, which carried you on from it, "
+                            f"{'has' if len(dropped) == 1 else 'have'} (almost) stopped: "
+                            + ", ".join(f"{fb[t]} → {fa.get(t, 0)}" for t in dropped) + " RIS peers.")
+            if still:
+                note.append(f"{', '.join(f'{self._label(t)} ({k})' for t, k in still[:3])} still carr"
+                            f"{'ies' if len(still) == 1 else 'y'} you on from it.")
+            if filtered:
+                many, gone = len(filtered) > 1, (f"without {self._labels(dropped)} " if dropped else "")
+                note.append(f"Its other transit{'s' if many else ''} {self._labels(filtered)} "
+                            f"{'don' if many else 'doesn'}'t carry your prefix from it (the transit filter check found "
+                            f"that earlier), so {gone}your routes have nowhere else to go through {lbl}. Worth asking "
+                            f"{lbl} to get {'them' if many else 'it'} to accept your prefix.")
+            else:
+                note.append(f"Either {lbl} lost its own upstream connectivity, or its link to you went down.")
+            if took:
+                note.append(f"The internet now reaches you through {self._labels(took)}.")
+            eid = self._new_event(
+                "upstream_down", "warning", p, good[0] if good else now - 2 * self.B,
+                f"{p}: your upstream {lbl} seems to be having problems: it lost almost all of its paths "
+                f"({top} → {n} RIS peers)",
+                {"key": key, "upstream": u, "baseline": top, "carrying": n,
+                 "carried_on_by": [[t, k] for t, k in sorted(fb.items(), key=lambda x: -x[1])][:8],
+                 "now_carried_on_by": [[t, k] for t, k in still][:8], "dropped": dropped, "filtered_transits": filtered,
+                 "moved_to": took, "note": " ".join(note)})
+            self.anomalies[key] = {"id": eid, "zero_since": None, "sev": "warning", "ref": top, "low": n, "since": None}
+        hist.append((now, ups, fronts))
+        while hist and hist[0][0] < now - UPD_WINDOW:
+            hist.popleft()
+        m.upd_long.append((now, ups))
+        while m.upd_long and m.upd_long[0][0] < now - UPD_TYPICAL:
+            m.upd_long.popleft()
+
+    def _typical(self, m, u):
+        """An upstream's typical reach for a prefix: the median of the RIS peers it carried it to over UPD_TYPICAL
+        (0 until there are 20 minutes of it). Not the peak: a backup upstream that carried everything during the
+        other's outage isn't losing anything when it goes back to its usual share."""
+        vals = sorted(h.get(u, 0) for _, h in m.upd_long)
+        return vals[len(vals) // 2] if len(vals) >= 40 else 0
+
+    def _collapsed(self, m, u, n, recent, base):
+        """If upstream `u` carrying `n` RIS peers' paths counts as having lost almost all of them, its typical reach
+        (see _typical), else 0. `recent`: the most it carried in the last few minutes (a cheap first test)."""
+        pct, floor = self.cfg.upstream_down_pct, max(UPD_MIN, base * 0.1)
+        if pct <= 0 or recent < floor or n > recent * pct / 100:
+            return 0
+        typ = self._typical(m, u)
+        return typ if typ >= floor and n <= typ * pct / 100 else 0
 
     def _detect_shift(self, p, m, now, v, ups):
         """Upstream shift: many RIS peers moving between your upstreams within a few minutes while visibility
@@ -659,6 +780,16 @@ class Engine:
             return
         gained = max(ups, key=lambda u: ups[u] - then.get(u, 0))
         lost = min(then, key=lambda u: ups.get(u, 0) - then[u]) if then else None
+        # one upstream losing almost all of its paths: the upstream-down check reports that, and why. While the one
+        # losing most is still falling steeply, wait (up to two more buckets) to see whether it collapses.
+        if any(k.startswith(f"ud|{p}|") for k in self.anomalies):
+            return
+        if lost is not None and self.cfg.upstream_down_pct > 0 and then.get(lost, 0) >= max(UPD_MIN, base * 0.1):
+            n = ups.get(lost, 0)
+            if self._collapsed(m, lost, n, then[lost], base) or (
+                    m.shift_hits < 4 and n < then[lost] / 2 and n < prev.get(lost, 0)
+                    and self._typical(m, lost) >= max(UPD_MIN, base * 0.1)):
+                return
         desc = (f"{nm(lost)} {then.get(lost, 0)}→{ups.get(lost, 0)}, {nm(gained)} {then.get(gained, 0)}→{ups[gained]}"
                 if lost is not None and lost != gained else f"{nm(gained)} {then.get(gained, 0)}→{ups[gained]}")
         # start: the first bucket in the window where peers began to move (not the window's edge)
@@ -810,7 +941,7 @@ class Engine:
             t = self.last_bucket
             for p, m in self.mons.items():
                 v = self.visible(p)
-                chains, ups, nb = self._rib_summary(p)   # nb: neighbour -> RIS peers via it
+                chains, ups, nb, fronts = self._rib_summary(p)   # nb: neighbour -> RIS peers via it
                 # The chains / upstreams JSON (6 KB for a prefix seen through hundreds of paths) is stored only when
                 # it changes: NULL means "the same as the bucket before" (db.fill_mix fills it in). It's stored anyway
                 # in the first bucket of each UTC day and after any break, so it's never more than a day back.
@@ -825,7 +956,9 @@ class Engine:
                 m.bucket_min = v
                 m.bucket_updates = m.bucket_withdrawals = 0
                 # peers coming and going isn't an upstream shift; they have checks of their own
-                self._detect_shift(p, m, t + self.B, v, {u: n for u, n in nb.items() if not self.peer_group(u)})
+                ups_t = {u: n for u, n in nb.items() if not self.peer_group(u)}
+                self._detect_upstream_down(p, m, t + self.B, v, ups_t, fronts)
+                self._detect_shift(p, m, t + self.B, v, ups_t)
                 self._detect_peering(p, m, t + self.B, v, nb)
             self._tick_controls(t + self.B)
             self.last_bucket += self.B

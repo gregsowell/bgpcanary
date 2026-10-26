@@ -6,6 +6,17 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-10-26
+
+### Added
+- **Upstream down alert.** When one of your upstreams stops carrying almost all of a prefix's paths while you stay visible through the others, bgpcanary now says so, and what changed behind it, instead of a bare "upstream shift":
+  - which of the upstream's own upstreams stopped carrying you on from it;
+  - which of its other transits don't carry your prefix (from the transit filter check). Without them your routes had nowhere else to go through it, and the alert says what to ask your upstream for;
+  - whether its own network is still reachable, from RIPEstat's looking glass (the alert waits a few seconds for it): gone dark too ("it seems to have lost all of its upstreams"), moved to transit that won't carry you, or unchanged (more likely your link to it).
+
+  It's judged against the upstream's typical share of your paths (the median over 6 hours), so a backup upstream going back to normal after carrying everything for a while isn't an alarm. It replaces the upstream-shift alert for that move and the move back, and closes once the upstream has carried you again for 10 minutes. On by default (Upstreams › Upstream down); its threshold is under Settings › Detection & data sources (10% of the typical share; 0 turns it off).
+- **Events replayed together.** Tick two or more events on the Events page and choose *Replay selected together* for one path-tree replay of them, oldest first, with the quiet time between them cut out. ✂ on the timeline marks each cut and how much it skipped; previous/next-event buttons jump between them, and GIF export works as usual. Events on different prefixes share the tree, one strand each.
+
 ## [1.5.4] - 2026-10-26
 
 ### Changed
@@ -284,7 +295,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...HEAD
+[1.5.5]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...v1.5.2

@@ -754,6 +754,32 @@ def event_neighbour(ev):
     return None
 
 
+REPLAY_MAX_EVENTS = 50
+
+
+def replay_events(conn, ids):
+    """The events picked to replay together (?id=..&id=..): those with a prefix, oldest first, at most
+    REPLAY_MAX_EVENTS."""
+    want = [int(i) for i in dict.fromkeys(ids) if str(i).isdigit()][:REPLAY_MAX_EVENTS]
+    rows = [conn.execute("SELECT * FROM events WHERE id=?", (i,)).fetchone() for i in want]
+    return sorted((r for r in rows if r and r["prefix"]), key=lambda r: r["start_ts"])
+
+
+@app.get("/events/replay", response_class=HTMLResponse)
+async def events_replay_page(request: Request):
+    """Several events in one path-tree replay, one after another, with the quiet time between them cut out."""
+    user(request)
+    conn = rconn()
+    try:
+        rows = replay_events(conn, request.query_params.getlist("id"))
+    finally:
+        conn.close()
+    if not rows:
+        return RedirectResponse("/events", status_code=303)
+    return render(request, "events_replay.html", rows=rows, ids=[r["id"] for r in rows],
+                  prefixes=list(dict.fromkeys(r["prefix"] for r in rows)))
+
+
 @app.get("/events/{eid}", response_class=HTMLResponse)
 async def event_page(request: Request, eid: int, msg: str = ""):
     user(request)
@@ -865,6 +891,78 @@ def replay_payload(conn, prefix, s, e):
 
 
 
+def event_windows(rows):
+    """The stretches of time to replay for events replayed together: each event with a little time around it (5
+    minutes, or 8% of a long one, up to 30), merging any that overlap or are less than 10 minutes apart."""
+    now, wins = time.time(), []
+    for r in sorted(rows, key=lambda r: r["start_ts"]):
+        end = r["end_ts"] or now
+        pad = min(1800, max(300, (end - r["start_ts"]) * 0.08))
+        s, e = r["start_ts"] - pad, min(end + pad, now)
+        if wins and s - wins[-1][1] <= 600:
+            wins[-1][1] = max(wins[-1][1], e)
+        else:
+            wins.append([s, e])
+    return wins
+
+
+def stitched_payload(conn, prefix, wins):
+    """replay_payload() over several stretches of time strung together, the quiet time between them cut out (runs in
+    a worker thread). Its times are on a "stitched" clock: the first stretch keeps its own, every later one moves back
+    by the time cut before it, less a short cut of its own (1.5% of the whole, at least 10 s) where the paths that
+    changed in the meantime change all at once. "stitch": the stretches on that clock ([start, end, real start]) and
+    the cuts ({"at", "skipped", "from", "to"})."""
+    cut = max(10.0, sum(e - s for s, e in wins) * 0.015)
+    peer_idx, peers, path_idx, plist = {}, [], {}, []
+
+    def pi(r):
+        k = (r["collector"], r["peer"])
+        if k not in peer_idx:
+            peer_idx[k] = len(peers)
+            peers.append([r["collector"], r["peer"], r["peer_asn"]])
+        return peer_idx[k]
+
+    def pa(r):
+        if r["kind"] != "A" or not r["path"]:
+            return -1
+        if r["path"] not in path_idx:
+            path_idx[r["path"]] = len(plist)
+            plist.append(r["path"])
+        return path_idx[r["path"]]
+
+    init = {pi(r): pa(r) for r in db.state_at(conn, prefix, wins[0][0])}
+    last, updates, segs, cuts, shift = dict(init), [], [], [], 0.0
+    for n, (s, e) in enumerate(wins):
+        if n:
+            gap, at = s - wins[n - 1][1], wins[n - 1][1] - shift + cut / 2
+            now = {pi(r): pa(r) for r in db.state_at(conn, prefix, s)}
+            for i in sorted(set(last) | set(now)):
+                if last.get(i, -1) != now.get(i, -1):
+                    last[i] = now.get(i, -1)
+                    updates.append([round(at, 1), i, last[i]])
+            shift += gap - cut
+            cuts.append({"at": round(at, 1), "skipped": round(gap), "from": wins[n - 1][1], "to": s})
+        segs.append([round(s - shift, 1), round(e - shift, 1), s])
+        for r in conn.execute("SELECT ts, collector, peer, peer_asn, kind, path FROM updates "
+                              "WHERE prefix=? AND ts>? AND ts<=? ORDER BY ts, id", (prefix, s, e)):
+            i, j = pi(r), pa(r)
+            if last.get(i, -1) != j:   # (a re-announcement of the same path is no change for the tree)
+                last[i] = j
+                updates.append([round(r["ts"] - shift, 1), i, j])
+    asns = {int(x) for p in plist for x in p.split()}
+    return {"asn": cfg.asn, "prefix": prefix, "start": wins[0][0], "end": wins[-1][1] - shift, "peers": peers,
+            "paths": plist, "init": [init.get(i, -1) for i in range(len(peers))], "updates": updates, "events": [],
+            "names": {str(k): v for k, v in names(conn, asns).items()}, "stitch": {"segments": segs, "cuts": cuts}}
+
+
+def stitched_time(stitch, t):
+    """A real time on the stitched clock (see stitched_payload): in the stretch it falls in, else the next one."""
+    for s, e, real in stitch["segments"]:
+        if t <= real + (e - s):
+            return s + max(0.0, t - real)
+    return stitch["segments"][-1][1]
+
+
 async def upstream_neighbors(data):
     """Attach each direct upstream's own neighbours (its transits/peers, i.e. ASes seen to its left in the
     global table, from RIPEstat asn-neighbours) so the tree can show who is NOT carrying our prefix.
@@ -915,6 +1013,30 @@ async def api_event_replay(request: Request, eid: int):
     out["event"] = {"id": ev["id"], "title": ev["title"], "severity": ev["severity"], "kind": ev["kind"],
                     "start": ev["start_ts"], "end": ev["end_ts"], "prefix": ev["prefix"]}
     out["events"] = [out["event"]]
+    return await upstream_neighbors(out)
+
+
+@app.get("/api/events/replay")
+async def api_events_replay(request: Request, ids: str = ""):
+    """Path-tree data for events replayed together (ids=1,2,3): one after another on a stitched clock, the quiet time
+    between them cut out. Events on several prefixes share the tree, one strand each (up to MAX_STRANDS)."""
+    user(request)
+    conn = rconn()
+    try:
+        rows = replay_events(conn, ids.split(","))
+        if not rows:
+            raise HTTPException(404)
+        wins = event_windows(rows)
+        prefixes = list(dict.fromkeys(r["prefix"] for r in rows))[:MAX_STRANDS]
+        parts = [await asyncio.to_thread(stitched_payload, conn, p, wins) for p in prefixes]
+    finally:
+        conn.close()
+    out = parts[0] if len(parts) == 1 else merge_replays(parts)
+    st = out["stitch"] = parts[0]["stitch"]
+    out["events"] = [{"id": r["id"], "title": r["title"], "severity": r["severity"], "kind": r["kind"],
+                      "prefix": r["prefix"], "start": stitched_time(st, r["start_ts"]),
+                      "end": stitched_time(st, r["end_ts"]) if r["end_ts"] else None,
+                      "real_start": r["start_ts"], "real_end": r["end_ts"]} for r in rows if r["prefix"] in prefixes]
     return await upstream_neighbors(out)
 
 

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Events together · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>{{ rows|length }} event{{ 's' if rows|length != 1 }} replayed together</h1>
+<div class="panel scroll">
+  <table>
+    <tr><th>Start</th><th>Duration</th><th>Severity</th><th>Type</th><th>Event</th></tr>
+    {% for e in rows %}
+    <tr>
+      <td><time data-ts="{{ e.start_ts }}" data-sec="1"></time></td>
+      <td>{{ ((e.end_ts or now) - e.start_ts)|dur }}</td>
+      <td><span class="badge b-{{ e.severity }}">{{ e.severity }}</span></td>
+      <td class="muted">{{ e.kind }}</td>
+      <td><a href="/events/{{ e.id }}">{{ e.title }}</a>{% if prefixes|length > 1 %} <span class="muted mono">{{ e.prefix }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted" style="margin:10px 0 0;font-size:13px">One replay, oldest first, with the quiet time between them cut
+    out: ✂ on the timeline marks each cut and how much it skipped, and the tree jumps to how things stood when the next
+    one began.{% if prefixes|length > 1 %} One colored strand per prefix.{% endif %}</p>
+</div>
+<div class="panel" id="replay">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Path tree replay</h2>
+    {% include "_tree_controls.html" %}
+  </div>
+  <div class="toolbar">
+    <button data-rp="play" type="button">▶ Play</button>
+    <button data-rp="prev-event" type="button">← Previous event</button>
+    <button data-rp="next-event" type="button">Next event →</button>
+    <span class="muted" data-rp="status"></span>
+  </div>
+  {% include "_tree_body.html" %}
+  <p class="muted" style="margin:4px 0 0;font-size:12px">The tree starts at your AS and follows each RIS peer's AS path
+    outward. Line thickness is the number of peers using a branch at the selected time. Colors compare each branch with
+    the healthiest moment in the replay (the dotted green line on the timeline): orange means it lost more than half
+    its peers, red dashed means it dropped out completely. The shaded stretches on the timeline are the events.</p>
+</div>
+<script src="/static/replay.js?v={{ version }}"></script>
+<script>document.addEventListener("DOMContentLoaded", () => initStitched({{ ids|tojson }}));</script>
+{% endblock %}

@@ -9,11 +9,16 @@
   <button type="submit">Filter</button>
   <span class="muted">{{ total }} event{{ 's' if total != 1 }}</span>
 </form>
-<div class="panel scroll">
+<form class="panel scroll" method="get" action="/events/replay" data-pick>
+<div class="toolbar" style="margin:0 0 8px">
+  <button type="submit" class="primary" data-pick-go disabled>Replay selected together</button>
+  <span class="muted" style="font-size:13px" data-pick-count>Tick two or more events to replay them one after another in the path tree, with the quiet time between them cut out.</span>
+</div>
 <table>
-  <tr><th>Start</th><th>End</th><th>Duration</th><th>Severity</th><th>Type</th><th>Event</th><th>Min vis.</th></tr>
+  <tr><th></th><th>Start</th><th>End</th><th>Duration</th><th>Severity</th><th>Type</th><th>Event</th><th>Min vis.</th></tr>
   {% for e in rows %}
   <tr>
+    <td>{% if e.prefix %}<input type="checkbox" name="id" value="{{ e.id }}" aria-label="Select event {{ e.id }}">{% endif %}</td>
     <td><time data-ts="{{ e.start_ts }}" data-sec="1"></time></td>
     <td>{% if e.end_ts %}<time data-ts="{{ e.end_ts }}" data-sec="1"></time>{% else %}<span class="badge b-{{ 'info' if e.severity == 'info' else 'critical' }}">open</span>{% endif %}</td>
     <td>{{ ((e.end_ts or now) - e.start_ts)|dur }}</td>
@@ -22,9 +27,20 @@
     <td><a href="/events/{{ e.id }}">{{ e.title }}</a>{% if e.historical %} <span class="muted">(backfill)</span>{% endif %}</td>
     <td>{% if e.min_visible is not none %}{{ e.min_visible }}{% if e.baseline %}/{{ '%.0f'|format(e.baseline) }}{% endif %}{% endif %}</td>
   </tr>
-  {% else %}<tr><td colspan="7" class="muted">No events.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="8" class="muted">No events.</td></tr>{% endfor %}
 </table>
-</div>
+</form>
+<script>
+(function () {   // "Replay selected together": on once two or more are ticked
+  const f = document.querySelector("[data-pick]"), go = f.querySelector("[data-pick-go]"), say = f.querySelector("[data-pick-count]");
+  const hint = say.textContent;
+  f.addEventListener("change", () => {
+    const n = f.querySelectorAll('input[name="id"]:checked').length;
+    go.disabled = n < 2;
+    say.textContent = n ? `${n} selected${n < 2 ? ": tick at least one more" : ""}` : hint;
+  });
+})();
+</script>
 <p class="toolbar">
   {% if page > 1 %}<a class="btn" href="?kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page - 1 }}">← Newer</a>{% endif %}
   {% if page * 100 < total %}<a class="btn" href="?kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page + 1 }}">Older →</a>{% endif %}

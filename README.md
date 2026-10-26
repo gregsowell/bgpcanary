@@ -32,6 +32,7 @@ networks.
   - outages and brief dips;
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;
   - missing or unexpected upstreams;
+  - **an upstream going down**: one of your upstreams losing almost all of its paths while you stay up through the others, with what changed behind it (which of its own upstreams stopped carrying you, which of its transits don't carry your prefix, whether its own network is still reachable);
   - **upstream shifts**: a large share of the internet switching providers within minutes, such as a session flap;
   - **reachability loss**: RIPE Atlas probes can't reach your addresses, even when BGP looks fine.
 - **Background checks:**
@@ -44,6 +45,7 @@ networks.
   - several targets compared side by side (for example, each border router's peering address);
   - one-off tests to any address.
 - **Evidence for providers:** every event page collects the timeline, upstream mix, raw AS paths, Route Views output and Atlas results. One click turns it into a plain-text report to attach to a ticket.
+- **Events replayed together:** tick several events and watch them one after another in the connectivity tree, with the quiet time between them cut out.
 - **Multi-prefix and IPv6.** Viewer and admin roles. Everything configurable in the web UI.
 
 ## Screenshots

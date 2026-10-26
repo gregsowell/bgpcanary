@@ -22,6 +22,33 @@
     const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
     return (d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`) + " ago";
   };
+  const durText = s => {
+    s = Math.round(s);
+    const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+  };
+  // Events replayed together (data.stitch, see web.stitched_payload): the quiet time between them is cut out, so the
+  // replay's clock isn't the real one. realT: the real time at a moment of the replay; stitchedT: back again (to the
+  // nearest stretch); inCut: the cut a moment falls in, if any.
+  const realT = (D, t) => {
+    const S = D && D.stitch;
+    if (!S) return t;
+    for (const [a, b, r] of S.segments) if (t <= b) return r + Math.max(0, t - a);
+    const [a, b, r] = S.segments[S.segments.length - 1];
+    return r + (b - a);
+  };
+  const stitchedT = (D, real) => {
+    const S = D && D.stitch;
+    if (!S) return real;
+    for (const [a, b, r] of S.segments) if (real <= r + (b - a)) return a + Math.max(0, real - r);
+    return S.segments[S.segments.length - 1][1];
+  };
+  const inCut = (D, t) => {
+    const S = D && D.stitch;
+    if (!S) return null;
+    for (let i = 1; i < S.segments.length; i++) if (t > S.segments[i - 1][1] && t < S.segments[i][0]) return S.cuts[i - 1];
+    return null;
+  };
 
   // one color per prefix when several share one tree (up to 12 strands; more are combined into one)
   const PCOL = ["#2463eb", "#e8710a", "#12a36b", "#9b4dca", "#d23f8a", "#0f9bb5",
@@ -265,8 +292,15 @@
         if (!ev.end || this.t <= ev.end) return "during event";
         return "after recovery";
       }
+      if (this.D.stitch) {   // events replayed together: which one it's in
+        const e = this.events.find(e => this.t >= e.start - 1 && this.t <= (e.end || this.D.end) + 1);
+        return e ? `event ${e.id}` : inCut(this.D, this.t) ? "between events" : "around the events";
+      }
       return ago(Date.now() / 1000 - this.t);
     }
+    real(t) { return realT(this.D, t); }
+    // the time to show for a moment of the replay (events replayed together: a cut says how much it skipped)
+    when(t) { const c = inCut(this.D, t); return c ? `✂ ${durText(c.skipped)} skipped` : fmt(this.real(t)); }
     draw(ctx, W, opts = {}) {
       const th = theme();
       const { H, rowH, extra } = this.size(W);
@@ -280,7 +314,7 @@
       ctx.fillStyle = th.text; ctx.font = "600 15px system-ui, sans-serif";
       ctx.fillText(this.pp ? `AS${this.D.asn} · ${this.np} prefixes` : `AS${this.D.asn} · ${this.D.prefix}`, 16, 20);
       ctx.font = "13px system-ui, sans-serif"; ctx.fillStyle = th.muted;
-      ctx.fillText(fmt(this.t), 16, 42);
+      ctx.fillText(this.when(this.t), 16, 42);
       if (this.pp) {
         // one chip per prefix: color, prefix, how many RIS peers see it at the selected time
         const { at } = this.chips(W);
@@ -302,7 +336,7 @@
         const vt = `${vis}/${this.total0} RIS peers (${pct}%)`;
         ctx.fillText(vt, 230, 42);
         ctx.fillStyle = th.muted; ctx.font = "13px system-ui, sans-serif";
-        const cmp = this.baseMode === "start" ? `colors vs ${fmtAxis(this.baseT, this.D.end - this.D.start)}` : "colors vs healthiest point";
+        const cmp = this.baseMode === "start" ? `colors vs ${fmtAxis(this.real(this.baseT), this.real(this.D.end) - this.real(this.D.start))}` : "colors vs healthiest point";
         ctx.fillText(`${this.phase()} · ${cmp}`, 230 + ctx.measureText(vt).width + 40, 42);
       }
       // legend
@@ -453,11 +487,22 @@
         });
         ctx.stroke();
       }
+      for (const c of (this.D.stitch || {}).cuts || []) {   // events replayed together: where quiet time was cut out
+        const x = X(c.at), s = `✂ ${durText(c.skipped)}`;
+        ctx.fillStyle = th.bg; ctx.fillRect(x - 3, ty, 6, th2);
+        ctx.strokeStyle = th.muted; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+        ctx.beginPath(); ctx.moveTo(x, ty - 3); ctx.lineTo(x, ty + th2 + 3); ctx.stroke(); ctx.setLineDash([]);
+        ctx.font = "10px system-ui, sans-serif";
+        const w = ctx.measureText(s).width, lx = Math.min(Math.max(x - w / 2, tx0), tx1 - w);
+        ctx.fillStyle = th.bg; ctx.fillRect(lx - 2, ty + 2, w + 4, 12);
+        ctx.fillStyle = th.muted; ctx.fillText(s, lx, ty + 8);
+      }
       ctx.strokeStyle = th.text; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(X(this.t), ty - 4); ctx.lineTo(X(this.t), ty + th2 + 4); ctx.stroke();
       ctx.fillStyle = th.muted; ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText(fmtAxis(this.D.start, span), tx0, ty + th2 + 14);
-      const et = fmtAxis(this.D.end, span); ctx.fillText(et, tx1 - ctx.measureText(et).width, ty + th2 + 14);
+      const rs = this.real(this.D.end) - this.real(this.D.start);
+      ctx.fillText(fmtAxis(this.real(this.D.start), rs), tx0, ty + th2 + 14);
+      const et = fmtAxis(this.real(this.D.end), rs); ctx.fillText(et, tx1 - ctx.measureText(et).width, ty + th2 + 14);
       if (opts.footer) { const w = ctx.measureText(opts.footer).width; ctx.fillText(opts.footer, (W - w) / 2, ty + th2 + 14); }
       this.timeline = { ty, th2, tx0, tx1 };
       ctx.restore();
@@ -493,8 +538,9 @@
     const canvas = q("canvas"), wrap = q("wrap"), slider = q("slider"), tip = q("tip"), status = q("status");
     let rp = null, data = null, timer = null, frames = null, fi = 0, following = !!opts.followNow;
     let rangeCustom = false;
-    const toInput = ts => new Date(ts * 1000 - new Date(ts * 1000).getTimezoneOffset() * 60000).toISOString().slice(0, 19);
-    const fromInput = v => (v ? new Date(v).getTime() / 1000 : NaN);
+    // (the inputs show real times; events replayed together run on a stitched clock, see realT)
+    const toInput = ts => { const r = realT(data, ts); return new Date(r * 1000 - new Date(r * 1000).getTimezoneOffset() * 60000).toISOString().slice(0, 19); };
+    const fromInput = v => (v ? stitchedT(data, new Date(v).getTime() / 1000) : NaN);
     const dur = s => { s = Math.round(s); const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
                        m = Math.floor(s % 3600 / 60), x = s % 60;
                        return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m ${x}s` : `${x}s`; };
@@ -509,7 +555,8 @@
       if (!rp) return;
       const [a, b] = range(), whole = a <= data.start + 1 && b >= data.end - 1;
       rp.gifRange = whole ? null : [a, b];
-      q("gif-span").textContent = b > a ? `${dur(b - a)} selected${whole ? " (whole window)" : ""}` : "From must be before To";
+      q("gif-span").textContent = b > a ? `${dur(b - a)} selected${data.stitch ? ", quiet time cut out" : ""}${whole ? " (whole window)" : ""}`
+                                        : "From must be before To";
       render();
     };
     const setRangeInputs = (a, b) => { q("gif-from").value = toInput(a); q("gif-to").value = toInput(b); };
@@ -544,9 +591,8 @@
       rp.draw(ctx, LW);
       // slider labels: selected moment, and the window's start/end under the track
       const ro = q("slider-time");
-      if (ro) ro.textContent = `${fmt(rp.t)} · ${rp.phase()}`;
-      const span = data.end - data.start;
-      const dt = ts => { const d = new Date(ts * 1000); return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+      if (ro) ro.textContent = `${rp.when(rp.t)} · ${rp.phase()}`;
+      const dt = ts => { const d = new Date(rp.real(ts) * 1000); return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
       if (q("slider-start")) q("slider-start").textContent = dt(data.start);
       if (q("slider-end")) q("slider-end").textContent = dt(data.end) + (opts.followNow ? " (now)" : "");
     };
@@ -635,6 +681,16 @@
     };
     const jumpStart = () => (rp.ev ? Math.max(data.start, rp.ev.start - 1) : data.start);
     const jumpEnd = () => (rp.ev && rp.ev.end ? Math.min(data.end, rp.ev.end + 1) : data.end);
+    // events replayed together: to the start of the one before / after the selected moment
+    const evJump = dir => {
+      if (!rp || !rp.events.length) return;
+      stop();
+      const starts = rp.events.map(e => Math.max(data.start, e.start - 1)).sort((x, y) => x - y);
+      const t = dir > 0 ? starts.find(s => s > rp.t + 1) : starts.filter(s => s < rp.t - 1).pop();
+      if (t !== undefined) setT(t);
+    };
+    if (q("prev-event")) q("prev-event").onclick = () => evJump(-1);
+    if (q("next-event")) q("next-event").onclick = () => evJump(1);
     if (q("jump-start")) q("jump-start").onclick = () => { if (rp) { stop(); setT(jumpStart()); } };
     if (q("jump-end")) q("jump-end").onclick = () => { if (rp) { stop(); setT(jumpEnd()); } };
     if (q("jump-drop")) q("jump-drop").onclick = () => {
@@ -654,7 +710,7 @@
         if (!(b > a)) throw "the From time must be before the To time";
         // A sub-range gets its own replay: the GIF's tree layout, timeline and colors are scoped to it.
         let g = rp;
-        if (a > data.start + 1 || b < data.end - 1) {
+        if ((a > data.start + 1 || b < data.end - 1) && !data.stitch) {   // (events together: the replay already has it)
           gs.textContent = "Loading range…";
           const many = data.prefixes || data.combined;
           const qs = new URLSearchParams(many ? { prefixes: many.join(","), start: a, end: b, combine: data.combined ? 1 : 0 }
@@ -672,7 +728,8 @@
         const off = document.createElement("canvas"); off.width = W; off.height = H;
         const ctx = off.getContext("2d", { willReadFrequently: true });
         const gif = new GIF({ workers: 2, quality: 10, width: W, height: H, workerScript: "/static/vendor/gif.worker.js" });
-        const keepT = rp.t, label = rp.ev ? `event ${rp.ev.id}` : `${data.prefix}`;
+        const keepT = rp.t, label = rp.ev ? `event ${rp.ev.id}`
+          : data.stitch ? `events ${rp.events.map(e => e.id).join(", ")}` : `${data.prefix}`;
         g.frameTimes(nFrames, a, b).forEach((t, i, ts) => {
           g.seek(t);
           g.draw(ctx, W, { footer: `bgpcanary · ${label}` });
@@ -684,9 +741,10 @@
         gif.on("progress", p => gs.textContent = `Encoding GIF ${Math.round(p * 100)}%…`);
         const blob = await new Promise(res => { gif.on("finished", res); gif.render(); });
         const link = document.createElement("a");
-        const d = new Date(a * 1000), stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+        const d = new Date(realT(data, a) * 1000), stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
         link.href = URL.createObjectURL(blob);
-        link.download = rp.ev ? `bgpcanary-event-${rp.ev.id}-${stamp}.gif` : data.prefixes || data.combined ? `bgpcanary-compare-${stamp}.gif` : `bgpcanary-paths-${stamp}.gif`;
+        link.download = rp.ev ? `bgpcanary-event-${rp.ev.id}-${stamp}.gif` : data.stitch ? `bgpcanary-events-${stamp}.gif`
+          : data.prefixes || data.combined ? `bgpcanary-compare-${stamp}.gif` : `bgpcanary-paths-${stamp}.gif`;
         document.body.appendChild(link); link.click(); link.remove();
         gs.textContent = `Saved ${(blob.size / 1048576).toFixed(1)} MB GIF`;
       } catch (e) {
@@ -701,5 +759,12 @@
     const root = document.getElementById("replay");
     const ctl = initTree(root, { base: "best", startAt: d => Math.max(d.start, d.event.start - 1) });
     ctl.load(`/api/events/${eventId}/replay`);
+  };
+
+  // Events replayed together (Events › tick some › Replay selected together), from the first one's start
+  window.initStitched = function (ids) {
+    const root = document.getElementById("replay");
+    const ctl = initTree(root, { base: "best", startAt: d => d.start });
+    ctl.load(`/api/events/replay?ids=${ids.join(",")}`);
   };
 })();

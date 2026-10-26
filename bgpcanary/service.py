@@ -1,6 +1,7 @@
 """Orchestrates the engine, data sources, probes and alerts inside the web process."""
 import asyncio
 import dataclasses
+import ipaddress
 import json
 import logging
 import os
@@ -15,9 +16,9 @@ from .peering import Peering
 log = logging.getLogger("bgpcanary.service")
 # events that trigger an immediate Route Views snapshot + ping/traceroute burst
 BURST_KINDS = ("outage", "upstream_missing", "origin_hijack", "more_specific", "covering_prefix", "upstream_shift",
-               "peer_leak")
+               "upstream_down", "peer_leak")
 # events about routes going missing: what RIPE's data going missing looks like too
-ABSENCE_KINDS = ("blip", "upstream_missing", "upstream_shift", "exchange_loss")
+ABSENCE_KINDS = ("blip", "upstream_missing", "upstream_shift", "upstream_down", "exchange_loss")
 
 
 class Service:
@@ -553,6 +554,15 @@ class Service:
                 if m and m.event_id == eid and m.confirm == "pending":
                     m.confirm = None
             ev = dict(self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())
+        elif phase == "open" and ev["kind"] == "upstream_down" and not ev.get("historical"):
+            # what RIPEstat shows of the upstream's own prefixes, in the alert (a few seconds; its clearing waits)
+            self.opening[eid] = asyncio.Event()
+            try:
+                await asyncio.wait_for(self._explain_upstream_down(ev), 60)
+            except Exception as ex:
+                log.warning("upstream down %s: looking at the upstream's own prefixes failed: %s", eid,
+                            ex or type(ex).__name__)
+            ev = dict(self.aconn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone())
         elif phase in ("close", "escalate") and eid in self.opening:
             try:
                 await asyncio.wait_for(self.opening[eid].wait(), 200)
@@ -579,11 +589,64 @@ class Service:
             if phase == "open" and eid in self.opening:
                 self.opening.pop(eid).set()
         if atlas.enabled(self.aconn) and (ev["kind"] == "outage" and phase in ("open", "close")
-                                          or ev["kind"] == "upstream_shift" and phase == "open"):
+                                          or ev["kind"] in ("upstream_shift", "upstream_down") and phase == "open"):
             asyncio.get_running_loop().create_task(self._atlas_burst(eid, phase, ev["kind"]))
         if self.cfg.probe_on_event and phase in ("open", "close") and ev["kind"] in BURST_KINDS:
             asyncio.get_running_loop().create_task(self._event_burst(eid, ev["kind"], phase, ev.get("prefix"),
                                                                      snapshot=not checked))
+
+    async def _explain_upstream_down(self, ev):
+        """Before an upstream-down event is alerted: what RIPEstat's looking glass shows of the upstream's own (widest)
+        prefix right now, next to how many RIS peers see yours. Seen by few: it seems to have lost all of its
+        upstreams. Seen widely: it's up, and through whom tells whether it lost the upstream that carried you (or that
+        upstream doesn't carry your prefix from it), or whether the trouble is its link with you."""
+        eng, d = self.engine, json.loads(ev["detail"] or "{}")
+        u, p = d.get("upstream"), ev["prefix"]
+        refs = await self.transit._reference(u, ipaddress.ip_network(p, strict=False).version) if u and p else []
+        if not refs:
+            return
+        lg = await ripe.looking_glass(refs[0], self.sourceapp)
+        seen, via = 0, {}
+        for rrc in lg.get("rrcs") or []:
+            for x in rrc.get("peers") or []:
+                a = paths.parse_str(x.get("as_path") or "")
+                if (x.get("prefix") or refs[0]) != refs[0] or not a or a[-1] != u:
+                    continue
+                seen += 1
+                if len(a) >= 2:
+                    via[a[-2]] = via.get(a[-2], 0) + 1
+        ours, lbl = eng.visible(p), eng._label(u)
+        top = sorted(via.items(), key=lambda x: -x[1])[:3]
+        before = [t for t, _ in d.get("carried_on_by") or []]
+        filtered = set(d.get("filtered_transits") or [])
+        through = ", ".join(f"{eng._label(t)} ({k})" for t, k in top)
+        if seen < 0.2 * max(ours, 1):
+            say, short = (f"Its own network went nearly dark too: RIPEstat shows its prefix {refs[0]} at only {seen} "
+                          f"RIS peers (yours: {ours}), so it seems to have lost all of its upstreams."
+                          ), "it seems to have lost all of its upstreams"
+        elif top and top[0][0] in before:
+            say, short = (f"Its own network still goes through {through} (RIPEstat, {refs[0]} at {seen} RIS peers), so "
+                          f"the trouble is more likely the link or session between you and {lbl}, or {lbl} stopped "
+                          f"passing your prefix on."), "its own network looks normal"
+        elif not top:
+            say, short = (f"Its own network is still reachable (RIPEstat: {refs[0]} at {seen} RIS peers)."
+                          ), "its own network is still reachable"
+        else:
+            nf = [t for t, _ in top if t in filtered]
+            many = len(nf) > 1
+            say = (f"Its own network is still reachable (RIPEstat: {refs[0]} at {seen} RIS peers), now through "
+                   f"{through}" + (f"; {eng._labels(nf)} {'don' if many else 'doesn'}'t carry your prefix from it"
+                                   if nf else "")
+                   + f". So {lbl} lost the upstream that carried you, and its traffic moved to "
+                   + (f"{'networks' if many else 'a network'} that won't carry yours." if nf else "other transit."))
+            short = f"its own traffic moved to {eng._label(top[0][0])}"
+        generic = f"Either {lbl} lost its own upstream connectivity, or its link to you went down."
+        note = (d.get("note") or "").replace(generic, "").strip()
+        d.update(note=f"{note} {say}".strip(),
+                 own_network={"prefix": refs[0], "seen": seen, "yours": ours, "through": [[t, k] for t, k in top]})
+        title = f"{ev['title']}; {short}"
+        self.aconn.execute("UPDATE events SET title=?, detail=? WHERE id=?", (title, json.dumps(d), ev["id"]))
+        self.aconn.commit()
 
     async def _confirm_outage(self, ev):
         """Check an outage RIS shows against Route Views (every collector at once, just this prefix), the control
@@ -651,7 +714,7 @@ class Service:
         """One-off RIPE Atlas measurements: traceroutes when an outage opens / clears; pings + traceroutes when an
         upstream shift opens (to find out whether your space stayed reachable through it)."""
         try:
-            if kind == "upstream_shift":
+            if kind in ("upstream_shift", "upstream_down"):
                 await self.atlas.shift_check(eid)
             else:
                 await self.atlas.outage_trace(eid, phase)

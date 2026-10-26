@@ -60,6 +60,7 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 | Brief dip | info | Shorter than the sustain time |
 | Reachability loss | critical | Most RIPE Atlas probes got no reply from one of your addresses (needs Atlas) |
 | Expected upstream missing | warning | |
+| Upstream down | warning | One of your upstreams carries almost none of a prefix's paths (default: a tenth of its typical share) while you stay visible through the others. Says what changed behind it: which of its own upstreams stopped carrying you, which of its transits don't carry your prefix (transit filter check), and whether its own network is still reachable (RIPEstat). Replaces the upstream-shift alert for that move; triggers Route Views and Atlas checks |
 | Upstream shift | warning | A large share of peers moved between your upstreams within minutes; triggers Route Views and Atlas checks |
 | Unexpected / new upstream | warning | A neighbor that's neither an expected upstream nor a peer |
 | New upstream chain | info | A transit → upstream combination seen for the first time |
@@ -109,7 +110,7 @@ gone while it's fine. So bgpcanary doesn't take RIS's word alone for an outage:
 - **Data sources panel** (bottom of the dashboard): RIS Live's connection and drops, how old and how complete
   RIPE's looking-glass answers are, the control prefixes, and which Route Views collectors answered. While
   something looks wrong, a banner says so on every page. Alerts about routes going missing (dips, missing
-  upstreams, upstream shifts, exchange peers lost) say "while RIPE's data looked unreliable", and the looking
+  upstreams, an upstream down, upstream shifts, exchange peers lost) say "while RIPE's data looked unreliable", and the looking
   glass may not withdraw routes from bgpcanary's view.
 
 ## RIPE Atlas

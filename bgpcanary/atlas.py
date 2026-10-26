@@ -692,17 +692,19 @@ class Atlas:
         except ValueError:
             pass
         shift = self.conn.execute(
-            "SELECT id FROM events WHERE kind='upstream_shift' AND (prefix=? OR ? IS NULL) AND start_ts<=? "
-            "AND COALESCE(end_ts, ?)>=?", (prefix, prefix, end + 300, time.time(), start - 300)).fetchone()
+            "SELECT id, kind FROM events WHERE kind IN ('upstream_shift', 'upstream_down') AND (prefix=? OR ? IS NULL) "
+            "AND start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY kind DESC",
+            (prefix, prefix, end + 300, time.time(), start - 300)).fetchone()
         title = (f"{t}{f' ({label})' if label else ''} unreachable from {len(failed)} of {len(rs)} RIPE Atlas probes"
-                 + (" during an upstream shift" if shift else ""))
+                 + ((" during an upstream shift" if shift["kind"] == "upstream_shift" else
+                     " while one of your upstreams was down") if shift else ""))
         self.svc.engine._new_event(
             "reachability_loss", "critical", prefix, start, title,
             {"target": t, "label": label, "msm": rs[0]["msm_id"], "probes": len(rs),
              "failed_probes": sorted(r["prb_id"] for r in failed), "shift_event": shift["id"] if shift else None,
              "note": "Packets to your address didn't come back to most probes in this round of RIPE Atlas pings: "
                      "for that moment, your space was unreachable from much of the internet"
-                     + (" while routes were moving between your upstreams (see the linked upstream-shift event)."
+                     + (" while routes were moving between your upstreams (see the linked event)."
                         if shift else ", even though BGP may have looked normal.")},
             end_ts=end)
 

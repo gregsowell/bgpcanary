@@ -193,7 +193,7 @@
       ? `Path ${n.paths[0] + 1}: ${hops(P[n.paths[0]])} AS hops to AS${D.target.asn}`
       : `AS${n.asn} ${nameOf(n.asn)}\non ${n.paths.length} of ${P.length} paths`;
     t.style.display = "block";
-    t.style.left = Math.min(x + 14, b.width - 270) + "px"; t.style.top = (y + 14) + "px";
+    t.style.left = Math.max(0, Math.min(x + 14, b.width - t.offsetWidth - 8)) + "px"; t.style.top = (y + 14) + "px";
   }
 
   // ---- the list of paths --------------------------------------------------------------------------------------------

@@ -100,7 +100,7 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 }
 .rp-wrap { position: relative; overflow-x: auto; }
 .rp-wrap canvas { display: block; cursor: default; }
-.rp-tip { position: absolute; display: none; pointer-events: none; white-space: pre; background: var(--text); color: var(--panel); font-size: 12px; padding: 6px 8px; border-radius: 6px; z-index: 5; max-width: 260px; }
+.rp-tip { position: absolute; display: none; pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--text); color: var(--panel); font-size: 12px; line-height: 1.35; padding: 6px 8px; border-radius: 6px; z-index: 5; max-width: 400px; }
 .rp-slider { width: 100%; margin: 8px 0 4px; }
 [hidden] { display: none !important; }   /* (also on elements whose class sets a display) */
 .pf-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 6px; font-size: 12px; color: var(--muted); }

@@ -6,6 +6,43 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-26
+
+### Changed
+- **Events replayed together keep only the time that matters.** The replay kept five minutes around each event and everything between events less than ten minutes apart, so most of it was quiet. Now it keeps a minute around each event and the moments when a path actually changed (with 45 seconds either side), and cuts every quiet stretch longer than a minute and a half.
+- **The connectivity tree's faint states are told apart by pattern as well as colour.** *Dropped* is red dashed and thick, *not carrying you* red dotted, *reaches you another way* blue dotted (it does carry you, just not through here), *no longer peered* grey dash-dot. The alert-email images follow.
+- **Upstream neighbours are shown in full by default.** 1.5.6 folded the ones that reach you another way into one line per upstream; that's now the opt-in *fold* choice of the *Upstream neighbours* control, off by default.
+
+### Fixed
+- The tree's tooltips were cut off at the right and bottom of the panel; they wrap now and stay inside it.
+
+## [1.5.6] - 2026-10-26
+
+### Changed
+- **The connectivity tree's "not carrying you" means it now.** Under each of your upstreams the tree shows that upstream's own transits and peers, and painted every one that carries none of your paths through it red, "not carrying you". Most of those have a path to you they prefer, your own peer for one, so they never route to you through that upstream, and the red was misleading. Now:
+  - a neighbour is red only when RIS sees it carrying you nowhere, and the label says through which upstream ("not carrying you via AS64501");
+  - one that's your own neighbour, or on your paths some other way, is grey: "reaches you directly" / "reaches you via AS64502". By default these are folded into one line per upstream, "+12 reach you another way" (hover for the list);
+  - a new *Upstream neighbours* control next to Depth: problems only (the default), all, or none;
+  - the tooltip of a red one adds what the transit filter check knows about that pair: whether the transit carries the upstream's own prefixes widely (then a filter is likely) or RIS barely sees the pair at all.
+
+  The same goes for the tree images in alert emails.
+
+## [1.5.5] - 2026-10-26
+
+### Added
+- **Upstream down alert.** When one of your upstreams stops carrying almost all of a prefix's paths while you stay visible through the others, bgpcanary now says so, and what changed behind it, instead of a bare "upstream shift":
+  - which of the upstream's own upstreams stopped carrying you on from it;
+  - which of its other transits don't carry your prefix (from the transit filter check). Without them your routes had nowhere else to go through it, and the alert says what to ask your upstream for;
+  - whether its own network is still reachable, from RIPEstat's looking glass (the alert waits a few seconds for it): gone dark too ("it seems to have lost all of its upstreams"), moved to transit that won't carry you, or unchanged (more likely your link to it).
+
+  It's judged against the upstream's typical share of your paths (the median over 6 hours), so a backup upstream going back to normal after carrying everything for a while isn't an alarm. It replaces the upstream-shift alert for that move and the move back, and closes once the upstream has carried you again for 10 minutes. On by default (Upstreams › Upstream down); its threshold is under Settings › Detection & data sources (10% of the typical share; 0 turns it off).
+- **Events replayed together.** Tick two or more events on the Events page and choose *Replay selected together* for one path-tree replay of them, oldest first, with the quiet time between them cut out. ✂ on the timeline marks each cut and how much it skipped; previous/next-event buttons jump between them, and GIF export works as usual. Events on different prefixes share the tree, one strand each.
+
+## [1.5.4] - 2026-10-26
+
+### Changed
+- **Event pages show the path tree replay first,** right under the event's details and above the troubleshooting evidence: it's usually the first thing to look at.
+
 ## [1.5.3] - 2026-10-23
 
 ### Changed
@@ -279,7 +316,11 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...HEAD
+[1.5.7]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...v1.5.7
+[1.5.6]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...v1.5.6
+[1.5.5]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...v1.5.1

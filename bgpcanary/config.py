@@ -50,6 +50,7 @@ class Config:
     shift_pct: float
     shift_window_seconds: int
     shift_quiet_seconds: int
+    upstream_down_pct: float
     loss_alert_pct: float
     exchange_loss_pct: float
     peer_leak_pct: float
@@ -164,6 +165,14 @@ TUNING = [
      {"min": 60, "max": 3600, "help": "How quickly the move has to happen to count as a shift."}),
     ("shift_quiet_seconds", "Upstream shift detection", "Consider it over after stable for (seconds)", "int",
      {"min": 60, "max": 7200, "help": "The shift event closes once the upstream mix stops moving for this long."}),
+    ("upstream_down_pct", "Upstream shift detection",
+     "Warn when one upstream carries this little of its usual share (%)",
+     "float", {"min": 0, "max": 50, "help": "Compared with the most RIS peers it carried a prefix to in the last 30 "
+                                            "minutes (only an upstream that carries at least 20, and a tenth of "
+                                            "everyone, counts). It has to stay that low for two buckets in a row while "
+                                            "the prefix stays visible through your other upstreams (otherwise it's an "
+                                            "outage). The alert says what changed behind that upstream, and replaces "
+                                            "the upstream-shift alert for it. 0 = off."}),
     ("loss_alert_pct", "Upstream shift detection", "Critical alert when RIPE Atlas probes can't reach you (% of probes)",
      "float", {"min": 0, "max": 100, "help": "If at least this share of the probes in one round of Atlas pings to your "
                                              "own addresses (baseline targets, shift checks) gets no reply at all, a "
@@ -311,6 +320,11 @@ ALERT_TYPES = [
     {"kind": "upstream_missing", "group": "Upstreams", "name": "Expected upstream missing", "sev": ("warning",),
      "desc": "An upstream listed under Monitored network carries none of a prefix's paths while the prefix is "
              "otherwise visible.", "tuning": []},
+    {"kind": "upstream_down", "group": "Upstreams", "name": "Upstream down", "sev": ("warning",),
+     "desc": "One of your upstreams stops carrying almost all of a prefix's paths while you stay visible through the "
+             "others. The alert says what changed behind it: which of its own upstreams stopped carrying you, which "
+             "of its transits don't carry your prefix, and whether its own network is still reachable (RIPEstat). "
+             "Triggers Route Views and Atlas checks.", "tuning": ["upstream_down_pct"]},
     {"kind": "upstream_shift", "group": "Upstreams", "name": "Upstream shift", "sev": ("warning",),
      "desc": "A large share of the internet switches which of your upstreams it uses within minutes while "
              "visibility holds (a session flap or re-route). Triggers Route Views and Atlas checks.",
@@ -508,6 +522,7 @@ def _load(path):
         shift_pct=float(det.get("shift_pct", 25)),
         shift_window_seconds=int(det.get("shift_window_seconds", 300)),
         shift_quiet_seconds=int(det.get("shift_quiet_seconds", 300)),
+        upstream_down_pct=float(det.get("upstream_down_pct", 10)),
         loss_alert_pct=float(det.get("loss_alert_pct", 50)),
         exchange_loss_pct=float(det.get("exchange_loss_pct", 50)),
         peer_leak_pct=float(det.get("peer_leak_pct", 10)),

@@ -20,7 +20,7 @@ networks.
 - **Live visibility:** how many of RIPE RIS's ~330 peers see each prefix, in 30-second steps, with 90 days of history loaded on day one.
 - **One dashboard for all your prefixes:** a combined view by default (a status table with problems first, one visibility line per prefix, combined upstream chains), or pick one or a few prefixes to see just those.
 - **Connectivity tree:**
-  - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't, and for a month, which networks your upstreams are no longer peered with.
+  - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't (a neighbour that reaches you some other way, like your own peer, isn't flagged), and for a month, which networks your upstreams are no longer peered with.
   - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
 - **Path finder:**
   - enter an IP address, prefix, AS number or host name to see the known AS paths between your network and theirs as a tree, built from what RIS (and optionally Route Views) peers see toward each of you, with the shortest one highlighted. The paths follow how networks pass traffic on (a peer carries it only to its own customers), and peerings that RIS can't see but PeeringDB makes possible are shown dotted;
@@ -32,6 +32,7 @@ networks.
   - outages and brief dips;
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;
   - missing or unexpected upstreams;
+  - **an upstream going down**: one of your upstreams losing almost all of its paths while you stay up through the others, with what changed behind it (which of its own upstreams stopped carrying you, which of its transits don't carry your prefix, whether its own network is still reachable);
   - **upstream shifts**: a large share of the internet switching providers within minutes, such as a session flap;
   - **reachability loss**: RIPE Atlas probes can't reach your addresses, even when BGP looks fine.
 - **Background checks:**
@@ -44,6 +45,7 @@ networks.
   - several targets compared side by side (for example, each border router's peering address);
   - one-off tests to any address.
 - **Evidence for providers:** every event page collects the timeline, upstream mix, raw AS paths, Route Views output and Atlas results. One click turns it into a plain-text report to attach to a ticket.
+- **Events replayed together:** tick several events and watch them one after another in the connectivity tree, with the quiet time between them cut out.
 - **Multi-prefix and IPv6.** Viewer and admin roles. Everything configurable in the web UI.
 
 ## Screenshots

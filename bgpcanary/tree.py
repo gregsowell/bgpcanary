@@ -1,8 +1,9 @@
 """Server-side connectivity-tree images (PNG) for alert emails.
 
 Same model as the dashboard tree (static/replay.js): your AS at the root, your upstreams, each upstream's
-own transits/peers (always shown, so "not carrying you" is visible, and for a month after one stops being
-seen next to it at all, "no longer peered"), then the next hop out. Each image
+own transits/peers (always shown, so "not carrying you" is visible where RIS sees a neighbour carrying you
+nowhere; neighbours that reach you another way are folded into one line; and for a month after one stops
+being seen next to it at all, "no longer peered"), then the next hop out. Each image
 shows one moment; colours compare it with a reference moment (normally the healthiest point before the
 event).
 """
@@ -183,11 +184,22 @@ def group_peers(paths, asn, group):
 
 
 class Tree:
-    def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6, gone=None):
+    def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6, gone=None, known=()):
+        """`known`: your configured upstreams and peers. An upstream's neighbour that carries none of your paths
+        through it is "not carrying you" (red) only when it reaches you no other way either; one that's your own
+        neighbour, or on your paths somewhere else, prefers that path, so it's folded into one "reach you another
+        way" line (as replay.js does with "problems only")."""
         self.asn, self.depth = asn, depth
         root = (asn,)
         kids, maxc = {}, {}
-        self.pinned = {}
+        self.pinned, self.folds = {}, {}
+        direct, anywhere = set(known) | set(upstreams), set()
+        for paths in states:
+            for p in paths:
+                ints = [a for a in p[:-1] if isinstance(a, int)]
+                if ints and p[-1] == asn:
+                    direct.add(ints[-1])
+                    anywhere.update(ints)
 
         def add(p, c):
             kids.setdefault(p, [])
@@ -218,8 +230,13 @@ class Tree:
                     if n == asn:
                         continue
                     nk = (asn, u, n)
+                    kind = (None if maxc.get(nk) else "direct" if n in direct else "elsewhere" if n in anywhere
+                            else "never")
+                    if kind in ("direct", "elsewhere"):
+                        self.folds.setdefault(uk, []).append((n, kind))
+                        continue
                     add(uk, nk)
-                    self.pinned[nk] = {"of": u, "power": power}
+                    self.pinned[nk] = {"of": u, "power": power, "kind": kind}
                 for n, info in (gone or {}).get(u, []):   # "no longer peered" (gone_neighbors)
                     nk = (asn, u, n)
                     if nk not in self.pinned:
@@ -230,7 +247,7 @@ class Tree:
         self.nodes, self.disp = {}, {}
 
         def visit(k, level, parent):
-            self.nodes[k] = {"level": level, "parent": parent, "children": [], "others": 0}
+            self.nodes[k] = {"level": level, "parent": parent, "children": [], "others": 0, "folded": None}
             self.disp[k] = k
             if parent:
                 self.nodes[parent]["children"].append(k)
@@ -246,7 +263,7 @@ class Tree:
                     rest.append(c)
             if rest:
                 ok = k + ("*",)
-                self.nodes[ok] = {"level": level + 1, "parent": k, "children": [], "others": len(rest)}
+                self.nodes[ok] = {"level": level + 1, "parent": k, "children": [], "others": len(rest), "folded": None}
                 self.nodes[k]["children"].append(ok)
 
                 def mark(n):
@@ -255,6 +272,10 @@ class Tree:
                         mark(c)
                 for r in rest:
                     mark(r)
+            if self.folds.get(k):   # an upstream's neighbours that reach you another way, as one line
+                fk = k + ("~",)
+                self.nodes[fk] = {"level": level + 1, "parent": k, "children": [], "others": 0, "folded": self.folds[k]}
+                self.nodes[k]["children"].append(fk)
 
         visit(root, 0, None)
         self._chain = chain
@@ -348,7 +369,8 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
     T((16, 52), f"{vis}/{total} RIS peers can see the prefix ({pct}%)", (13, True), pcol)
     # legend
     lg = [("carrying", C["accent"], None), ("lost >50%", C["warn"], None), ("dropped", C["crit"], (5, 4)),
-          ("new", C["ok"], None), ("not carrying you", C["crit"], (2, 3)), ("no longer peered", C["muted"], (1, 3))]
+          ("new", C["ok"], None), ("not carrying you", C["crit"], (2, 3)),
+          ("reaches you another way", C["muted"], (2, 3)), ("no longer peered", C["muted"], (1, 3))]
     x = W - 16
     for label, col, dash in reversed(lg):
         w = dr.textlength(label, font=font(11 * S)) / S
@@ -369,6 +391,8 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
 
     def state(k):
         c, b = counts.get(k, 0), base.get(k, 0)
+        if tree.nodes[k]["folded"]:
+            return "fold", C["muted"]
         if not c and tree.pinned.get(k, {}).get("gone"):
             return "gone", C["muted"]
         if c and b:
@@ -377,9 +401,11 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
             return "lost", C["crit"]
         if c and not b:
             return "new", C["ok"]
-        if k in tree.pinned:
-            return "never", C["crit"]
+        if k in tree.pinned:   # (grey when it reaches you another way, red when RIS sees it carrying you nowhere)
+            kind = tree.pinned[k].get("kind")
+            return (kind, C["muted"]) if kind in ("direct", "elsewhere") else ("never", C["crit"])
         return "idle", C["border"]
+    SOFT = ("never", "gone", "direct", "elsewhere", "fold")
 
     wof = lambda c: max(1, int(round((1 + 8 * math.sqrt(c / total)) * S)))
     for k, n in tree.nodes.items():
@@ -390,10 +416,10 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         c, b = counts.get(k, 0), base.get(k, 0)
         if st == "lost":
             width, dash = max(S, wof(b) // 2), (5 * S, 4 * S)
-        elif st == "never":
-            width, dash, col = int(1.4 * S), (2 * S, 3 * S), _blend(col, 0.6)
         elif st == "gone":
             width, dash, col = int(1.4 * S), (1 * S, 3 * S), _blend(col, 0.5)
+        elif st in SOFT:
+            width, dash, col = int(1.4 * S), (2 * S, 3 * S), _blend(col, 0.6)
         elif st == "idle":
             width, dash = S, None
         else:
@@ -404,7 +430,7 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         st, col = state(k)
         c, b = counts.get(k, 0), base.get(k, 0)
         r = 7 if n["level"] == 0 else 3 + 4 * math.sqrt(max(c, b * 0.3 if st == "lost" else 0) / total)
-        hollow = st in ("idle", "never", "gone")
+        hollow = st == "idle" or st in SOFT
         box = [(x - r) * S, (y - r) * S, (x + r) * S, (y + r) * S]
         if len(k) > 1 and is_x(k):   # a grouping (exchanges), not a network
             dr.rectangle(box, fill=C["bg"] if hollow else col, outline=col, width=max(1, int(1.5 * S)))
@@ -412,6 +438,8 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
             dr.ellipse(box, fill=C["bg"] if hollow else col, outline=col, width=max(1, int(1.5 * S)))
         if n["others"]:
             label = f"+{n['others']} more"
+        elif n["folded"]:
+            label = f"+{len(n['folded'])} reach you another way"
         elif len(k) > 1 and is_x(k):
             label = "Exchanges" if k[-1] == "x" else k[-1][2:]
         else:
@@ -421,9 +449,11 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         lx = x + r + 5
         has_kids = bool(n["children"])
         T((lx, y - (13 if has_kids else 7)), label, (12, n["level"] <= 1 or (len(k) > 1 and is_x(k))),
-          C["muted"] if st in ("idle", "lost", "never", "gone") else C["text"])
-        cnt = ("" if n["level"] == 0 else "not carrying you" if st == "never" else "no longer peered" if st == "gone"
-               else f"0 (was {b})" if st == "lost"
+          C["muted"] if st == "lost" or st == "idle" or st in SOFT else C["text"])
+        cnt = ("" if n["level"] == 0 or n["folded"]
+               else f"not carrying you via AS{tree.pinned[k]['of']}" if st == "never"
+               else "reaches you directly" if st == "direct" else "reaches you another way" if st == "elsewhere"
+               else "no longer peered" if st == "gone" else f"0 (was {b})" if st == "lost"
                else f"{c} of {b}" if st == "degraded" else f"{c} (new)" if st == "new" else f"{c}" if c else "")
         if cnt:
             ccol = C["crit"] if st in ("lost", "never") else C["warn"] if st == "degraded" else \
@@ -497,7 +527,8 @@ async def event_images(cfg, sourceapp, ev, phase, now=None, peering=None):
             q = ",".join("?" * len(asns))
             names = {r["asn"]: r["name"] for r in conn.execute(f"SELECT asn, name FROM asn_names WHERE asn IN ({q})",
                                                                 list(asns))}
-        tree = Tree(cfg.asn, list(states.values()), sorted(ups), nbrs, gone=gone)
+        tree = Tree(cfg.asn, list(states.values()), sorted(ups), nbrs, gone=gone,
+                    known=set(cfg.expected_upstreams) | set(cfg.peers))
         total = max(tree.visible(p) for p in states.values())
         out = []
         for key, ts, label in moments:

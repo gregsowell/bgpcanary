@@ -20,7 +20,7 @@ networks.
 - **Live visibility:** how many of RIPE RIS's ~330 peers see each prefix, in 30-second steps, with 90 days of history loaded on day one.
 - **One dashboard for all your prefixes:** a combined view by default (a status table with problems first, one visibility line per prefix, combined upstream chains), or pick one or a few prefixes to see just those.
 - **Connectivity tree:**
-  - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't, and for a month, which networks your upstreams are no longer peered with.
+  - An interactive map from your ASN out through your upstreams and their carriers, showing who carries you and who doesn't (a neighbour that reaches you some other way, like your own peer, isn't flagged), and for a month, which networks your upstreams are no longer peered with.
   - Several prefixes in one tree, one colored strand each, so a filter that drops just one of them stands out.
 - **Path finder:**
   - enter an IP address, prefix, AS number or host name to see the known AS paths between your network and theirs as a tree, built from what RIS (and optionally Route Views) peers see toward each of you, with the shortest one highlighted. The paths follow how networks pass traffic on (a peer carries it only to its own customers), and peerings that RIS can't see but PeeringDB makes possible are shown dotted;

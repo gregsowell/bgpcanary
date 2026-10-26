@@ -993,6 +993,17 @@ async def upstream_neighbors(data):
     if missing:
         for a, nm in (await svc.as_names(missing)).items():
             data["names"][str(a)] = nm
+    # for the tree's "not carrying you" (see replay.js build): the neighbours you've configured, and the transit
+    # filter check's latest look at each (upstream, transit) pair: how many RIS peers see the transit carrying the
+    # upstream's own prefixes (ref), yours from it (ours) and yours at all (elsewhere)
+    data["known_neighbours"] = sorted(set(cfg.expected_upstreams) | set(cfg.peers))
+    pfx = set(data.get("prefixes") or data.get("combined") or [data.get("prefix")])
+    rows = {}
+    for r in svc.transit.last_result:
+        key = f"{r['upstream']}|{r['transit']}"
+        if r["prefix"] in pfx and (key not in rows or r["ref"] > rows[key]["ref"]):
+            rows[key] = {"ref": r["ref"], "ours": r["ours"], "elsewhere": r["elsewhere"], "flag": r["flag"]}
+    data["transit_check"] = {"rows": rows, "min_peers": cfg.transit_filter_min_peers, "at": svc.transit.last_run}
     return data
 
 

@@ -6,6 +6,17 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-26
+
+### Changed
+- **The connectivity tree's "not carrying you" means it now.** Under each of your upstreams the tree shows that upstream's own transits and peers, and painted every one that carries none of your paths through it red, "not carrying you". Most of those have a path to you they prefer, your own peer for one, so they never route to you through that upstream, and the red was misleading. Now:
+  - a neighbour is red only when RIS sees it carrying you nowhere, and the label says through which upstream ("not carrying you via AS64501");
+  - one that's your own neighbour, or on your paths some other way, is grey: "reaches you directly" / "reaches you via AS64502". By default these are folded into one line per upstream, "+12 reach you another way" (hover for the list);
+  - a new *Upstream neighbours* control next to Depth: problems only (the default), all, or none;
+  - the tooltip of a red one adds what the transit filter check knows about that pair: whether the transit carries the upstream's own prefixes widely (then a filter is likely) or RIS barely sees the pair at all.
+
+  The same goes for the tree images in alert emails.
+
 ## [1.5.5] - 2026-10-26
 
 ### Added
@@ -295,7 +306,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...HEAD
+[1.5.6]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...v1.5.3

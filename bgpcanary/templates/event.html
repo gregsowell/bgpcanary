@@ -69,22 +69,6 @@
   </div>
 </div>
 
-{% include "_evidence.html" %}
-
-{% if ev.prefix in cfg.prefixes %}
-<div class="panel">
-  <h2>Visibility around the event</h2>
-  <div class="chart"><canvas id="vis"></canvas></div>
-</div>
-<div class="grid g2">
-  <div class="panel"><h2>Upstream chains</h2><div class="chart small"><canvas id="chain"></canvas></div></div>
-  <div class="panel"><h2>Update churn</h2><div class="chart small"><canvas id="churn"></canvas></div></div>
-</div>
-<script>
-document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev.prefix|tojson }}, start: {{ win_start }}, end: {{ win_end }}, visId: "vis", chainId: "chain", churnId: "churn" }));
-</script>
-{% endif %}
-
 {% if ev.prefix %}
 <div class="panel" id="replay">
   <div class="toolbar">
@@ -103,6 +87,22 @@ document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev
 </div>
 <script src="/static/replay.js?v={{ version }}"></script>
 <script>document.addEventListener("DOMContentLoaded", () => initReplay({{ ev.id }}));</script>
+{% endif %}
+
+{% include "_evidence.html" %}
+
+{% if ev.prefix in cfg.prefixes %}
+<div class="panel">
+  <h2>Visibility around the event</h2>
+  <div class="chart"><canvas id="vis"></canvas></div>
+</div>
+<div class="grid g2">
+  <div class="panel"><h2>Upstream chains</h2><div class="chart small"><canvas id="chain"></canvas></div></div>
+  <div class="panel"><h2>Update churn</h2><div class="chart small"><canvas id="churn"></canvas></div></div>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev.prefix|tojson }}, start: {{ win_start }}, end: {{ win_end }}, visId: "vis", chainId: "chain", churnId: "churn" }));
+</script>
 {% endif %}
 
 <div class="panel">

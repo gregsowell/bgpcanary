@@ -6,6 +6,11 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-10-26
+
+### Changed
+- **Event pages show the path tree replay first,** right under the event's details and above the troubleshooting evidence: it's usually the first thing to look at.
+
 ## [1.5.3] - 2026-10-23
 
 ### Changed
@@ -279,7 +284,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/gregsowell/bgpcanary/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/gregsowell/bgpcanary/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/gregsowell/bgpcanary/compare/v1.5.0...v1.5.1

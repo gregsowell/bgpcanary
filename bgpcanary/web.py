@@ -891,14 +891,14 @@ def replay_payload(conn, prefix, s, e):
 
 
 
-def event_windows(rows):
-    """The stretches of time to replay for events replayed together: each event with a little time around it (5
-    minutes, or 8% of a long one, up to 30), merging any that overlap or are less than 10 minutes apart."""
+def event_windows(rows, pad=300):
+    """The stretches of time around events replayed together: each event with `pad` seconds either side (or 8% of a
+    long one, up to 30 minutes), merging any that overlap or are less than 10 minutes apart."""
     now, wins = time.time(), []
     for r in sorted(rows, key=lambda r: r["start_ts"]):
         end = r["end_ts"] or now
-        pad = min(1800, max(300, (end - r["start_ts"]) * 0.08))
-        s, e = r["start_ts"] - pad, min(end + pad, now)
+        p = min(1800, max(pad, (end - r["start_ts"]) * 0.08))
+        s, e = r["start_ts"] - p, min(end + p, now)
         if wins and s - wins[-1][1] <= 600:
             wins[-1][1] = max(wins[-1][1], e)
         else:
@@ -906,13 +906,49 @@ def event_windows(rows):
     return wins
 
 
+def activity_windows(conn, prefixes, rows, gap=120, margin=45, min_cut=90):
+    """The stretches of time worth replaying for events replayed together: a minute around each event, and wherever
+    one of `prefixes`' paths changed within 10 minutes of an event, with `margin` seconds around each cluster of
+    changes (changes within `gap` seconds of each other belong together). Quiet time between those longer than
+    `min_cut` seconds is cut out; shorter pauses are kept, so the replay doesn't stutter."""
+    now, keep, stamps = time.time(), [], []
+    for r in rows:
+        keep.append([r["start_ts"] - 60, min((r["end_ts"] or now) + 60, now)])
+    for p in prefixes:
+        for s, e in event_windows(rows, pad=600):
+            path_of = lambda r: r["path"] if r["kind"] == "A" else None   # noqa: E731
+            last = {(r["collector"], r["peer"]): path_of(r) for r in db.state_at(conn, p, s)}
+            for r in conn.execute("SELECT ts, collector, peer, kind, path FROM updates WHERE prefix=? AND ts>? "
+                                  "AND ts<=? ORDER BY ts, id", (p, s, e)):
+                k, path = (r["collector"], r["peer"]), path_of(r)
+                if last.get(k) != path:   # (a re-announcement of the same path changes nothing)
+                    last[k] = path
+                    stamps.append(r["ts"])
+    stamps.sort()
+    i = 0
+    while i < len(stamps):
+        j = i
+        while j + 1 < len(stamps) and stamps[j + 1] - stamps[j] <= gap:
+            j += 1
+        keep.append([stamps[i] - margin, stamps[j] + margin])
+        i = j + 1
+    out = []
+    for s, e in sorted(keep):
+        e = min(e, now)
+        if out and s - out[-1][1] <= min_cut:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return out
+
+
 def stitched_payload(conn, prefix, wins):
     """replay_payload() over several stretches of time strung together, the quiet time between them cut out (runs in
     a worker thread). Its times are on a "stitched" clock: the first stretch keeps its own, every later one moves back
-    by the time cut before it, less a short cut of its own (1.5% of the whole, at least 10 s) where the paths that
-    changed in the meantime change all at once. "stitch": the stretches on that clock ([start, end, real start]) and
-    the cuts ({"at", "skipped", "from", "to"})."""
-    cut = max(10.0, sum(e - s for s, e in wins) * 0.015)
+    by the time cut before it, less a short cut of its own (1% of the whole, 6 to 20 s) where the paths that changed
+    in the meantime change all at once. "stitch": the stretches on that clock ([start, end, real start]) and the cuts
+    ({"at", "skipped", "from", "to"})."""
+    cut = max(6.0, min(20.0, sum(e - s for s, e in wins) * 0.01))
     peer_idx, peers, path_idx, plist = {}, [], {}, []
 
     def pi(r):
@@ -1037,8 +1073,8 @@ async def api_events_replay(request: Request, ids: str = ""):
         rows = replay_events(conn, ids.split(","))
         if not rows:
             raise HTTPException(404)
-        wins = event_windows(rows)
         prefixes = list(dict.fromkeys(r["prefix"] for r in rows))[:MAX_STRANDS]
+        wins = await asyncio.to_thread(activity_windows, conn, prefixes, rows)
         parts = [await asyncio.to_thread(stitched_payload, conn, p, wins) for p in prefixes]
     finally:
         conn.close()

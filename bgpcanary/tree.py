@@ -184,11 +184,11 @@ def group_peers(paths, asn, group):
 
 
 class Tree:
-    def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6, gone=None, known=()):
+    def __init__(self, asn, states, upstreams, neighbors, depth=3, topn=6, gone=None, known=(), fold=False):
         """`known`: your configured upstreams and peers. An upstream's neighbour that carries none of your paths
         through it is "not carrying you" (red) only when it reaches you no other way either; one that's your own
-        neighbour, or on your paths somewhere else, prefers that path, so it's folded into one "reach you another
-        way" line (as replay.js does with "problems only")."""
+        neighbour, or on your paths somewhere else, prefers that path: "reaches you another way" (faint blue), or
+        with `fold`, one "reach you another way" line per upstream (as replay.js does with its fold choice)."""
         self.asn, self.depth = asn, depth
         root = (asn,)
         kids, maxc = {}, {}
@@ -232,7 +232,7 @@ class Tree:
                     nk = (asn, u, n)
                     kind = (None if maxc.get(nk) else "direct" if n in direct else "elsewhere" if n in anywhere
                             else "never")
-                    if kind in ("direct", "elsewhere"):
+                    if fold and kind in ("direct", "elsewhere"):
                         self.folds.setdefault(uk, []).append((n, kind))
                         continue
                     add(uk, nk)
@@ -323,25 +323,24 @@ def _bezier(x0, y0, x1, y1, n=28):
 
 
 def _polyline(dr, pts, fill, width, dash=None):
+    """A line through `pts`; `dash`: on/off lengths, any even number of them ((6, 3, 1, 3) is dash-dot)."""
     if not dash:
         dr.line(pts, fill=fill, width=width, joint="curve")
         return
-    on, off = dash
-    pos, drawing = 0.0, True
+    seq, idx, pos, drawing = list(dash), 0, 0.0, True
     for (xa, ya), (xb, yb) in zip(pts, pts[1:]):
         seg = math.hypot(xb - xa, yb - ya)
         t = 0.0
         while t < seg:
-            left = (on if drawing else off) - pos
-            step = min(left, seg - t)
+            step = min(seq[idx] - pos, seg - t)
             if drawing:
                 f0, f1 = t / seg, (t + step) / seg
                 dr.line([(xa + (xb - xa) * f0, ya + (yb - ya) * f0), (xa + (xb - xa) * f1, ya + (yb - ya) * f1)],
                         fill=fill, width=width)
             t += step
             pos += step
-            if pos >= (on if drawing else off) - 1e-9:
-                pos, drawing = 0.0, not drawing
+            if pos >= seq[idx] - 1e-9:
+                pos, idx, drawing = 0.0, (idx + 1) % len(seq), not drawing
 
 
 def _blend(c, alpha):
@@ -368,16 +367,19 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
     pcol = C["crit"] if pct < 50 else C["warn"] if pct < 80 else C["ok"]
     T((16, 52), f"{vis}/{total} RIS peers can see the prefix ({pct}%)", (13, True), pcol)
     # legend
-    lg = [("carrying", C["accent"], None), ("lost >50%", C["warn"], None), ("dropped", C["crit"], (5, 4)),
-          ("new", C["ok"], None), ("not carrying you", C["crit"], (2, 3)),
-          ("reaches you another way", C["muted"], (2, 3)), ("no longer peered", C["muted"], (1, 3))]
+    # (the same patterns as the branches: dropped red dashed and thick, not carrying you red dotted, reaches you
+    # another way blue dotted, no longer peered grey dash-dot)
+    lg = [("carrying", C["accent"], None, 3), ("lost >50%", C["warn"], None, 3), ("dropped", C["crit"], (6, 4), 4),
+          ("new", C["ok"], None, 3), ("not carrying you", C["crit"], (1, 3), 2),
+          ("reaches you another way", C["accent"], (1, 3), 2), ("no longer peered", C["muted"], (6, 3, 1, 3), 2)]
     x = W - 16
-    for label, col, dash in reversed(lg):
+    for label, col, dash, lw in reversed(lg):
         w = dr.textlength(label, font=font(11 * S)) / S
         x -= w
         T((x, 14), label, (11, False), C["muted"])
         x -= 26
-        _polyline(dr, [((x) * S, 21 * S), ((x + 20) * S, 21 * S)], col, 3 * S, tuple(v * S for v in dash) if dash else None)
+        _polyline(dr, [((x) * S, 21 * S), ((x + 20) * S, 21 * S)], col, lw * S,
+                  tuple(v * S for v in dash) if dash else None)
         x -= 14
 
     colw = (W - 24 - 230) / max(tree.depth, 1)
@@ -401,9 +403,9 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
             return "lost", C["crit"]
         if c and not b:
             return "new", C["ok"]
-        if k in tree.pinned:   # (grey when it reaches you another way, red when RIS sees it carrying you nowhere)
+        if k in tree.pinned:   # (faint blue when it reaches you another way, red when RIS sees it carrying you nowhere)
             kind = tree.pinned[k].get("kind")
-            return (kind, C["muted"]) if kind in ("direct", "elsewhere") else ("never", C["crit"])
+            return (kind, C["accent"]) if kind in ("direct", "elsewhere") else ("never", C["crit"])
         return "idle", C["border"]
     SOFT = ("never", "gone", "direct", "elsewhere", "fold")
 
@@ -415,11 +417,13 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         st, col = state(k)
         c, b = counts.get(k, 0), base.get(k, 0)
         if st == "lost":
-            width, dash = max(S, wof(b) // 2), (5 * S, 4 * S)
+            width, dash = max(int(2.5 * S), wof(b) // 2), (6 * S, 4 * S)
         elif st == "gone":
-            width, dash, col = int(1.4 * S), (1 * S, 3 * S), _blend(col, 0.5)
-        elif st in SOFT:
-            width, dash, col = int(1.4 * S), (2 * S, 3 * S), _blend(col, 0.6)
+            width, dash, col = int(1.4 * S), (6 * S, 3 * S, 1 * S, 3 * S), _blend(col, 0.6)
+        elif st == "never":
+            width, dash, col = int(1.4 * S), (1 * S, 3 * S), _blend(col, 0.8)
+        elif st in SOFT:   # reaches you another way, or the folded line of those
+            width, dash, col = int(1.4 * S), (1 * S, 3 * S), _blend(col, 0.55)
         elif st == "idle":
             width, dash = S, None
         else:

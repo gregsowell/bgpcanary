@@ -131,10 +131,10 @@ RIPEstat), including the ones that carry none of your paths *through that upstre
   them; the transit filter check reports the same thing as a *Transit not carrying you* notice, and the tree's
   tooltip shows what the check found for that pair. If RIS barely sees the pair at all, even for the upstream's
   own prefixes, the tooltip says so: RIS has no vantage point there, and it may well be fine.
-- **Grey, "reaches you directly" / "reaches you via AS64502":** it has a path to you it prefers, your own
-  peer or another upstream of yours, so it never routes to you through this one. That's a network using its
-  best route, not a problem. By default these are folded into one "+N reach you another way" line per
-  upstream; the *Upstream neighbours* control shows them all, or none.
+- **Faint blue dotted, "reaches you directly" / "reaches you via AS64502":** it has a path to you it prefers,
+  your own peer or another upstream of yours, so it never routes to you through this one. That's a network
+  using its best route, not a problem. The *Upstream neighbours* control can fold these into one "+N reach you
+  another way" line per upstream, or hide the upstreams' neighbours altogether.
 - A neighbour that peers with you privately where RIS has no vantage point can still show red. List it under
   **Peers** in Settings › Monitored network and it's treated as your direct neighbour.
 

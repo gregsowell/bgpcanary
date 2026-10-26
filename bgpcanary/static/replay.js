@@ -147,7 +147,7 @@
     visible() { return this._visibleNow(this.cur); }
 
     // ---- tree structure -------------------------------------------------------------
-    build(depth, topN, nbrs = "problems") {
+    build(depth, topN, nbrs = "all") {
       this.depth = depth; this.nbrs = nbrs;
       const key = (r, l) => r.slice(0, l + 1).join(">");
       this.chains = this.rev.map(r => {
@@ -176,7 +176,7 @@
       // your configured upstreams and peers) reach you directly; the rest of those in any path reach you some other
       // way. A neighbour of an upstream in neither set is one RIS never sees carrying you: that's the one worth a
       // red "not carrying you". The others don't carry you through that upstream because they have a path they
-      // prefer (your own peer, say), which is no problem: shown grey, or folded into one line (nbrs = "problems").
+      // prefer (your own peer, say), which is no problem: shown faint blue, or folded into one line (nbrs = "fold").
       const direct = new Set([...(this.D.known_neighbours || []), ...(this.D.upstreams || []),
                               ...Object.keys(this.D.exchanges || {}).map(Number)]);
       const anywhere = new Set();
@@ -198,7 +198,7 @@
           for (const n of (this.D.upstream_neighbors || {})[u] || []) {
             const nk = `${uk}>${n.asn}`;
             const kind = maxC.get(nk) ? null : direct.has(n.asn) ? "direct" : anywhere.has(n.asn) ? "elsewhere" : "never";
-            if (nbrs === "problems" && (kind === "direct" || kind === "elsewhere")) {
+            if (nbrs === "fold" && (kind === "direct" || kind === "elsewhere")) {
               if (!folds.has(uk)) folds.set(uk, []);
               folds.get(uk).push({ asn: n.asn, kind, power: n.power });
               continue;
@@ -396,16 +396,16 @@
         ctx.fillText(`${this.phase()} · ${cmp}`, 230 + ctx.measureText(vt).width + 40, 42);
       }
       // legend
-      const lg = this.pp
-        ? [["one strand per prefix", th.accent, []], ["prefix missing on this branch", th.warn, [4, 3]], ["not carrying you", th.crit, [2, 3]], ["reaches you another way", th.muted, [2, 3]], ["no longer peered", th.muted, [1, 3]], ["idle", th.border, []]]
-        : [["carrying routes", th.accent, []], ["lost >50%", th.warn, []], ["dropped", th.crit, [5, 4]], ["new", th.ok, []], ["not carrying you", th.crit, [2, 3]], ["reaches you another way", th.muted, [2, 3]], ["no longer peered", th.muted, [1, 3]], ["idle", th.border, []]];
+      const lg = this.pp   // [label, colour, dash, width]: the same patterns the branches use
+        ? [["one strand per prefix", th.accent, [], 3], ["prefix missing on this branch", th.warn, [4, 3], 3], ["not carrying you", th.crit, [1, 3], 2], ["reaches you another way", th.accent, [1, 3], 2], ["no longer peered", th.muted, [6, 3, 1, 3], 2], ["idle", th.border, [], 3]]
+        : [["carrying routes", th.accent, [], 3], ["lost >50%", th.warn, [], 3], ["dropped", th.crit, [6, 4], 4], ["new", th.ok, [], 3], ["not carrying you", th.crit, [1, 3], 2], ["reaches you another way", th.accent, [1, 3], 2], ["no longer peered", th.muted, [6, 3, 1, 3], 2], ["idle", th.border, [], 3]];
       let lx = W - 16;
       ctx.font = "12px system-ui, sans-serif";
       for (let i = lg.length - 1; i >= 0; i--) {
-        const [label, col, dash] = lg[i];
+        const [label, col, dash, lw] = lg[i];
         const w = ctx.measureText(label).width;
         lx -= w; ctx.fillStyle = th.muted; ctx.fillText(label, lx, 20);
-        lx -= 26; ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.setLineDash(dash);
+        lx -= 26; ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.setLineDash(dash);
         ctx.beginPath(); ctx.moveTo(lx, 20); ctx.lineTo(lx + 20, 20); ctx.stroke(); ctx.setLineDash([]);
         lx -= 16;
       }
@@ -430,14 +430,19 @@
         if (c === 0 && b > 0) return ["lost", th.crit];
         if (c > 0 && b === 0) return ["new", th.ok];
         // an upstream / upstream-neighbour carrying none of our paths now (and none at the comparison point):
-        // red when RIS sees it carrying you nowhere, grey when it reaches you another way (see build)
+        // red when RIS sees it carrying you nowhere, faint blue when it reaches you another way (see build)
         if (this.pinned && this.pinned.has(k)) {
           const kind = this.pinned.get(k).kind;
-          return kind === "direct" || kind === "elsewhere" ? [kind, th.muted] : ["never", th.crit];
+          return kind === "direct" || kind === "elsewhere" ? [kind, th.accent] : ["never", th.crit];
         }
         return ["idle", th.border];
       };
       const soft = st => st === "never" || st === "gone" || st === "direct" || st === "elsewhere" || st === "fold";
+      // the faint states, told apart by pattern as well as colour: dropped = red dashed, thick (it carried you at the
+      // comparison point); not carrying you = red dotted; reaches you another way = blue dotted (it does carry you,
+      // just not through here); no longer peered = grey dash-dot.   [dash, width (null: by peers), alpha]
+      const STYLE = { lost: [[6, 4], null, 1], never: [[1, 3], 1.4, 0.8], direct: [[1, 3], 1.4, 0.55], elsewhere: [[1, 3], 1.4, 0.55],
+                      fold: [[1, 3], 1.4, 0.55], gone: [[6, 3, 1, 3], 1.4, 0.6], idle: [[], null, 0.7] };
       const wOf = c => 1 + 8 * Math.sqrt(c / total);
       // compare mode: a branch is "partial" when it carries some of the prefixes but not all of them
       const pc = (k, p) => counts.get(k + "|" + p) || 0;
@@ -462,11 +467,11 @@
         const [x0, y0] = pos(n.parent), [x1, y1] = pos(k);
         const [st, col] = stateOf(k);
         const c = counts.get(k) || 0, b = this.base.get(k) || 0;
+        const sty = STYLE[st];
         ctx.strokeStyle = col;
-        ctx.globalAlpha = st === "idle" ? 0.7 : soft(st) ? 0.6 : 1;
-        ctx.lineWidth = st === "lost" ? Math.max(1.5, wOf(b) * 0.5) : wOf(c);
-        if (soft(st)) ctx.lineWidth = 1.4;
-        ctx.setLineDash(st === "lost" ? [5, 4] : st === "gone" ? [1, 3] : soft(st) ? [2, 3] : []);
+        ctx.globalAlpha = sty ? sty[2] : 1;
+        ctx.lineWidth = st === "lost" ? Math.max(2.5, wOf(b) * 0.5) : sty && sty[1] ? sty[1] : wOf(c);
+        ctx.setLineDash(sty ? sty[0] : []);
         ctx.beginPath(); ctx.moveTo(x0, y0);
         const mx = (x0 + x1) / 2;
         ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1); ctx.stroke();
@@ -554,15 +559,18 @@
         });
         ctx.stroke();
       }
+      let lastLabel = -Infinity;   // (a cut's label only where it fits: many short cuts would pile up)
       for (const c of (this.D.stitch || {}).cuts || []) {   // events replayed together: where quiet time was cut out
         const x = X(c.at), s = `✂ ${durText(c.skipped)}`;
-        ctx.fillStyle = th.bg; ctx.fillRect(x - 3, ty, 6, th2);
+        ctx.fillStyle = th.bg; ctx.fillRect(x - 2, ty, 4, th2);
         ctx.strokeStyle = th.muted; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
         ctx.beginPath(); ctx.moveTo(x, ty - 3); ctx.lineTo(x, ty + th2 + 3); ctx.stroke(); ctx.setLineDash([]);
         ctx.font = "10px system-ui, sans-serif";
         const w = ctx.measureText(s).width, lx = Math.min(Math.max(x - w / 2, tx0), tx1 - w);
+        if (lx < lastLabel + 10) continue;
         ctx.fillStyle = th.bg; ctx.fillRect(lx - 2, ty + 2, w + 4, 12);
         ctx.fillStyle = th.muted; ctx.fillText(s, lx, ty + 8);
+        lastLabel = lx + w;
       }
       ctx.strokeStyle = th.text; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(X(this.t), ty - 4); ctx.lineTo(X(this.t), ty + th2 + 4); ctx.stroke();
@@ -637,10 +645,11 @@
     // Upstream neighbours: only the ones RIS sees carrying you nowhere (the default), all of them, or none
     const nbrsSel = q("nbrs");
     if (nbrsSel) {
-      try { nbrsSel.value = localStorage.getItem("bgpcanary.treeNbrs") || "problems"; } catch (e) { }
+      try { const v = localStorage.getItem("bgpcanary.treeNbrs"); nbrsSel.value = v === "problems" ? "fold" : v || "all"; } catch (e) { }
+      if (!nbrsSel.value) nbrsSel.value = "all";
       nbrsSel.onchange = () => { try { localStorage.setItem("bgpcanary.treeNbrs", nbrsSel.value); } catch (e) { } rebuild(); };
     }
-    const nbrsMode = () => (nbrsSel ? nbrsSel.value : "problems");
+    const nbrsMode = () => (nbrsSel ? nbrsSel.value : "all");
     let k = 1;
     const render = () => {
       if (!rp) return;
@@ -722,12 +731,19 @@
       const b = canvas.getBoundingClientRect(), x = (e.clientX - b.left) / k, y = (e.clientY - b.top) / k;
       const h = (rp.hit || []).find(h => (h.x - x) ** 2 + (h.y - y) ** 2 <= (h.r + 3 / k) ** 2);
       if (!h) { tip.style.display = "none"; return; }
+      // the tooltip stays inside the tree's panel (which clips it): to the left of the cursor near the right edge,
+      // above it near the bottom
+      const showTip = text => {
+        tip.textContent = text; tip.style.display = "block";
+        const tw = tip.offsetWidth, tht = tip.offsetHeight;
+        tip.style.left = Math.max(0, Math.min(x * k + 12, wrap.clientWidth - tw - 8)) + "px";
+        tip.style.top = (y * k + 12 + tht > wrap.clientHeight ? Math.max(0, y * k - tht - 12) : y * k + 12) + "px";
+      };
       if (h.n.folded) {   // an upstream's neighbours that reach you another way: who, and how
         const of = h.n.parent.split(">").pop(), fo = h.n.folded;
-        tip.textContent = `${fo.length} neighbour${fo.length === 1 ? "" : "s"} of AS${of} that don't carry you through it because they have a path to you they prefer. No problem: a network uses its best route.\n`
+        showTip(`${fo.length} neighbour${fo.length === 1 ? "" : "s"} of AS${of} that don't carry you through it because they have a path to you they prefer. No problem: a network uses its best route.\n`
           + fo.slice(0, 14).map(f => `AS${f.asn} ${(data.names[f.asn] || "").split(/[ ,]/)[0]}: ${f.kind === "direct" ? "your direct neighbour" : rp.reachText(f.asn, f.kind, true)}`).join("\n")
-          + (fo.length > 14 ? `\n+${fo.length - 14} more` : "");
-        tip.style.left = Math.min(x * k + 12, wrap.clientWidth - 260) + "px"; tip.style.top = (y * k + 12) + "px"; tip.style.display = "block";
+          + (fo.length > 14 ? `\n+${fo.length - 14} more` : ""));
         return;
       }
       const nm = h.n.others ? `${h.n.others} smaller branches`
@@ -755,10 +771,9 @@
         : kind === "never" ? `\nRIS sees no route from it to you at all, through AS${of} or any other way.${verdict}`
         : pin && !h.c && !h.b ? (peak ? `\nNot carrying you now (carried up to ${peak} peers earlier in this window)`
                                       : "\nCarried none of your paths in this window") : "";
-      tip.textContent = h.per
+      showTip(h.per
         ? `${nm}${role}\n` + h.per.map((v, p) => `${data.prefixes[p]}: ${v ? v + " peers" : "MISSING on this branch"}`).join("\n")
-        : `${nm}${role}\nAt selected time: ${h.c} peers · ${ref}: ${h.b}${never}`;
-      tip.style.left = Math.min(x * k + 12, wrap.clientWidth - 260) + "px"; tip.style.top = (y * k + 12) + "px"; tip.style.display = "block";
+        : `${nm}${role}\nAt selected time: ${h.c} peers · ${ref}: ${h.b}${never}`);
     });
     canvas.addEventListener("mouseleave", () => tip.style.display = "none");
     if (q("play")) q("play").onclick = () => {

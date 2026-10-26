@@ -15,9 +15,10 @@
     </tr>
     {% endfor %}
   </table>
-  <p class="muted" style="margin:10px 0 0;font-size:13px">One replay, oldest first, with the quiet time between them cut
-    out: ✂ on the timeline marks each cut and how much it skipped, and the tree jumps to how things stood when the next
-    one began.{% if prefixes|length > 1 %} One colored strand per prefix.{% endif %}</p>
+  <p class="muted" style="margin:10px 0 0;font-size:13px">One replay, oldest first, keeping only the time around the events
+    and wherever a path changed: quiet stretches longer than a couple of minutes are cut out. ✂ on the timeline marks
+    each cut and how much it skipped, and the tree jumps to how things stood afterwards.{% if prefixes|length > 1 %} One
+    colored strand per prefix.{% endif %}</p>
 </div>
 <div class="panel" id="replay">
   <div class="toolbar">

@@ -6,6 +6,16 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-26
+
+### Changed
+- **Events replayed together keep only the time that matters.** The replay kept five minutes around each event and everything between events less than ten minutes apart, so most of it was quiet. Now it keeps a minute around each event and the moments when a path actually changed (with 45 seconds either side), and cuts every quiet stretch longer than a minute and a half.
+- **The connectivity tree's faint states are told apart by pattern as well as colour.** *Dropped* is red dashed and thick, *not carrying you* red dotted, *reaches you another way* blue dotted (it does carry you, just not through here), *no longer peered* grey dash-dot. The alert-email images follow.
+- **Upstream neighbours are shown in full by default.** 1.5.6 folded the ones that reach you another way into one line per upstream; that's now the opt-in *fold* choice of the *Upstream neighbours* control, off by default.
+
+### Fixed
+- The tree's tooltips were cut off at the right and bottom of the panel; they wrap now and stay inside it.
+
 ## [1.5.6] - 2026-10-26
 
 ### Changed
@@ -306,7 +316,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...HEAD
+[1.5.7]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/gregsowell/bgpcanary/compare/v1.5.3...v1.5.4

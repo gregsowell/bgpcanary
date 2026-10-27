@@ -42,7 +42,7 @@
     <div class="label">Route Views</div>
     {% if rv %}
     <div class="value">{{ rv.n_paths }} <span class="muted" style="font-size:14px">paths</span></div>
-    <div class="sub"><a href="/paths">{{ rv.ok }}/{{ rv.servers }} collectors</a> · <time data-ts="{{ rv.ts }}"></time></div>
+    <div class="sub"><a href="/data?tab=routeviews">{{ rv.ok }}/{{ rv.servers }} collectors</a> · <time data-ts="{{ rv.ts }}"></time></div>
     {% else %}<div class="value">—</div><div class="sub">no snapshot yet</div>{% endif %}
   </div>
 </div>
@@ -100,7 +100,7 @@
     <div class="label">Route Views</div>
     {% if rv %}
     <div class="value">{{ rv.n_paths }} <span class="muted" style="font-size:14px">paths</span></div>
-    <div class="sub"><a href="/paths">{{ rv.ok }}/{{ rv.servers }} collectors</a> · <time data-ts="{{ rv.ts }}"></time></div>
+    <div class="sub"><a href="/data?tab=routeviews">{{ rv.ok }}/{{ rv.servers }} collectors</a> · <time data-ts="{{ rv.ts }}"></time></div>
     {% else %}<div class="value">—</div><div class="sub">no snapshot yet</div>{% endif %}
   </div>
 </div>
@@ -133,7 +133,7 @@
         <td>{% if p.error %}<span class="badge b-critical">error</span>{% elif p.kind == 'ping' %}{{ '%.0f'|format(p.success_pct or 0) }}%{% if p.rtt_avg %} · {{ '%.0f'|format(p.rtt_avg) }} ms{% endif %}{% else %}{% if p.reached %}reached{% elif p.ping_ok %}path hidden after {{ p.last_hop or '?' }}{% if p.last_hop_asn %} (AS{{ p.last_hop_asn }}{{ ' ' ~ names.get(p.last_hop_asn, '') if names is defined and names.get(p.last_hop_asn) }}){% endif %} · <span title="A ping to this target from the same collector got replies, so it's reachable; the routers after this hop just don't answer traceroute (bgpcanary stops after 4 silent hops).">target answers ping</span>{% else %}last hop {{ p.last_hop or '?' }}{% endif %}{% endif %}</td></tr>
       {% else %}<tr><td class="muted">No probes yet.</td></tr>{% endfor %}
     </table></div>
-      <p style="font-size:13px;margin:8px 0 0"><a href="/probes">More on the Route Views page →</a></p>
+      <p style="font-size:13px;margin:8px 0 0"><a href="/reachability#routeviews">More on the Reachability page →</a></p>
   </div>
   <div class="panel">
     <h2>Route Views: latest route tables</h2>
@@ -144,13 +144,13 @@
 {% endfor %}</pre>
     {% else %}<p class="muted">No successful Route Views snapshot yet.</p>{% endfor %}
     <p class="muted" style="font-size:12px;margin:0">The newest successful "show ip bgp" from several collectors, exactly as they printed the AS paths (prepends included).
-      <a href="/probes">The Route Views page</a> has every collector's latest output and the full history.</p>
+      <a href="/data?tab=routeviews">BGP data › Route Views tables</a> has every collector's latest output and the full history.</p>
   </div>
 </div>
 
 {% if atlas_targets %}
 <div class="panel">
-  <div class="toolbar"><h2 style="margin:0;flex:1">RIPE Atlas · last 24 h</h2><a href="/atlas{{ '?compare=' ~ atlas_targets|join(',') if atlas_targets|length > 1 else '' }}">More on the RIPE Atlas page →</a></div>
+  <div class="toolbar"><h2 style="margin:0;flex:1">RIPE Atlas · last 24 h</h2><a href="/reachability{{ '?compare=' ~ atlas_targets|join(',') if atlas_targets|length > 1 else '' }}">More on the Reachability page →</a></div>
   <p class="muted" style="margin-top:0;font-size:13px">Ping and traceroute toward your addresses from RIPE Atlas probes in other networks: does traffic actually arrive, and how fast.
     All targets use the same probes, so differences between rows come from the path into each address.</p>
   <div class="scroll"><table id="cmp-score"><tr><td class="muted">Loading…</td></tr></table></div>
@@ -158,7 +158,7 @@
     <div><h3 style="font-size:14px;margin:0 0 4px">Latency</h3><div class="chart" style="height:220px"><canvas id="cmp-rtt"></canvas></div></div>
     <div><h3 style="font-size:14px;margin:0 0 4px">Packet loss</h3><div class="chart" style="height:220px"><canvas id="cmp-loss"></canvas></div></div>
   </div>
-  <p style="font-size:13px;margin:8px 0 0"><a href="/atlas{{ '?compare=' ~ atlas_targets|join(',') if atlas_targets|length > 1 else '' }}">More on the RIPE Atlas page →</a>
+  <p style="font-size:13px;margin:8px 0 0"><a href="/reachability{{ '?compare=' ~ atlas_targets|join(',') if atlas_targets|length > 1 else '' }}">More on the Reachability page →</a>
     <span class="muted">(traceroute maps, carrier breakdowns, per-carrier latency, one-off tests)</span></p>
 </div>
 {% endif %}
@@ -240,8 +240,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Connectivity tree: the selected prefixes. 1 = its own tree; 2 up to the strand setting (default 6, up to
   // 12 colors) = one colored strand each; more = combined into one strand.
+  // ?at=<unix time>: the tree around that moment (a link from BGP data › Changes), instead of now
+  const at = parseFloat(new URLSearchParams(location.search).get("at")) || 0;
   const panel = document.getElementById("tree");
-  const tree = initTree(panel, { followNow: true });
+  const tree = initTree(panel, { followNow: !at, startAt: at ? () => at : undefined });
   const strandSel = panel.querySelector("[data-tree-strands]");
   if (strandSel) {
     try { strandSel.value = localStorage.getItem("bgpcanary.treeStrands") || "6"; } catch (e) {}
@@ -250,10 +252,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   let treeSecs = 86400;
   try { treeSecs = parseInt(localStorage.getItem("bgpcanary.treeRange") || localStorage.getItem("bgpcanary.range")) || 86400; } catch (e) {}
+  if (at) { treeSecs = 21600; setTimeout(() => panel.scrollIntoView(), 300); }   // (6 h around the moment asked for)
   const loadTree = periodic => {
     // periodic refreshes only move the tree while it is showing "now", so scrubbing isn't interrupted
     if (periodic && !tree.isFollowing()) return;
-    const end = Math.floor(Date.now() / 1000), start = Math.floor(end - treeSecs);
+    const now = Math.floor(Date.now() / 1000);
+    const end = at ? Math.min(now, Math.floor(at + treeSecs / 2)) : now, start = Math.floor(end - treeSecs);
     if (sel.length === 1) tree.load("/api/replay?" + new URLSearchParams({ prefix: sel[0], start, end }), periodic);
     else tree.load("/api/replay/compare?" + new URLSearchParams({ prefixes: sel.join(","), start, end, combine: sel.length > (strandSel ? parseInt(strandSel.value) : 6) ? 1 : 0 }), periodic);
   };

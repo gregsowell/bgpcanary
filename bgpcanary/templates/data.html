@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}BGP data · {{ cfg.site_name }}{% endblock %}
+{% macro named(a, muted=False) %}<span class="asn{{ ' mu' if muted }}" title="{{ names.get(a, '') }}">AS{{ a }}{% if names.get(a) %} <small>{{ names.get(a).split(' ')[0][:16] }}</small>{% endif %}</span>{% endmacro %}
+{% macro chainlbl(c) %}{% if c[0] %}{{ named(c[0]) }} <span class="muted">→</span> {% endif %}{{ named(c[1]) }} <span class="muted">→ you</span>{% endmacro %}
+{% macro marked(marks, cls) %}{% for a, ch in marks %}{% if ch %}<span class="{{ cls }}">{{ named(a) }}</span>{% else %}{{ named(a, True) }}{% endif %} {% endfor %}{% endmacro %}
+{% macro diff(c) %}{% if c.old %}{{ marked(c.old_marks, 'gone') }}{% else %}<span class="muted">(no route)</span>{% endif %} <span class="muted">→</span> {% if c.new %}{{ marked(c.new_marks, 'came') }}{% else %}<span class="gone">withdrawn</span>{% endif %}{% endmacro %}
+{% set qs = 'prefix=' ~ prefix|urlencode %}
+{% block content %}
+<h1>BGP data <span class="muted" style="font-weight:400;font-size:14px">· how the internet reaches {{ prefix }}, from RIPE RIS and Route Views</span></h1>
+{% if started %}<div class="msg">Snapshot started. Route Views answers within a minute or two; reload to see it.</div>{% endif %}
+<form class="toolbar" method="get" style="margin-bottom:8px">
+  <input type="hidden" name="tab" value="{{ tab }}">
+  <label>Prefix <select name="prefix" onchange="this.form.submit()">{% for p in cfg.prefixes + others %}<option {{ 'selected' if p == prefix }}>{{ p }}</option>{% endfor %}</select></label>
+  <noscript><button type="submit">Show</button></noscript>
+</form>
+<div class="tabs">
+  <a href="/data?tab=paths&{{ qs }}" class="{{ 'on' if tab == 'paths' }}">Paths</a>
+  <a href="/data?tab=changes&{{ qs }}" class="{{ 'on' if tab == 'changes' }}">Changes</a>
+  <a href="/data?tab=raw&{{ qs }}" class="{{ 'on' if tab == 'raw' }}">Raw updates</a>
+  <a href="/data?tab=routeviews&{{ qs }}" class="{{ 'on' if tab == 'routeviews' }}">Route Views tables</a>
+</div>
+
+{% if tab == 'paths' %}
+<div class="panel">
+  <h2>How the internet reaches you <span class="muted" style="font-weight:400;font-size:13px">· {{ total }} RIS peers have a route · grouped by the way in (transit → upstream), then by the next network out</span></h2>
+  {% if groups %}
+  <div class="chain-hdr"><span>Way in</span><span class="right">RIS peers</span><span>Share</span><span>Route Views</span><span>Changes, 7 d</span></div>
+  {% for g in groups %}
+  <details class="chain"{{ ' open' if loop.first and groups|length == 1 }}>
+    <summary>
+      <span>{{ chainlbl(g.chain) }}</span>
+      <span class="right"><strong>{{ g.n }}</strong></span>
+      <span><div class="bar"><span style="width:{{ (100 * g.n / total)|round(1) if total else 0 }}%"></span></div><span class="small muted">{{ (100 * g.n / total)|round|int if total else 0 }}%</span></span>
+      <span class="small">{% if g.rv %}{{ g.rv.values()|sum }} paths · {{ g.rv|length }} of {{ rv_servers }} collectors{% elif rv_servers %}<span class="muted">none of {{ rv_servers }} collectors</span>{% else %}<span class="muted">no snapshot yet</span>{% endif %}</span>
+      <span class="small">{% if g.joined or g.left %}<span style="color:var(--ok)">+{{ g.joined }}</span> / <span style="color:var(--crit)">−{{ g.left }}</span>{% else %}<span class="muted">none</span>{% endif %}</span>
+    </summary>
+    {% for h, lst in g.hops %}
+    <details class="hop">
+      <summary>{% if h %}via {{ named(h) }}{% else %}<span class="muted">the RIS peer is right in front of your upstream</span>{% endif %} <span class="muted">· {{ lst|length }} peer{{ 's' if lst|length != 1 }}</span></summary>
+      <div class="scroll"><table class="peers">
+        <tr><th>Collector</th><th>RIS peer</th><th>Full path (peer → you)</th><th>Last change</th></tr>
+        {% for c in lst %}{% set tail = c.path|length - (3 if g.chain[0] else 2) %}{% set lc = last_change.get((c.collector, c.peer)) %}
+        <tr><td>{{ c.collector }}</td><td class="mono">{{ c.peer }}{% if c.peer_asn %} <span class="muted">{{ named(c.peer_asn) }}</span>{% endif %}</td>
+          <td>{% for a in c.path %}{{ named(a, loop.index0 >= tail) }} {% endfor %}</td>
+          <td class="small">{% if lc %}<time data-ts="{{ lc }}"></time>{% else %}<span class="muted">none this week</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table></div>
+    </details>
+    {% endfor %}
+  </details>
+  {% endfor %}
+  <p class="muted small" style="margin:12px 0 0">Names are the first word of each network's name. Within a way in, the networks right in front of each peer are muted: the way in is what matters for you, the rest is the peer's own neighbourhood. Route Views counts come from each collector's latest "show ip bgp"{% if rv_at %} (oldest <time data-ts="{{ rv_at }}"></time>){% endif %}; the Route Views tab has the raw tables. Changes are the RIS peers that joined and left each way in this week.</p>
+  {% else %}<p class="muted">No RIS peer has a route to {{ prefix }} right now{% if status.phase != 'live' %} (bgpcanary isn't live yet){% endif %}.</p>{% endif %}
+</div>
+<div class="panel">
+  <h2>Latest changes <span class="muted" style="font-weight:400;font-size:13px">· the five most recent; the Changes tab has them all, in bursts</span></h2>
+  <table>
+    {% for c in latest %}
+    <tr><td style="white-space:nowrap"><time data-ts="{{ c.ts }}" data-sec="1"></time></td><td>{{ c.collector }} <span class="mono">{{ c.peer }}</span></td><td>{{ diff(c) }}</td></tr>
+    {% else %}<tr><td class="muted">No path changed this week.</td></tr>{% endfor %}
+  </table>
+</div>
+
+{% elif tab == 'changes' %}
+<div class="panel">
+  <form class="toolbar" method="get" id="cf" style="margin-bottom:6px">
+    <input type="hidden" name="tab" value="changes"><input type="hidden" name="prefix" value="{{ prefix }}">
+    <h2 style="margin:0;flex:1 1 100%">What changed <span class="muted" style="font-weight:400;font-size:13px">· one row per RIS peer whose path changed, in bursts</span></h2>
+    <label>From <input type="datetime-local" id="fs"></label>
+    <label>To <input type="datetime-local" id="fe"></label>
+    <input type="hidden" name="start" id="hs"><input type="hidden" name="end" id="he">
+    <input name="q" value="{{ q }}" placeholder="ASN, peer, collector" style="width:180px">
+    <label><input type="checkbox" name="all" value="1" {{ 'checked' if all }}> show bookkeeping rows too{% if n_book %} ({{ n_book }}: looking-glass corrections, seed rows after a restart, stale withdrawals){% endif %}</label>
+    <button type="submit">Search</button>
+  </form>
+  <p class="muted small" style="margin:0 0 6px">{{ n_changes }} change{{ 's' if n_changes != 1 }} in {{ bursts|length }} burst{{ 's' if bursts|length != 1 }}{% if n_big %}, {{ n_big }} of them with five or more peers{% endif %}. Hops that changed are marked: <span class="gone">old</span> → <span class="came">new</span>; the rest of the path is muted. A window of up to a month at a time.</p>
+  {% for b in bursts %}
+  <details class="burst"{{ ' open' if loop.first }}>
+    <summary>
+      <span class="n">{{ b.peers }} peer{{ 's' if b.peers != 1 }}</span>
+      <span><time data-ts="{{ b.start }}" data-sec="1"></time>{% if b.end - b.start >= 60 %} – <time data-ts="{{ b.end }}" data-sec="1"></time> <span class="muted">(over {{ ((b.end - b.start) / 60)|round|int }} min)</span>{% endif %}</span>
+      <span class="small">{{ b.text }}</span>
+      {% for e in b.events %}<a class="badge b-{{ e.severity }} evt" href="/events/{{ e.id }}" title="{{ e.title }}">{{ e.kind.replace('_', ' ') }} · event {{ e.id }}</a>{% endfor %}
+      <a class="small" href="/?prefix={{ prefix|urlencode }}&at={{ b.start|int }}#tree" title="the connectivity tree around that moment">tree at that moment →</a>
+    </summary>
+    <div class="scroll"><table class="peers">
+      <tr><th>Time</th><th>Collector</th><th>RIS peer</th><th>Path before → after</th><th>Source</th></tr>
+      {% for c in b.changes[:120] %}
+      <tr><td style="white-space:nowrap"><time data-ts="{{ c.ts }}" data-sec="1"></time></td><td>{{ c.collector }}</td><td class="mono">{{ c.peer }}{% if c.peer_asn %} <span class="muted">{{ named(c.peer_asn) }}</span>{% endif %}</td><td>{{ diff(c) }}</td><td class="muted">{{ c.source }}</td></tr>
+      {% endfor %}
+      {% if b.changes|length > 120 %}<tr><td colspan="5" class="muted">+{{ b.changes|length - 120 }} more in this burst; narrow the window or filter to see them</td></tr>{% endif %}
+    </table></div>
+  </details>
+  {% else %}<p class="muted">No path changed in this window.</p>{% endfor %}
+</div>
+<script>
+(function () {
+  const toLocal = ts => { const d = new Date(ts * 1000 - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+  document.getElementById("fs").value = toLocal({{ start }});
+  document.getElementById("fe").value = toLocal({{ end }});
+  document.getElementById("cf").addEventListener("submit", () => {
+    document.getElementById("hs").value = new Date(document.getElementById("fs").value).getTime() / 1000;
+    document.getElementById("he").value = new Date(document.getElementById("fe").value).getTime() / 1000;
+  });
+})();
+</script>
+
+{% elif tab == 'raw' %}
+<div class="panel">
+  <form class="toolbar" method="get" id="uf" style="margin-bottom:6px">
+    <input type="hidden" name="tab" value="raw"><input type="hidden" name="prefix" value="{{ prefix }}">
+    <h2 style="margin:0;flex:1 1 100%">Raw update log <span class="muted" style="font-weight:400;font-size:13px">· every row bgpcanary stored for {{ prefix }}, newest first</span></h2>
+    <label>From <input type="datetime-local" id="fs"></label>
+    <label>To <input type="datetime-local" id="fe"></label>
+    <input name="q" value="{{ q }}" placeholder="ASN, peer, collector">
+    <select name="source"><option value="">All sources</option>{% for s in sources %}<option {{ 'selected' if s == source }}>{{ s }}</option>{% endfor %}</select>
+    <input type="hidden" name="start" id="hs"><input type="hidden" name="end" id="he">
+    <button type="submit">Search</button>
+    <span class="muted">{{ rows|length }}{% if rows|length >= 2000 %}+ (newest 2000 shown){% endif %} updates</span>
+  </form>
+  <div class="scroll"><table class="mono">
+    <tr><th>Time</th><th>Collector</th><th>Peer</th><th></th><th>AS path</th><th>Source</th></tr>
+    {% for u in rows %}
+    <tr><td><time data-ts="{{ u.ts }}" data-sec="1"></time></td><td>{{ u.collector }}</td><td>{{ u.peer }}{% if u.peer_asn %} <span class="muted">AS{{ u.peer_asn }}</span>{% endif %}</td>
+      <td>{% if u.kind == 'W' %}<span class="badge b-critical">W</span>{% else %}<span class="badge b-ok">A</span>{% endif %}</td>
+      <td>{{ u.path or '' }}</td><td class="muted">{{ u.source }}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No updates in this window.</td></tr>{% endfor %}
+  </table></div>
+  <p class="muted small" style="margin:8px 0 0">Sources: <em>ris-live</em> is RIPE's live feed; <em>bgplay</em> history replayed from RIPEstat (the first start, and gaps); <em>resync</em> corrections from RIPE's looking glass; <em>bgplay-init</em> the routes seeded at a start; <em>stale</em> withdrawals of routes RIS had silently dropped; <em>checkpoint</em> the state kept when older rows are pruned. The Changes tab shows the same data as what actually changed.</p>
+</div>
+<script>
+(function () {
+  const toLocal = ts => { const d = new Date(ts * 1000 - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+  document.getElementById("fs").value = toLocal({{ start }});
+  document.getElementById("fe").value = toLocal({{ end }});
+  document.getElementById("uf").addEventListener("submit", () => {
+    document.getElementById("hs").value = new Date(document.getElementById("fs").value).getTime() / 1000;
+    document.getElementById("he").value = new Date(document.getElementById("fe").value).getTime() / 1000;
+  });
+})();
+</script>
+
+{% else %}
+<div class="panel">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">Route Views "show ip bgp" <span class="muted" style="font-weight:400;font-size:13px">· the latest routine snapshot from each collector, exactly as printed (prepends and all)</span></h2>
+    {% if is_admin %}<form method="post" action="/actions/snapshot" class="inline"><button type="submit">Snapshot now</button></form>{% endif %}
+  </div>
+  <p class="muted small" style="margin-top:0">Polled every {{ cfg.rv_poll_minutes }} min, and when an event opens or closes (those snapshots are in the history below and on the event's page). The collectors' ping and traceroute are on the <a href="/reachability#routeviews">Reachability</a> page.</p>
+  {% for s in latest %}
+  <div style="margin-top:14px">
+    <div class="toolbar" style="margin-bottom:6px">
+      <strong><a href="/snapshots/{{ s.id }}">{{ s.server }}</a></strong>{% if cfg.prefixes|length > 1 %} <span class="mono">{{ s.prefix }}</span>{% endif %}
+      <span class="muted" style="font-size:13px"><time data-ts="{{ s.ts }}" data-sec="1"></time> · {{ s.n_paths or 0 }} path{{ 's' if s.n_paths != 1 }}</span>
+      {% if s.error %}<span class="badge b-critical">error</span> <span class="muted" style="font-size:13px">{{ s.error }}</span>{% endif %}
+    </div>
+    {% if s.raw and s.raw.strip() %}<pre style="margin:0">{% for l in s.raw.strip().splitlines() %}{{ l.strip() }}
+{% endfor %}</pre>
+    {% elif s.error and s.prev %}<p class="muted" style="margin:0 0 4px;font-size:12px">This run failed. Last successful output, from <time data-ts="{{ s.prev.ts }}"></time> ({{ s.prev.n_paths }} paths):</p>
+      <pre style="margin:0;opacity:.75">{% for l in s.prev.raw.strip().splitlines() %}{{ l.strip() }}
+{% endfor %}</pre>
+    {% elif not s.error %}<p class="muted" style="margin:0">No paths: this collector had no route to the prefix.</p>{% endif %}
+  </div>
+  {% else %}<p class="muted">No snapshot yet{% if not cfg.rv_servers %}: no Route Views collectors are configured (Settings › Detection &amp; data sources){% endif %}.</p>{% endfor %}
+</div>
+<div class="grid g2">
+  <div class="panel scroll">
+    <h2>Snapshot history</h2>
+    <table>
+      <tr><th>Time</th><th>Collector</th><th>Paths</th></tr>
+      {% for s in snaps %}
+      <tr><td><time data-ts="{{ s.ts }}" data-sec="1"></time></td><td><a href="/snapshots/{{ s.id }}">{{ s.server }}</a>{% if cfg.prefixes|length > 1 %} <span class="mono muted">{{ s.prefix }}</span>{% endif %}</td><td>{{ s.n_paths }}{% if s.error %} <span class="badge b-critical">error</span>{% endif %}{% if s.event_id %} · <a href="/events/{{ s.event_id }}">event</a>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="3" class="muted">No snapshots yet.</td></tr>{% endfor %}
+    </table>
+  </div>
+  <div class="panel scroll">
+    <h2>Today's telnet use from this server <span class="muted" style="font-weight:400;font-size:13px">· Route Views allows 100 connections and 500 KB per collector per day; scheduled polling stays under half</span></h2>
+    <table>
+      <tr><th>Collector</th><th>Status</th><th class="right">Connections</th><th class="right">Downloaded</th></tr>
+      {% for r in budget %}
+      <tr><td>{{ r.server }}</td>
+        <td>{% if r.ok %}<span class="badge b-ok">ok</span>{% elif 'rate-limited' in (r.why or '') %}<span class="badge b-warning">paused</span> <span class="muted">{{ r.why }}</span>{% else %}<span class="badge b-info">budget reached</span> <span class="muted">{{ r.why }}</span>{% endif %}</td>
+        <td class="right">{{ r.conns }} / 100</td><td class="right">{{ '%.0f'|format(r.kb) }} / 500 KB</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">No Route Views collectors configured.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

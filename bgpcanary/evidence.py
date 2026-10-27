@@ -26,9 +26,10 @@ def _rounds(rows, gap=120):
 
 
 def _upstream_mix(conn, prefix, ev, s, e):
-    """Peers per upstream before the event, at its most-changed bucket, and after it ended."""
-    rows = db.fill_mix(conn, conn.execute("SELECT ts, visible, upstreams FROM buckets WHERE prefix=? AND ts>=? AND ts<=? "
-                                          "ORDER BY ts", (prefix, s, e)), prefix)
+    """Peers per upstream before the event, at its most-changed bucket, and after it ended; and who moved between
+    the first two (paths.movers over the buckets' chains)."""
+    rows = db.fill_mix(conn, conn.execute("SELECT ts, visible, upstreams, chains FROM buckets WHERE prefix=? AND ts>=? "
+                                          "AND ts<=? ORDER BY ts", (prefix, s, e)), prefix)
     if not rows:
         return None
     start, end = ev["start_ts"], ev["end_ts"]
@@ -41,8 +42,10 @@ def _upstream_mix(conn, prefix, ev, s, e):
     after = next((r for r in rows if end and r["ts"] >= end + 60), None) or rows[-1]
     moments = [("before", before), ("during (peak change)", worst), ("after" if end else "now", after)]
     ups = sorted(set().union(*(mix(r) for _, r in moments)), key=lambda u: -max(mix(r).get(u, 0) for _, r in moments))
+    floor = max(3, int((before["visible"] or 0) * 0.02))
+    movers = paths.movers(json.loads(before["chains"] or "{}"), json.loads(worst["chains"] or "{}"), floor)[:4]
     return {"moments": [{"label": l, "ts": r["ts"], "visible": r["visible"], "mix": mix(r)} for l, r in moments],
-            "upstreams": ups}
+            "upstreams": ups, "movers": movers}
 
 
 def _paths_at(conn, prefix, ts, top=4):
@@ -109,6 +112,7 @@ def collect(conn, cfg, ev, atlas_payload, nbrs, label_of, name_of):
         out["mix"] = _upstream_mix(conn, prefix, ev, s, e)
         if out["mix"]:
             asns.update(out["mix"]["upstreams"])
+            asns.update(a for m in out["mix"]["movers"] for a in (m["asn"], m["from"], m["to"]) if a)
             for m in out["mix"]["moments"]:
                 ps = _paths_at(conn, prefix, m["ts"])
                 out["paths"].append({"label": m["label"], "ts": m["ts"], "groups": ps})
@@ -191,12 +195,16 @@ def collect(conn, cfg, ev, atlas_payload, nbrs, label_of, name_of):
                else f"target answers ping; path hidden after {p['last_hop'] or '?'}" if p.get("ping_ok")
                else f"stopped at {p['last_hop'] or '?'}")
         tl.append((p["ts"], "rv", f"Route Views {p['kind']} {p['target']} from {p['server']}: {res}"))
+    out["names"] = name_of([a for a in asns if a])
     if out["mix"]:
+        nm = lambda a: f"AS{a}" + (f" ({out['names'][a].split(' ')[0]})" if out["names"].get(a) else "")
+        who = "; ".join(paths.mover_text(m, nm) for m in out["mix"]["movers"][:3])
+        out["mix"]["who"] = who
         for m in out["mix"]["moments"][1:2]:
             tl.append((m["ts"], "bgp", "BGP: biggest change in upstream mix: " + ", ".join(
-                f"AS{u} {out['mix']['moments'][0]['mix'].get(u, 0)}→{m['mix'].get(u, 0)}" for u in out["mix"]["upstreams"])))
+                f"AS{u} {out['mix']['moments'][0]['mix'].get(u, 0)}→{m['mix'].get(u, 0)}" for u in out["mix"]["upstreams"])
+                + (f"; behind it: {who}" if who else "")))
     out["timeline"] = sorted(tl, key=lambda x: x[0])
-    out["names"] = name_of([a for a in asns if a])
     return out
 
 
@@ -242,6 +250,9 @@ def as_text(cfg, ev, d, link=""):
         for u in d["mix"]["upstreams"]:
             w(f"{nm(u):34s}" + "".join(f"{m['mix'].get(u, 0):>24d}" for m in ms))
         w(f"{'Total RIS peers seeing the prefix':34s}" + "".join(f"{m['visible']:>24d}" for m in ms))
+        if d["mix"].get("who"):
+            w("")
+            w(f"Behind it (between the first two moments): {d['mix']['who']}.")
         for snap in d["paths"]:
             w("")
             w(f"AS paths seen by RIS peers {snap['label']} ({_when(snap['ts'])}), prepends collapsed "

@@ -127,6 +127,11 @@ class TransitCheck:
                 if not any(len(p) >= 3 and p[-2] == u for p in mine):
                     unknown.add((prefix, u))
                     continue  # upstream not carrying us at all - upstream_missing covers that
+                if f"unexpected_upstream|{prefix}|{u}" in eng.anomalies:
+                    # not known to be an upstream of yours (a leak, or a neighbour not filed yet): its transits aren't
+                    # judged until it's filed as a transit or a peer (the warning's event page)
+                    unknown.add((prefix, u))
+                    continue
                 try:
                     ref = await self._ref_counts(u, version)
                 except Exception as ex:

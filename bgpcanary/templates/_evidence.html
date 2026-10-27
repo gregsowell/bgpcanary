@@ -35,6 +35,14 @@
     {% endfor %}
     <tr><td class="muted">Total RIS peers seeing the prefix</td>{% for m in evd.mix.moments %}<td class="right muted">{{ m.visible }}</td>{% endfor %}</tr>
   </table></div>
+  {% if evd.mix.movers %}
+  <p style="font-size:13px;margin:8px 0 0"><strong>Behind it</strong> <span class="muted">(between the first two moments: the networks behind your upstreams whose way to you changed)</span>:
+    {% for m in evd.mix.movers %}{{ asn(m.asn) }}
+      {%- if m['from'] and m['to'] and m['from'] != m['to'] %} switched from via {{ asn(m['from']) }} to via {{ asn(m['to']) }} <span class="muted">({{ m.peers }} peers)</span>
+      {%- elif not m.after %} stopped carrying you via {{ asn(m['from']) }} <span class="muted">({{ m.before }} → 0 peers)</span>
+      {%- elif not m.before %} started carrying you via {{ asn(m['to']) }} <span class="muted">(0 → {{ m.after }} peers)</span>
+      {%- else %} via {{ asn(m['to']) }}: <span class="muted">{{ m.before }} → {{ m.after }} peers</span>{% endif %}{{ '; ' if not loop.last }}{% endfor %}</p>
+  {% endif %}
   {% for snap in evd.paths %}
   <details {{ 'open' if loop.index == 2 }} style="margin-top:10px"><summary><strong>AS paths {{ snap.label }}</strong> <span class="muted">· <time data-ts="{{ snap.ts }}" data-sec="1"></time> · prepends collapsed (Route Views below shows exact paths)</span></summary>
     {% for g in snap.groups %}
@@ -72,8 +80,8 @@
 
 <div class="panel">
   <div class="toolbar"><h2 style="margin:0;flex:1">RIPE Atlas</h2>
-    {% if atlas_target %}<a class="btn" href="/atlas?target={{ atlas_target|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">Latency &amp; loss by carrier in this window</a>{% endif %}
-    {% if compare_all and ',' in compare_all %}<a class="btn" href="/atlas?compare={{ compare_all|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">Compare all targets</a>{% endif %}</div>
+    {% if atlas_target %}<a class="btn" href="/reachability?target={{ atlas_target|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">Latency &amp; loss by carrier in this window</a>{% endif %}
+    {% if compare_all and ',' in compare_all %}<a class="btn" href="/reachability?compare={{ compare_all|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">Compare all targets</a>{% endif %}</div>
   {% if evd.atlas_rounds %}
   <h3 style="font-size:14px;margin:6px 0">Ping rounds to your addresses</h3>
   <div class="scroll"><table>
@@ -91,7 +99,7 @@
   {% for t in evd.atlas_traces %}
   <h3 style="font-size:14px;margin:16px 0 6px">Traceroute ({{ t.purpose }}) to {{ t.target }}{% if t.label %} <span class="muted" style="font-weight:400">{{ t.label }}</span>{% endif %} ·
     <time data-ts="{{ t.ts }}" data-sec="1"></time> · <span style="{{ 'color:var(--crit)' if t.reached < t.total * 0.9 }}">{{ t.reached }}/{{ t.total }} reached</span>
-    · <a href="/atlas?target={{ t.target|urlencode }}&msm={{ t.msm }}" style="font-weight:400">map</a> · <a href="https://atlas.ripe.net/measurements/{{ t.msm }}/" target="_blank" rel="noopener" style="font-weight:400">#{{ t.msm }}</a></h3>
+    · <a href="/reachability?target={{ t.target|urlencode }}&msm={{ t.msm }}" style="font-weight:400">map</a> · <a href="https://atlas.ripe.net/measurements/{{ t.msm }}/" target="_blank" rel="noopener" style="font-weight:400">#{{ t.msm }}</a></h3>
   <div class="grid g2">
     <div class="scroll"><table>
       <tr><th>Carrier → upstream</th><th class="right">Reached</th></tr>

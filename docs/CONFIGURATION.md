@@ -56,15 +56,15 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 
 | Alert | Severity | Notes |
 |---|---|---|
-| Outage | warning / critical | Visibility below a % of the 24 h baseline for the sustain time; critical below half, unless Route Views still sees it ([Checking RIPE's data](#checking-ripes-data)) |
+| Outage | warning / critical | Visibility below a % of the 24 h baseline for the sustain time; critical below half, unless Route Views still sees it ([Checking RIPE's data](#checking-ripes-data)). Route Views decides nothing when it normally holds fewer than five paths for the prefix |
 | Brief dip | info | Shorter than the sustain time |
 | Reachability loss | critical | Most RIPE Atlas probes got no reply from one of your addresses (needs Atlas) |
 | Expected upstream missing | warning | |
 | Upstream down | warning | One of your upstreams carries almost none of a prefix's paths (default: a tenth of its typical share) while you stay visible through the others. Says what changed behind it: which of its own upstreams stopped carrying you, which of its transits don't carry your prefix (transit filter check), and whether its own network is still reachable (RIPEstat). Replaces the upstream-shift alert for that move; triggers Route Views and Atlas checks |
-| Upstream shift | warning | A large share of peers moved between your upstreams within minutes; triggers Route Views and Atlas checks |
+| Upstream shift | warning | A large share of peers moved between your upstreams within minutes; names the network behind your upstreams whose way to you changed ("AS64510 switched from via AS64520 to via AS64530"); triggers Route Views and Atlas checks |
 | Unexpected / new upstream | warning | A neighbor that's neither an expected upstream nor a peer |
 | New upstream chain | info | A transit → upstream combination seen for the first time |
-| Exchange peers lost | warning | Many of one exchange's peers stopped carrying a prefix at once (default: half of them) |
+| Exchange peers lost | warning | Many of one exchange's peers stopped carrying a prefix at once (default: half of them); says how many still reach you through your transit and how many carry you nowhere now |
 | Peer leak | warning | A peer carries a prefix to at least 10% of RIS peers and three times its usual reach; triggers Route Views checks |
 | New peer | info | A peer at one of your exchanges (or a listed peer) carries a prefix for the first time |
 | Origin hijack | critical | Another AS originates your prefix |
@@ -72,7 +72,7 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 | Covering announcement | warning | |
 | Your ASN in someone else's path | warning | |
 | Unmonitored prefix from your ASN | warning | |
-| Transit not carrying you | info | An upstream's transit carries the upstream's routes straight from it but yours not at all, or only the long way round (through that upstream, but not straight from it): usually a prefix filter. One that reaches you another way, your own neighbour or a network behind another upstream of yours, is using its best route and isn't reported |
+| Transit not carrying you | info | An upstream's transit carries the upstream's routes straight from it but yours not at all, or only the long way round (through that upstream, but not straight from it): usually a prefix filter. One that reaches you another way, your own neighbour or a network behind another upstream of yours, is using its best route and isn't reported. A neighbour with an open "unexpected upstream" warning isn't judged until it's filed as a transit |
 | Registry problem / filter simulation / IRR / as-set change | info–critical | From the registry watch |
 | Watched path changed | info | A network on the [Path finder](#path-finder)'s watch list: the path to it (or back from it) changed in two checks in a row |
 

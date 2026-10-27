@@ -14,6 +14,7 @@ import time
 from collections import deque
 
 RV_SEES, RV_LOST = 0.6, 0.4   # Route Views still has this share of its usual paths: not an outage / it lost them too
+RV_MIN_USUAL = 5              # with fewer paths than this normally, Route Views can't tell either way
 RV_USUAL_DAYS = 7             # a collector's "usual" view: its last good snapshot within this long before the outage
 LG_STALE_S = 90 * 60          # RIPE's looking glass this far behind: unreliable
 LG_DOUBT_S = 30 * 60          # after an incomplete looking-glass answer, it withdraws nothing for this long
@@ -104,10 +105,13 @@ def judge(trouble, rv, atlas):
     if trouble:
         return "contradicted", ("RIS lost sight of the control prefixes too ("
                                 + ", ".join(c["prefix"] for c in trouble) + ")")
-    if rv and rv["verdict"] == "sees":
+    # a handful of paths normally: a few collectors' view, which can keep (or lose) your route for reasons of
+    # their own, so it decides nothing either way (Atlas may)
+    weak = bool(rv) and rv.get("usual") is not None and rv["usual"] < RV_MIN_USUAL
+    if rv and not weak and rv["verdict"] == "sees":
         return "contradicted", (f"Route Views still sees it ({rv['paths']} paths at {rv['answered']} collectors"
                                 + (f", usually {rv['usual']}" if rv["usual"] else "") + ")")
-    if rv and rv["verdict"] == "lost":
+    if rv and not weak and rv["verdict"] == "lost":
         return "confirmed", (f"Route Views lost it too ({rv['paths']} paths at {rv['answered']} collectors"
                              + (f", usually {rv['usual']}" if rv["usual"] else "") + ")")
     if atlas and atlas["share"] >= 0.5:
@@ -115,6 +119,9 @@ def judge(trouble, rv, atlas):
                                 f"{atlas['target']}")
     if atlas:
         return "confirmed", f"only {atlas['replied']} of {atlas['probes']} RIPE Atlas probes reach {atlas['target']}"
+    if weak:
+        return "unknown", (f"Route Views normally holds only {rv['usual']} path{'s' if rv['usual'] != 1 else ''} for "
+                           f"it ({rv['paths']} now), too few to tell")
     if rv and rv["verdict"] == "partial":
         return "unknown", (f"Route Views sees it partly ({rv['paths']} paths at {rv['answered']} collectors"
                            + (f", usually {rv['usual']}" if rv["usual"] else "") + ")")

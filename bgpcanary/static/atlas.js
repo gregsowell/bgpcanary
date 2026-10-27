@@ -338,7 +338,7 @@
     });
     const loss = (s, r) => s ? (1 - r / s) * 100 : null;
     const bad = v => v != null && v > 2 ? "color:var(--crit);font-weight:600" : "";
-    const link = d => `/atlas?target=${encodeURIComponent(d.target)}`;
+    const link = d => `/reachability?target=${encodeURIComponent(d.target)}`;
 
     document.getElementById("cmp-score").innerHTML =
       `<tr><th>Target</th><th>Group</th><th>Probes</th><th>Reached (latest)</th><th>Median RTT</th><th>p90 RTT</th><th>Loss</th><th>Loss, last hour</th><th>Mostly enters via</th></tr>` +

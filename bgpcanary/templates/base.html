@@ -21,12 +21,10 @@
       {% set path = request.url.path %}
       <a href="/" class="{{ 'active' if path == '/' }}">Dashboard</a>
       <a href="/events" class="{{ 'active' if path.startswith('/events') }}">Events</a>
-      <a href="/paths" class="{{ 'active' if path.startswith('/paths') }}">Paths</a>
       <a href="/pathfinder" class="{{ 'active' if path.startswith('/pathfinder') }}" title="The known AS paths between your network and another one">Path finder</a>
-      <a href="/updates" class="{{ 'active' if path.startswith('/updates') }}">Updates</a>
+      <a href="/data" class="{{ 'active' if path.startswith('/data') or path.startswith('/snapshots') }}" title="Current paths by the way in, what changed, the raw update log, and Route Views' tables">BGP data</a>
+      <a href="/reachability" class="{{ 'active' if path.startswith('/reachability') or path.startswith('/probes') }}" title="Ping and traceroute toward you: RIPE Atlas probes worldwide and Route Views' collectors">Reachability</a>
       <a href="/registry" class="{{ 'active' if path.startswith('/registry') }}">Registry</a>
-      <a href="/probes" class="{{ 'active' if path.startswith('/probes') or path.startswith('/snapshots') }}" title="Ping, traceroute and BGP snapshots from Route Views">Route Views</a>
-      <a href="/atlas" class="{{ 'active' if path.startswith('/atlas') }}" title="Ping and traceroute from RIPE Atlas probes worldwide">RIPE Atlas</a>
       <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">Settings</a>
       {% if is_admin %}<a href="/users" class="{{ 'active' if path.startswith('/users') }}">Users</a>{% endif %}
       <a href="https://www.patreon.com/thebrotherswisp" target="_blank" rel="noopener" class="nav-support" title="Support The Brothers WISP, who make bgpcanary, on Patreon">Project Support</a>

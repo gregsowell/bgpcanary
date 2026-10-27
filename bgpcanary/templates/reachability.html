@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}RIPE Atlas · {{ cfg.site_name }}{% endblock %}
+{% block title %}Reachability · {{ cfg.site_name }}{% endblock %}
 {% block content %}
-<h1>RIPE Atlas <span class="muted" style="font-weight:400;font-size:14px">· ping &amp; traceroute toward your space from probes in thousands of networks (for Route Views collectors, see <a href="/probes">Route Views</a>)</span></h1>
+<h1>Reachability <span class="muted" style="font-weight:400;font-size:14px">· does traffic reach your space, and where does it stop: RIPE Atlas probes in thousands of networks, and <a href="#routeviews">Route Views' collectors</a></span></h1>
 {% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
 {% if credits %}
 <div class="toolbar" style="margin-top:-8px">
@@ -88,7 +88,7 @@
   so latency can be grouped by carrier. Results show up in the views below under that target.</p>
 </details>
 {% endif %}
-{% if msm %}<div class="msg">Showing one-off measurement <a href="https://atlas.ripe.net/measurements/{{ msm.id }}/" target="_blank" rel="noopener">#{{ msm.id }}</a> ({{ msm.purpose }}{% if msm.event_id %}, <a href="/events/{{ msm.event_id }}">event {{ msm.event_id }}</a>{% endif %}), started <time data-ts="{{ msm.created }}"></time>. <a href="/atlas?target={{ target|urlencode }}">Back to the baseline</a></div>{% endif %}
+{% if msm %}<div class="msg">Showing one-off measurement <a href="https://atlas.ripe.net/measurements/{{ msm.id }}/" target="_blank" rel="noopener">#{{ msm.id }}</a> ({{ msm.purpose }}{% if msm.event_id %}, <a href="/events/{{ msm.event_id }}">event {{ msm.event_id }}</a>{% endif %}), started <time data-ts="{{ msm.created }}"></time>. <a href="/reachability?target={{ target|urlencode }}">Back to the baseline</a></div>{% endif %}
 
 {% if compare %}
 <div class="panel">
@@ -166,7 +166,7 @@
       <td>{{ m.purpose }}{% if m.event_id %} · <a href="/events/{{ m.event_id }}">{{ m.title or ('event ' ~ m.event_id) }}</a>{% endif %}</td>
       <td class="mono">{{ m.target }}</td><td>{{ m.probes }}</td><td><time data-ts="{{ m.created }}"></time></td>
       <td>{% if m.interval %}{% if m.stopped %}stopped{% else %}every {{ (m.interval / 60)|int }} min{% endif %}{% else %}one-off{% endif %}</td>
-      <td>{% if not m.interval and m.kind == 'traceroute' %}<a href="/atlas?target={{ m.target|urlencode }}&msm={{ m.id }}">view</a>{% endif %}</td></tr>
+      <td>{% if not m.interval and m.kind == 'traceroute' %}<a href="/reachability?target={{ m.target|urlencode }}&msm={{ m.id }}">view</a>{% endif %}</td></tr>
     {% endfor %}
   </table></div>
 </div>
@@ -186,4 +186,28 @@ initAtlas({
 });
 </script>
 {% endif %}
+
+<div class="panel" id="routeviews">
+  <div class="toolbar">
+    <h2 style="margin:0;flex:1">From Route Views' collectors <span class="muted" style="font-weight:400;font-size:13px">· ping and traceroute toward you from a route collector: one vantage point, but one that needs no Atlas credits</span></h2>
+    {% if is_admin %}
+    <form class="inline" method="post" action="/actions/probe">
+      <select name="kind"><option>ping</option><option>traceroute</option></select>
+      <input name="target" value="{{ cfg.probe_targets[0] if cfg.probe_targets else '' }}" placeholder="IP address" required>
+      <button class="primary" type="submit">Run from {{ cfg.rv_servers[0] if cfg.rv_servers else 'n/a' }}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if started %}<div class="msg">Started. Traceroutes can take up to a few minutes. Reload to see the result.</div>{% endif %}
+  <p class="muted" style="margin:0 0 8px;font-size:13px">Runs every {{ cfg.probe_minutes }} min against {{ cfg.probe_targets|join(', ') or 'no targets' }}, and automatically when an outage opens or closes. The collectors' BGP tables are under <a href="/data?tab=routeviews">BGP data › Route Views tables</a>.</p>
+  <div class="scroll"><table>
+    <tr><th>Time</th><th>Probe</th><th>Result</th><th>Trigger</th></tr>
+    {% for p in probes %}
+    <tr><td><time data-ts="{{ p.ts }}" data-sec="1"></time></td><td><a href="/probes/{{ p.id }}">{{ p.kind }} {{ p.target }}</a> <span class="muted">from {{ p.server.replace('.routeviews.org', '') }}</span></td>
+      <td>{% if p.error %}<span class="badge b-critical">error</span>{% elif p.kind == 'ping' %}<span class="badge b-{{ 'ok' if (p.success_pct or 0) >= 80 else 'critical' }}">{{ '%.0f'|format(p.success_pct or 0) }}%</span> {% if p.rtt_avg %}{{ '%.0f'|format(p.rtt_avg) }} ms{% endif %}{% else %}{% if p.reached %}<span class="badge b-ok">reached</span>{% elif p.ping_ok %}path hidden after {{ p.last_hop or '?' }}{% if p.last_hop_asn %} (AS{{ p.last_hop_asn }}{{ ' ' ~ probe_names.get(p.last_hop_asn, '') if probe_names.get(p.last_hop_asn) }}){% endif %} · <span title="A ping to this target from the same collector got replies, so it's reachable; the routers after this hop just don't answer traceroute (bgpcanary stops after 4 silent hops).">target answers ping</span>{% else %}last hop {{ p.last_hop or '?' }}{% if p.last_hop_asn %} <span class="muted">AS{{ p.last_hop_asn }} {{ probe_names.get(p.last_hop_asn, '') }}</span>{% endif %}{% endif %}{% endif %}</td>
+      <td class="muted">{{ p.trigger }}{% if p.event_id %} · <a href="/events/{{ p.event_id }}">event</a>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No probes yet{% if not cfg.rv_servers %}: no Route Views collectors are configured{% elif not cfg.probe_targets %}: set a probe target under Settings › Monitored network{% endif %}.</td></tr>{% endfor %}
+  </table></div>
+  <p class="toolbar" style="margin:8px 0 0">{% if page > 1 %}<a class="btn" href="?page={{ page - 1 }}#routeviews">← Newer</a>{% endif %}{% if probes|length == 100 %}<a class="btn" href="?page={{ page + 1 }}#routeviews">Older →</a>{% endif %}</p>
+</div>
 {% endblock %}

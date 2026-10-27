@@ -582,7 +582,7 @@ async def dashboard(request: Request):
     }
     return render(request, "dashboard.html", summ=summ, all_prefixes=[s["prefix"] for s in summ_all], sel=sel,
                   every=every, combined=combined, events=events, blips=blips, probes=probe, rv=rv, names=nm,
-                  rv_latest=rv_latest, atlas_targets=svc.atlas.targets() if has_atlas else [])
+                  rv_latest=rv_latest, atlas_targets=svc.atlas.targets() if has_atlas else [], rvb=rv_budget())
 
 
 @app.get("/api/series")
@@ -739,7 +739,11 @@ async def events_page(request: Request, kind: str = "", severity: str = "", info
     kinds = [r["kind"] for r in conn.execute("SELECT DISTINCT kind FROM events ORDER BY kind")]
     conn.close()
     return render(request, "events.html", rows=rows, total=total, page=page, kind=kind, severity=severity,
-                  info=info, kinds=kinds)
+                  info=info, kinds=kinds, kind_names=KIND_NAMES)
+
+
+KIND_NAMES = {t["kind"]: t["name"].replace(" (FYI)", "") for t in config.ALERT_TYPES}
+KIND_NAMES.update({"tracking_limit": "Tracking limit reached", "registry": "Registry problem"})
 
 
 def event_neighbour(ev):
@@ -1155,30 +1159,257 @@ async def api_compare_replay(request: Request, prefixes: str, start: float = Non
     return await upstream_neighbors(out)
 
 
-@app.get("/paths", response_class=HTMLResponse)
-async def paths_page(request: Request, prefix: str = None):
-    user(request)
-    prefix = prefix or cfg.prefixes[0]
-    conn = rconn()
-    cur = svc.engine.current_paths(prefix)
-    others = sorted(p for p in svc.engine.rib if p not in svc.engine.mons and
-                    any(e.path for e in svc.engine.rib[p].values()))
-    snaps = conn.execute("SELECT * FROM rv_snapshots WHERE id IN (SELECT MAX(id) FROM rv_snapshots "
-                         "WHERE prefix=? GROUP BY server)", (prefix,)).fetchall()
-    asns = set()
+# ------------------------------------------------------------------------------------------------ BGP data page
+DATA_TABS = ("paths", "changes", "raw", "routeviews")
+LIVE_SOURCES = ("ris-live", "bgplay")   # updates that are news; every other source only corrects the stored state
+CHANGES_MAX_DAYS = 31
+
+
+def chain_key(p):
+    """The way in of a path toward you: (transit, upstream); (None, upstream) when the RIS peer is your upstream
+    itself; None for a path without one."""
+    if len(p) >= 3:
+        return (p[-3], p[-2])
+    return (None, p[-2]) if len(p) == 2 else None
+
+
+def chain_text(c, nm):
+    """'AS64510 TRANSIT → AS64501 UPSTREAM' for a chain_key, with the first word of each name."""
+    if not c:
+        return "no route"
+    lbl = lambda a: f"AS{a}" + (f" {nm[a].split(' ')[0]}" if nm.get(a) else "")   # noqa: E731
+    return (f"{lbl(c[0])} → " if c[0] else "") + lbl(c[1])
+
+
+def path_changes(conn, prefix, start, end, bookkeeping=False):
+    """Every change of a RIS peer's path toward `prefix` between `start` and `end`, oldest first, judged against the
+    stored state at `start`: [{"ts", "collector", "peer", "peer_asn", "old", "new", "source", "live"}], old / new the
+    paths as ints (None: no route). A re-announcement of the same path is no change. `bookkeeping`: also the rows
+    that only correct the stored state (the looking glass's resync, seed rows after a restart, stale withdrawals);
+    they count toward the state either way."""
+    last = {}
+    for r in db.state_at(conn, prefix, start):
+        last[(r["collector"], r["peer"])] = (paths.parse_str(r["path"]) if r["kind"] == "A" and r["path"] else None,
+                                             r["peer_asn"])
+    out = []
+    for r in conn.execute("SELECT ts, collector, peer, peer_asn, kind, path, source FROM updates WHERE prefix=? AND ts>? "
+                          "AND ts<=? ORDER BY ts, id", (prefix, start, end)):
+        k = (r["collector"], r["peer"])
+        new = paths.parse_str(r["path"]) if r["kind"] == "A" and r["path"] else None
+        old, pa = last.get(k, (None, None))
+        last[k] = (new, r["peer_asn"] or pa)
+        if old == new:
+            continue
+        live = r["source"] in LIVE_SOURCES
+        if live or bookkeeping:
+            out.append({"ts": r["ts"], "collector": r["collector"], "peer": r["peer"], "peer_asn": r["peer_asn"] or pa,
+                        "old": old, "new": new, "source": r["source"], "live": live})
+    return out
+
+
+def mark_diff(c):
+    """For the page: each hop of a change's old and new paths with whether it differs ([(asn, changed)] each)."""
+    old, new = c["old"] or [], c["new"] or []
+    i = 0
+    while i < min(len(old), len(new)) and old[i] == new[i]:
+        i += 1
+    j = 0
+    while j < min(len(old), len(new)) - i and old[-1 - j] == new[-1 - j]:
+        j += 1
+    c["old_marks"] = [(a, i <= n < len(old) - j) for n, a in enumerate(old)]
+    c["new_marks"] = [(a, i <= n < len(new) - j) for n, a in enumerate(new)]
+    return c
+
+
+def bursts_of(changes, gap=120):
+    """Changes grouped into bursts (changes within `gap` seconds of each other), newest first: [{"start", "end",
+    "peers", "changes", "moves": [((old chain, new chain), n)], biggest first}]."""
+    out, cur = [], None
+    for c in changes:
+        if cur is None or c["ts"] - cur["end"] > gap:
+            cur = {"start": c["ts"], "end": c["ts"], "changes": []}
+            out.append(cur)
+        cur["end"] = c["ts"]
+        cur["changes"].append(c)
+    for b in out:
+        b["peers"] = len({(c["collector"], c["peer"]) for c in b["changes"]})
+        moves = {}
+        for c in b["changes"]:
+            k = (chain_key(c["old"]) if c["old"] else None, chain_key(c["new"]) if c["new"] else None)
+            moves[k] = moves.get(k, 0) + 1
+        b["moves"] = sorted(moves.items(), key=lambda x: -x[1])
+    out.reverse()
+    return out
+
+
+def burst_text(b, nm):
+    """'152 moved from AS64510 A → AS64501 B to AS64520 C → AS64502 D; 34 withdrawn (were ...)'."""
+    parts = []
+    for (oc, nc), n in b["moves"][:3]:
+        if oc == nc:
+            parts.append(f"{n} changed further out (same way in)")
+        elif nc is None:
+            parts.append(f"{n} withdrawn (were {chain_text(oc, nm)})")
+        elif oc is None:
+            parts.append(f"{n} announced via {chain_text(nc, nm)}")
+        else:
+            parts.append(f"{n} moved from {chain_text(oc, nm)} to {chain_text(nc, nm)}")
+    rest = sum(n for _, n in b["moves"][3:])
+    return "; ".join(parts) + (f"; {rest} more" if rest else "")
+
+
+def rv_latest(conn, prefix):
+    """The latest good "show ip bgp" per collector for `prefix`: {server: [paths as ints]} and when the oldest is from."""
+    out, oldest = {}, None
+    for s in conn.execute("SELECT s.server, s.ts, s.paths FROM rv_snapshots s JOIN (SELECT server, MAX(ts) ts FROM "
+                          "rv_snapshots WHERE prefix=? AND (error IS NULL OR error='') AND raw!='' GROUP BY server) l "
+                          "ON l.server=s.server AND l.ts=s.ts WHERE s.prefix=?", (prefix, prefix)):
+        out[s["server"]] = [paths.parse_str(p) for p in json.loads(s["paths"] or "[]")]
+        oldest = s["ts"] if oldest is None else min(oldest, s["ts"])
+    return out, oldest
+
+
+def paths_tab(conn, prefix, now):
+    """The Paths tab: the RIS peers' current paths grouped by the way in (transit → upstream), then by the next
+    network out, with Route Views' count per way in and the week's changes."""
+    cur = [c for c in svc.engine.current_paths(prefix) if c["path"] and c["path"][-1] == cfg.asn]
+    groups = {}
     for c in cur:
-        asns.update(c["path"])
-    for s in snaps:
-        for p in json.loads(s["paths"] or "[]"):
-            asns.update(int(x) for x in p.split())
-    nm = names(conn, asns)
-    conn.close()
-    rv = []
+        g = groups.setdefault(chain_key(c["path"]), {"chain": chain_key(c["path"]), "n": 0, "hops": {}})
+        g["n"] += 1
+        g["hops"].setdefault(c["path"][-4] if len(c["path"]) >= 4 else None, []).append(c)
+    rv, rv_at = rv_latest(conn, prefix)
+    rv_by = {}
+    for srv, plist in rv.items():
+        for p in plist:
+            if p and p[-1] == cfg.asn:
+                d = rv_by.setdefault(chain_key(p), {})
+                d[srv] = d.get(srv, 0) + 1
+    week = path_changes(conn, prefix, now - 7 * 86400, now)
+    joined, left, last_change = {}, {}, {}
+    for c in week:
+        if c["new"]:
+            joined[chain_key(c["new"])] = joined.get(chain_key(c["new"]), 0) + 1
+        if c["old"]:
+            left[chain_key(c["old"])] = left.get(chain_key(c["old"]), 0) + 1
+        last_change[(c["collector"], c["peer"])] = c["ts"]
+    for g in groups.values():
+        for lst in g["hops"].values():
+            lst.sort(key=lambda c: (-last_change.get((c["collector"], c["peer"]), 0), c["collector"], c["peer"]))
+        g["hops"] = sorted(g["hops"].items(), key=lambda x: -len(x[1]))
+        g.update(rv=rv_by.get(g["chain"], {}), joined=joined.get(g["chain"], 0), left=left.get(g["chain"], 0))
+    return {"groups": sorted(groups.values(), key=lambda g: -g["n"]), "total": len(cur), "rv_servers": len(rv),
+            "rv_at": rv_at, "latest": [mark_diff(c) for c in week[-5:]][::-1], "last_change": last_change}
+
+
+def rv_tab(conn):
+    """The Route Views tab: the latest routine "show ip bgp" per collector and prefix, the snapshot history, and
+    each collector's share of its daily budget used today."""
+    latest = conn.execute("SELECT s.* FROM rv_snapshots s JOIN (SELECT server, prefix, MAX(ts) ts FROM rv_snapshots "
+                          "WHERE event_id IS NULL GROUP BY server, prefix) l ON l.server=s.server AND l.prefix=s.prefix "
+                          "AND l.ts=s.ts").fetchall()
+    order = {s: i for i, s in enumerate(cfg.rv_servers)}
+    pfx = {p: i for i, p in enumerate(cfg.prefixes)}
+    latest = [dict(r) for r in sorted((r for r in latest if r["prefix"] in pfx),
+                                      key=lambda r: (order.get(r["server"], 99), r["server"], pfx[r["prefix"]]))]
+    for r in latest:   # a failed run: also show that collector's last good output
+        if r["error"]:
+            r["prev"] = conn.execute("SELECT id, ts, n_paths, raw FROM rv_snapshots WHERE server=? AND prefix=? "
+                                     "AND (error IS NULL OR error='') AND raw!='' ORDER BY ts DESC LIMIT 1",
+                                     (r["server"], r["prefix"])).fetchone()
+    snaps = conn.execute("SELECT id,ts,server,prefix,n_paths,event_id,error FROM rv_snapshots ORDER BY ts DESC "
+                         "LIMIT 50").fetchall()
+    return {"latest": latest, "snaps": snaps, "budget": rv_budget()}
+
+
+def rv_budget():
+    """Each Route Views collector's use of its daily telnet budget from this server, today."""
+    out = []
     for srv in cfg.rv_servers:
         b = svc._rv_state(srv)
         ok, why = svc.rv_allowed(srv, "scheduled")
-        rv.append({"server": srv, "ok": ok, "why": why, "conns": b.get("conns", 0), "kb": b.get("bytes_in", 0) / 1000})
-    return render(request, "paths.html", prefix=prefix, cur=cur, snaps=snaps, names=nm, others=others, rv=rv)
+        out.append({"server": srv, "ok": ok, "why": why, "conns": b.get("conns", 0), "kb": b.get("bytes_in", 0) / 1000})
+    return out
+
+
+@app.get("/data", response_class=HTMLResponse)
+async def data_page(request: Request, tab: str = "paths", prefix: str = None, start: float = None, end: float = None,
+                    q: str = "", source: str = "", all: int = 0, started: str = ""):
+    """BGP data: the current paths grouped by the way in (Paths), what changed and when (Changes), the raw update
+    log (Raw updates), and Route Views' tables (Route Views)."""
+    user(request)
+    tab = tab if tab in DATA_TABS else "paths"
+    now = time.time()
+    conn = rconn()
+    # (more-specifics and other prefixes of yours seen in the RIB; not the control prefixes, which aren't routed to you)
+    others = sorted(p for p in svc.engine.rib if p not in svc.engine.mons and p not in svc.engine.controls and
+                    any(e.path for e in svc.engine.rib[p].values()))
+    prefix = prefix if prefix in cfg.prefixes or prefix in others else (cfg.prefixes[0] if cfg.prefixes else "")
+    ctx = {"tab": tab, "prefix": prefix, "others": others, "q": q, "source": source, "all": all, "started": started}
+    asns = set()
+    if tab == "paths":
+        pt = paths_tab(conn, prefix, now)
+        for g in pt["groups"]:
+            asns.update(a for a in g["chain"] if a)
+            for h, lst in g["hops"]:
+                asns.add(h)
+                for c in lst:
+                    asns.update(c["path"])
+                    asns.add(c["peer_asn"])
+        for c in pt["latest"]:
+            asns.update((c["old"] or []) + (c["new"] or []))
+        ctx.update(pt)
+    elif tab == "changes":
+        end = min(end or now, now)
+        start = max(start or end - 86400, end - CHANGES_MAX_DAYS * 86400)
+        every = path_changes(conn, prefix, start, end, bookkeeping=True)
+        n_book = sum(1 for c in every if not c["live"])
+        ch = every if all else [c for c in every if c["live"]]
+        if q:
+            qq = q.strip().lower()
+            text = lambda c: f"{c['collector']} {c['peer']} {' '.join(map(str, c['old'] or []))} {' '.join(map(str, c['new'] or []))}"  # noqa: E731
+            ch = [c for c in ch if qq in text(c).lower()]
+        for c in ch:
+            mark_diff(c)
+            asns.update((c["old"] or []) + (c["new"] or []))
+            asns.add(c["peer_asn"])
+        bursts = bursts_of(ch)
+        evs = conn.execute("SELECT id, kind, severity, title, start_ts, end_ts FROM events WHERE (prefix=? OR prefix IS NULL) "
+                           "AND severity!='info' AND start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts",
+                           (prefix, end + 300, now, start - 300)).fetchall()
+        for b in bursts:
+            b["events"] = [e for e in evs if e["start_ts"] <= b["end"] + 300 and (e["end_ts"] or now) >= b["start"] - 300]
+        ctx.update(start=start, end=end, bursts=bursts, n_changes=len(ch), n_book=n_book,
+                   n_big=sum(1 for b in bursts if b["peers"] >= 5))
+    elif tab == "raw":
+        end = min(end or now, now)
+        start = start or end - 86400
+        where, args = ["prefix=?", "ts>=?", "ts<=?"], [prefix, start, end]
+        if q:
+            where.append("(path LIKE ? OR peer LIKE ? OR collector LIKE ?)")
+            args += [f"%{q}%"] * 3
+        if source:
+            where.append("source=?")
+            args.append(source)
+        rows = conn.execute(f"SELECT * FROM updates WHERE {' AND '.join(where)} ORDER BY ts DESC LIMIT 2000",
+                            args).fetchall()
+        ctx.update(start=start, end=end, rows=rows,
+                   sources=[r[0] for r in conn.execute("SELECT DISTINCT source FROM updates ORDER BY source")])
+    else:
+        ctx.update(rv_tab(conn))
+    nm = names(conn, asns)
+    conn.close()
+    nm_txt = {a: n for a, n in nm.items()}
+    if tab == "changes":
+        for b in ctx["bursts"]:
+            b["text"] = burst_text(b, nm_txt)
+    return render(request, "data.html", names=nm, **ctx)
+
+
+@app.get("/paths")
+async def paths_moved(request: Request, prefix: str = None):
+    """The Paths page is the Paths tab of BGP data now (bookmarks keep working)."""
+    return RedirectResponse("/data?tab=paths" + (f"&prefix={quote(prefix)}" if prefix else ""), status_code=301)
 
 
 # ------------------------------------------------------------------------------------------------ path finder
@@ -1323,50 +1554,18 @@ async def pathfinder_settings(request: Request, checks: str = Form(...)):
     return RedirectResponse(f"/pathfinder?{urlencode({'msg': 'Saved.'})}", status_code=303)
 
 
-@app.get("/updates", response_class=HTMLResponse)
-async def updates_page(request: Request, start: float = None, end: float = None, q: str = "", source: str = ""):
-    user(request)
-    end = end or time.time()
-    start = start or end - 86400
-    conn = rconn()
-    where, args = ["ts>=?", "ts<=?"], [start, end]
-    if q:
-        where.append("(path LIKE ? OR peer LIKE ? OR collector LIKE ? OR prefix LIKE ?)")
-        args += [f"%{q}%"] * 4
-    if source:
-        where.append("source=?")
-        args.append(source)
-    rows = conn.execute(f"SELECT * FROM updates WHERE {' AND '.join(where)} ORDER BY ts DESC LIMIT 2000",
-                        args).fetchall()
-    conn.close()
-    return render(request, "updates.html", rows=rows, start=start, end=end, q=q, source=source)
+@app.get("/updates")
+async def updates_moved(request: Request):
+    """The update log is the Raw updates tab of BGP data now (bookmarks keep working)."""
+    qs = request.url.query
+    return RedirectResponse("/data?tab=raw" + (f"&{qs}" if qs else ""), status_code=301)
 
 
-@app.get("/probes", response_class=HTMLResponse)
-async def probes_page(request: Request, page: int = 1):
-    user(request)
-    conn = rconn()
-    rows = conn.execute("SELECT id,ts,server,kind,target,trigger,event_id,success_pct,rtt_avg,last_hop,last_hop_asn,"
-                        "reached,error FROM probes ORDER BY ts DESC LIMIT 100 OFFSET ?", ((page - 1) * 100,)).fetchall()
-    snaps = conn.execute("SELECT id,ts,server,prefix,n_paths,event_id,error FROM rv_snapshots ORDER BY ts DESC "
-                         "LIMIT 50").fetchall()
-    # latest routine (not event-triggered) "show ip bgp" per collector and prefix, in the configured order
-    latest = conn.execute("SELECT s.* FROM rv_snapshots s JOIN (SELECT server, prefix, MAX(ts) ts FROM rv_snapshots "
-                          "WHERE event_id IS NULL GROUP BY server, prefix) l ON l.server=s.server AND l.prefix=s.prefix "
-                          "AND l.ts=s.ts").fetchall()
-    order = {s: i for i, s in enumerate(cfg.rv_servers)}
-    pfx = {p: i for i, p in enumerate(cfg.prefixes)}
-    latest = [dict(r) for r in sorted((r for r in latest if r["prefix"] in pfx),
-                                      key=lambda r: (order.get(r["server"], 99), r["server"], pfx[r["prefix"]]))]
-    for r in latest:   # a failed run: also show that collector's last good output
-        if r["error"]:
-            r["prev"] = conn.execute("SELECT id, ts, n_paths, raw FROM rv_snapshots WHERE server=? AND prefix=? "
-                                     "AND (error IS NULL OR error='') AND raw!='' ORDER BY ts DESC LIMIT 1",
-                                     (r["server"], r["prefix"])).fetchone()
-    rows = db.annotate_probes(conn, rows)
-    nm = names(conn, [r["last_hop_asn"] for r in rows])
-    conn.close()
-    return render(request, "probes.html", rows=rows, snaps=snaps, page=page, names=nm, latest=latest)
+@app.get("/probes")
+async def probes_moved(request: Request, page: int = 1):
+    """Route Views' ping and traceroute are on the Reachability page now, with RIPE Atlas; its BGP tables under
+    BGP data (bookmarks keep working)."""
+    return RedirectResponse(f"/reachability?page={page}#routeviews", status_code=301)
 
 
 @app.get("/probes/{pid}", response_class=HTMLResponse)
@@ -1404,14 +1603,14 @@ async def action_probe(request: Request, kind: str = Form(...), target: str = Fo
     if kind not in ("ping", "traceroute"):
         raise HTTPException(400)
     asyncio.create_task(svc.run_probe(kind, target, "manual"))
-    return RedirectResponse("/probes?started=1", status_code=303)
+    return RedirectResponse("/reachability?started=1#routeviews", status_code=303)
 
 
 @app.post("/actions/snapshot")
 async def action_snapshot(request: Request):
     admin(request)
     asyncio.create_task(svc.snapshot_all(trigger="manual"))
-    return RedirectResponse("/probes?started=1", status_code=303)
+    return RedirectResponse("/data?tab=routeviews&started=1", status_code=303)
 
 
 @app.post("/actions/resync")
@@ -2264,11 +2463,25 @@ def atlas_payload(conn, target, start, end, msm=None, bins=96, nbrs=None):
     return empty
 
 
-@app.get("/atlas", response_class=HTMLResponse)
-async def atlas_page(request: Request, target: str = "", hours: float = 24, start: float = None, end: float = None,
-                     msm: int = None, msg: str = "", err: int = 0, compare: str = ""):
+@app.get("/atlas")
+async def atlas_moved(request: Request):
+    """RIPE Atlas is the Reachability page now, with Route Views' ping and traceroute (bookmarks keep working)."""
+    qs = request.url.query
+    return RedirectResponse("/reachability" + (f"?{qs}" if qs else ""), status_code=301)
+
+
+@app.get("/reachability", response_class=HTMLResponse)
+async def reachability_page(request: Request, target: str = "", hours: float = 24, start: float = None,
+                            end: float = None, msm: int = None, msg: str = "", err: int = 0, compare: str = "",
+                            page: int = 1, started: str = ""):
+    """Does traffic reach you, and where does it stop: RIPE Atlas probes worldwide, and Route Views' collectors'
+    ping and traceroute (their BGP tables are under BGP data)."""
     user(request)
     conn = rconn()
+    probes = db.annotate_probes(conn, conn.execute(
+        "SELECT id,ts,server,kind,target,trigger,event_id,success_pct,rtt_avg,last_hop,last_hop_asn,reached,error "
+        "FROM probes ORDER BY ts DESC LIMIT 100 OFFSET ?", ((page - 1) * 100,)).fetchall())
+    probe_names = names(conn, [r["last_hop_asn"] for r in probes])
     targets = _atlas_targets(conn)
     known = {t["target"] for t in targets}
     selected = [t for t in dict.fromkeys(compare.split(",")) if t in known] if compare else []
@@ -2283,8 +2496,8 @@ async def atlas_page(request: Request, target: str = "", hours: float = 24, star
                           "WHERE m.purpose!='demo' ORDER BY m.created DESC LIMIT 15").fetchall()
     conn.close()
     s = atlas.settings(svc.aconn)
-    return render(request, "atlas.html", targets=targets, target=target, hours=hours, start=start, end=end,
-                  compare=selected, groups=groups,
+    return render(request, "reachability.html", targets=targets, target=target, hours=hours, start=start, end=end,
+                  compare=selected, groups=groups, probes=probes, probe_names=probe_names, page=page, started=started,
                   msm=m, recent=recent, on=atlas.enabled(svc.aconn), has_key=bool(s["api_key"]), msg=msg, err=err,
                   last_error=svc.atlas.last_error, credits=await svc.atlas.credits() if s["api_key"] else None,
                   committed=round(svc.atlas._spent_today()), credit_cap=s["credit_cap"], outage_probes=s["outage_probes"])
@@ -2325,13 +2538,13 @@ async def atlas_trace_now(request: Request):
     """On-demand traceroute burst (same probe mix as an outage burst)."""
     me = admin(request)
     if not atlas.enabled(svc.aconn):
-        return RedirectResponse("/atlas?err=1&msg=" + quote("RIPE Atlas is off (Settings > RIPE Atlas)."), status_code=303)
+        return RedirectResponse("/reachability?err=1&msg=" + quote("RIPE Atlas is off (Settings > RIPE Atlas)."), status_code=303)
     try:
         msm = await svc.atlas.burst("manual", description=f"bgpcanary manual traceroute ({me})")
     except Exception as ex:
-        return RedirectResponse("/atlas?err=1&msg=" + quote(f"Traceroute not started: {ex}"), status_code=303)
+        return RedirectResponse("/reachability?err=1&msg=" + quote(f"Traceroute not started: {ex}"), status_code=303)
     log.info("user %s started Atlas traceroute burst %s", me, msm)
-    return RedirectResponse(f"/atlas?target={quote(svc.atlas.target())}&msm={msm}&msg=" + quote(
+    return RedirectResponse(f"/reachability?target={quote(svc.atlas.target())}&msm={msm}&msg=" + quote(
         "Traceroute started. Results arrive over the next few minutes; reload to see more probes fill in."),
         status_code=303)
 
@@ -2343,7 +2556,7 @@ async def atlas_adhoc(request: Request, target: str = Form(""), kind: str = Form
     me = admin(request)
 
     def back(msg):
-        return RedirectResponse("/atlas?err=1&msg=" + quote(msg), status_code=303)
+        return RedirectResponse("/reachability?err=1&msg=" + quote(msg), status_code=303)
     if not atlas.enabled(svc.aconn):
         return back("RIPE Atlas is off (Settings > RIPE Atlas).")
     try:
@@ -2372,7 +2585,7 @@ async def atlas_adhoc(request: Request, target: str = Form(""), kind: str = Form
         return back(f"Test not started: {ex}")
     log.info("user %s started Atlas ad-hoc %s to %s from %d probes: %s", me, kind, t, len(ids[:n]), made)
     now = int(time.time())
-    return RedirectResponse(f"/atlas?target={quote(t)}&start={now - 120}&end={now + 3600}&msg=" + quote(
+    return RedirectResponse(f"/reachability?target={quote(t)}&start={now - 120}&end={now + 3600}&msg=" + quote(
         f"Started {' and '.join(kinds)} to {t} from {len(ids[:n])} probes. Results arrive over the next few minutes; "
         "reload to see them fill in."), status_code=303)
 
@@ -2382,12 +2595,12 @@ async def atlas_demo(request: Request, action: str = Form("load")):
     admin(request)
     if action == "clear":
         svc.atlas.clear_demo()
-        return RedirectResponse("/atlas?msg=" + quote("Sample data removed."), status_code=303)
+        return RedirectResponse("/reachability?msg=" + quote("Sample data removed."), status_code=303)
     try:
         await svc.atlas.load_demo()
     except Exception as ex:
-        return RedirectResponse("/atlas?err=1&msg=" + quote(f"Couldn't load the sample data: {ex}"), status_code=303)
-    return RedirectResponse(f"/atlas?target={atlas.DEMO_TARGET}&msg=" + quote(
+        return RedirectResponse("/reachability?err=1&msg=" + quote(f"Couldn't load the sample data: {ex}"), status_code=303)
+    return RedirectResponse(f"/reachability?target={atlas.DEMO_TARGET}&msg=" + quote(
         "Loaded the last 24 hours of RIPE Atlas' public measurements toward k.root-servers.net from about 30 probes "
         "worldwide, so you can try the views. It's sample data, not yours."), status_code=303)
 

@@ -33,13 +33,13 @@ networks.
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;
   - missing or unexpected upstreams;
   - **an upstream going down**: one of your upstreams losing almost all of its paths while you stay up through the others, with what changed behind it (which of its own upstreams stopped carrying you, which of its transits don't carry your prefix, whether its own network is still reachable);
-  - **upstream shifts**: a large share of the internet switching providers within minutes, such as a session flap;
+  - **upstream shifts**: a large share of the internet switching providers within minutes, such as a session flap, naming the network behind your upstreams whose way to you changed;
   - **reachability loss**: RIPE Atlas probes can't reach your addresses, even when BGP looks fine.
 - **Background checks:**
   - transits that carry your upstream's routes but not yours, usually a prefix-filter problem;
   - IRR route objects, as-sets, RPKI/ROA validity, and simulated upstream filters, with a change log.
-- **Route Views:** raw `show ip bgp` from several collectors, plus ping and traceroute toward you, on a schedule and when something breaks.
-- **RIPE Atlas (optional):**
+- **BGP data:** the RIS peers' current paths grouped by the way in (transit → upstream) and the next network out, next to what Route Views' collectors see; what changed, as bursts of old → new paths with the changed hops marked; the raw update log; the collectors' raw `show ip bgp`.
+- **Reachability:** ping and traceroute toward you from Route Views' collectors, on a schedule and when something breaks, and, with RIPE Atlas (optional):
   - ping and traceroute from probes in thousands of networks;
   - latency and loss per carrier, radial traceroute maps;
   - several targets compared side by side (for example, each border router's peering address);

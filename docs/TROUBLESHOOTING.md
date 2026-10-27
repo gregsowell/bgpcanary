@@ -135,6 +135,9 @@ RIPEstat), including the ones that carry none of your paths *through that upstre
   your own peer or another upstream of yours, so it never routes to you through this one. That's a network
   using its best route, not a problem. The *Upstream neighbours* control can fold these into one "+N reach you
   another way" line per upstream, or hide the upstreams' neighbours altogether.
+- **Faint blue dotted, "moved to via AS64502":** it carried you under this upstream at the comparison point and
+  now carries the same under another one; its new branch says "moved from via AS64501". A network using its
+  best route, not a loss. Red dashed "dropped" is kept for a network that carries you nowhere any more.
 - The Registry page's *who carries you* table and the transit filter check read the same pairs the same way: a
   transit that reaches you another way isn't a gap ("via AS64502"), and one that carries you only the long way
   round, through that upstream but not straight from it, is reported with the path it takes. The direct path would

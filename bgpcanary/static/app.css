@@ -163,3 +163,29 @@ a.card:hover { text-decoration: none; border-color: var(--accent); transform: tr
 .rp-timeends { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--muted); }
 .rp-tipline { text-align: center; flex: 1; }
 @media (max-width: 640px) { .rp-tipline { display: none; } }
+/* BGP data page: tabs, paths by the way in, changes in bursts */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0 0 16px; flex-wrap: wrap; }
+.tabs a { padding: 8px 14px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs a:hover { text-decoration: none; color: var(--text); }
+.asn small { color: var(--muted); font-weight: 400; margin-left: 3px; }
+.asn.mu { color: var(--muted); }
+.gone .asn { color: var(--crit); text-decoration: line-through; } .gone { color: var(--crit); }
+.came .asn { color: var(--ok); font-weight: 650; }
+.small { font-size: 12px; }
+.chain-hdr, details.chain > summary { display: grid; grid-template-columns: minmax(280px, 1.6fr) 80px minmax(140px, 1fr) 160px 120px; gap: 12px; align-items: center; }
+.chain-hdr { padding: 0 12px; margin-top: 10px; }
+.chain-hdr span { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+details.chain { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+details.chain > summary { list-style: none; cursor: pointer; }
+details.chain > summary::-webkit-details-marker { display: none; }
+details.chain[open] > summary { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+details.hop { margin: 6px 0 2px 8px; } details.hop > summary { font-size: 13px; }
+table.peers td { padding: 4px 8px; font-size: 12.5px; }
+details.burst { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+details.burst > summary { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; cursor: pointer; }
+details.burst .n { font-weight: 650; font-size: 15px; min-width: 90px; }
+.evt { font-size: 12px; }
+@media (max-width: 760px) { .chain-hdr { display: none; } details.chain > summary { grid-template-columns: 1fr; gap: 4px; } }
+/* Events list: a line between days */
+#events tr.day td { background: var(--code-bg); color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 4px 8px; }

@@ -59,7 +59,7 @@
     <div class="card-head"><span class="card-title">RIPE Atlas <span class="muted" style="font-weight:400;font-size:13px">optional</span></span>
       {% if atlas_on %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-info">off</span>{% endif %}</div>
     <p class="card-desc">Ping and traceroute toward your space from probes in other networks: does traffic actually arrive, and how is latency and loss per carrier?</p>
-    <div class="card-sum">{% if atlas_on %}Baseline measurements running · <span class="linklike" onclick="event.preventDefault();location.href='/atlas'">Atlas page</span>{% else %}<span class="muted">Needs a RIPE Atlas API key and credits.</span>{% endif %}</div>
+    <div class="card-sum">{% if atlas_on %}Baseline measurements running · <span class="linklike" onclick="event.preventDefault();location.href='/reachability'">Reachability page</span>{% else %}<span class="muted">Needs a RIPE Atlas API key and credits.</span>{% endif %}</div>
     {% if is_admin %}<span class="card-open">{{ 'Edit' if atlas_on else 'Set up' }} →</span>{% endif %}
   </a>
 

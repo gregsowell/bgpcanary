@@ -371,7 +371,7 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
     # another way blue dotted, no longer peered grey dash-dot)
     lg = [("carrying", C["accent"], None, 3), ("lost >50%", C["warn"], None, 3), ("dropped", C["crit"], (6, 4), 4),
           ("new", C["ok"], None, 3), ("not carrying you", C["crit"], (1, 3), 2),
-          ("reaches you another way", C["accent"], (1, 3), 2), ("no longer peered", C["muted"], (6, 3, 1, 3), 2)]
+          ("moved / reaches you another way", C["accent"], (1, 3), 2), ("no longer peered", C["muted"], (6, 3, 1, 3), 2)]
     x = W - 16
     for label, col, dash, lw in reversed(lg):
         w = dr.textlength(label, font=font(11 * S)) / S
@@ -390,6 +390,19 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         T((24 + lvl * colw - (4 if lvl else 0), 74), cols[min(lvl, len(cols) - 1)].upper(), (11, True), C["muted"])
     dr.line([(16 * S, 90 * S), ((W - 16) * S, 90 * S)], fill=C["border"], width=S)
     pos = lambda k: (24 + tree.nodes[k]["level"] * colw, top + tree.nodes[k]["row"] * rowh + rowh / 2)
+    # a network that dropped out on one branch and gained the same on another branch moved; it isn't lost
+    by_asn = {}
+    for k, n in tree.nodes.items():
+        if n["level"] >= 2 and not n["others"] and not n["folded"] and isinstance(k[-1], int):
+            by_asn.setdefault(k[-1], []).append(k)
+
+    def moved_to(k):
+        """For a branch with no peers left: the branch of the same network that gained what it lost, else None."""
+        b = base.get(k, 0)
+        for o in by_asn.get(k[-1], []):
+            if o != k and counts.get(o, 0) and counts.get(o, 0) - base.get(o, 0) >= max(3, b * 0.3):
+                return o
+        return None
 
     def state(k):
         c, b = counts.get(k, 0), base.get(k, 0)
@@ -400,14 +413,14 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         if c and b:
             return ("degraded", C["warn"]) if c < b * 0.5 else ("live", C["accent"])
         if b and not c:
-            return "lost", C["crit"]
+            return ("moved", C["accent"]) if moved_to(k) else ("lost", C["crit"])
         if c and not b:
             return "new", C["ok"]
         if k in tree.pinned:   # (faint blue when it reaches you another way, red when RIS sees it carrying you nowhere)
             kind = tree.pinned[k].get("kind")
             return (kind, C["accent"]) if kind in ("direct", "elsewhere") else ("never", C["crit"])
         return "idle", C["border"]
-    SOFT = ("never", "gone", "direct", "elsewhere", "fold")
+    SOFT = ("never", "gone", "direct", "elsewhere", "fold", "moved")
 
     wof = lambda c: max(1, int(round((1 + 8 * math.sqrt(c / total)) * S)))
     for k, n in tree.nodes.items():
@@ -457,6 +470,7 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         cnt = ("" if n["level"] == 0 or n["folded"]
                else f"not carrying you via AS{tree.pinned[k]['of']}" if st == "never"
                else "reaches you directly" if st == "direct" else "reaches you another way" if st == "elsewhere"
+               else f"moved to via AS{moved_to(k)[-2]}" if st == "moved"
                else "no longer peered" if st == "gone" else f"0 (was {b})" if st == "lost"
                else f"{c} of {b}" if st == "degraded" else f"{c} (new)" if st == "new" else f"{c}" if c else "")
         if cnt:

@@ -6,6 +6,26 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-27
+
+### Added
+- **BGP data page**, replacing Paths and Updates (the old addresses redirect to it):
+  - *Paths*: the RIS peers' current paths grouped by the way in (transit → upstream), then by the next network out, with each way's share, how many Route Views collectors see it, and the peers that joined or left it this week; the peers under each, with their last change. 250 distinct paths become three ways in.
+  - *Changes*: one row per RIS peer whose path changed, old → new with the changed hops marked, grouped into bursts with a summary ("152 moved from … to …; 34 withdrawn"), the events that overlapped, and a link to the connectivity tree at that moment. The rows that only correct the stored state (the looking glass's resync, seed rows after a restart, stale withdrawals) are hidden unless asked for.
+  - *Raw updates*: the update log as before. *Route Views tables*: the collectors' "show ip bgp", the snapshot history, and today's use of their daily limits.
+- **Reachability page**, replacing RIPE Atlas and Route Views (the old addresses redirect): the Atlas views, with the Route Views collectors' ping and traceroute below them. The same question, does traffic arrive and where does it stop, from both sets of vantage points.
+- The dashboard's connectivity tree can be opened around a moment (`/?prefix=…&at=<unix time>`); the Changes tab links there.
+
+### Changed
+- **Upstream shift alerts say who moved.** The move behind a shift is usually one network behind your upstreams changing which way it reaches you. The alert now names it ("Behind it: AS64510 switched from via AS64520 to via AS64530 (180 peers)"), so does the closing alert when the mix stays, and the event's evidence and plain-text report carry it.
+- **The tree tells "moved" from "dropped".** A network that stops carrying you under one upstream and carries the same under another has moved: faint blue, "moved to via AS64502", and its new branch says "moved from via AS64501", instead of a red "dropped" and a green "new" for the same network. The alert-email images follow.
+- **Exchange-peers-lost alerts say where the peers went**: how many still reach you through your transit (your side of the exchange) and how many carry you nowhere now (their side, or your route filtered further on), naming them, instead of assuming they all use your transit now.
+- The transit filter check no longer judges a neighbour that has an open "unexpected upstream" warning (a leak, or a neighbour you haven't filed yet); it's judged once it's filed as a transit.
+- An outage's Route Views check says "too few to tell" when Route Views normally holds fewer than five paths for the prefix, instead of "probably RIPE's data" (RIPE Atlas decides when it's set up).
+- The Events list shows alert types by name, the prefix, the lowest visibility as n / N (%), and a line between days.
+- The event page's raw BGP updates table is collapsed, with a link to the changes around the event. The Route Views budget table moved from Paths to the dashboard's Data sources panel.
+- The nav: Dashboard · Events · Path finder · BGP data · Reachability · Registry · Settings.
+
 ## [1.5.8] - 2026-10-27
 
 ### Changed
@@ -325,7 +345,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.8...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/gregsowell/bgpcanary/compare/v1.5.8...v1.6.0
 [1.5.8]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...v1.5.6

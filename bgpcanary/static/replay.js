@@ -398,7 +398,7 @@
       // legend
       const lg = this.pp   // [label, colour, dash, width]: the same patterns the branches use
         ? [["one strand per prefix", th.accent, [], 3], ["prefix missing on this branch", th.warn, [4, 3], 3], ["not carrying you", th.crit, [1, 3], 2], ["reaches you another way", th.accent, [1, 3], 2], ["no longer peered", th.muted, [6, 3, 1, 3], 2], ["idle", th.border, [], 3]]
-        : [["carrying routes", th.accent, [], 3], ["lost >50%", th.warn, [], 3], ["dropped", th.crit, [6, 4], 4], ["new", th.ok, [], 3], ["not carrying you", th.crit, [1, 3], 2], ["reaches you another way", th.accent, [1, 3], 2], ["no longer peered", th.muted, [6, 3, 1, 3], 2], ["idle", th.border, [], 3]];
+        : [["carrying routes", th.accent, [], 3], ["lost >50%", th.warn, [], 3], ["dropped", th.crit, [6, 4], 4], ["new", th.ok, [], 3], ["not carrying you", th.crit, [1, 3], 2], ["moved / reaches you another way", th.accent, [1, 3], 2], ["no longer peered", th.muted, [6, 3, 1, 3], 2], ["idle", th.border, [], 3]];
       let lx = W - 16;
       ctx.font = "12px system-ui, sans-serif";
       for (let i = lg.length - 1; i >= 0; i--) {
@@ -422,13 +422,38 @@
       ctx.strokeStyle = th.border; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(16, 77 + extra); ctx.lineTo(W - 16, 77 + extra); ctx.stroke();
       this.reach = this._reachNow();
+      // a network that dropped out on one branch and gained the same on another branch moved; it isn't lost
+      const byAsn = new Map();
+      for (const [k, n] of this.shown) {
+        if (n.level < 2 || n.xg || n.others || n.folded || typeof n.asn !== "number") continue;
+        if (!byAsn.has(n.asn)) byAsn.set(n.asn, []);
+        byAsn.get(n.asn).push({ k, c: counts.get(k) || 0, b: this.base.get(k) || 0 });
+      }
+      const hopOf = k => k.split(">").slice(-2, -1)[0];   // the branch's next hop toward you
+      const movedTo = k => {   // a branch with no peers left: the branch of the same network that gained what it lost
+        const b = this.base.get(k) || 0;
+        return (byAsn.get(this.shown.get(k).asn) || []).find(o => o.k !== k && o.c > 0 && o.c - o.b >= Math.max(3, b * 0.3)) || null;
+      };
+      const movedFrom = k => {   // a new branch: the branch of the same network that lost what it gained
+        const c = counts.get(k) || 0;
+        return (byAsn.get(this.shown.get(k).asn) || []).find(o => o.k !== k && o.c === 0 && o.b > 0 && c - (this.base.get(k) || 0) >= Math.max(3, o.b * 0.3)) || null;
+      };
+      this.moved = new Map();   // node -> {to, from, peers}, for the labels and tooltips
       const stateOf = k => {
         const c = counts.get(k) || 0, b = this.base.get(k) || 0;
         if ((this.shown.get(k) || {}).folded) return ["fold", th.muted];
         if (!c && this.pinned && (this.pinned.get(k) || {}).gone) return ["gone", th.muted];
         if (c > 0 && b > 0) return c < b * 0.5 ? ["degraded", th.warn] : ["live", th.accent];
-        if (c === 0 && b > 0) return ["lost", th.crit];
-        if (c > 0 && b === 0) return ["new", th.ok];
+        if (c === 0 && b > 0) {
+          const o = movedTo(k);
+          if (o) { this.moved.set(k, { to: hopOf(o.k), peers: o.c }); return ["moved", th.accent]; }
+          return ["lost", th.crit];
+        }
+        if (c > 0 && b === 0) {
+          const o = movedFrom(k);
+          if (o) this.moved.set(k, { from: hopOf(o.k), peers: o.b });
+          return ["new", th.ok];
+        }
         // an upstream / upstream-neighbour carrying none of our paths now (and none at the comparison point):
         // red when RIS sees it carrying you nowhere, faint blue when it reaches you another way (see build)
         if (this.pinned && this.pinned.has(k)) {
@@ -437,12 +462,12 @@
         }
         return ["idle", th.border];
       };
-      const soft = st => st === "never" || st === "gone" || st === "direct" || st === "elsewhere" || st === "fold";
+      const soft = st => st === "never" || st === "gone" || st === "direct" || st === "elsewhere" || st === "fold" || st === "moved";
       // the faint states, told apart by pattern as well as colour: dropped = red dashed, thick (it carried you at the
-      // comparison point); not carrying you = red dotted; reaches you another way = blue dotted (it does carry you,
-      // just not through here); no longer peered = grey dash-dot.   [dash, width (null: by peers), alpha]
+      // comparison point); not carrying you = red dotted; reaches you another way, or moved to another branch = blue
+      // dotted (it does carry you, just not through here); no longer peered = grey dash-dot.   [dash, width (null: by peers), alpha]
       const STYLE = { lost: [[6, 4], null, 1], never: [[1, 3], 1.4, 0.8], direct: [[1, 3], 1.4, 0.55], elsewhere: [[1, 3], 1.4, 0.55],
-                      fold: [[1, 3], 1.4, 0.55], gone: [[6, 3, 1, 3], 1.4, 0.6], idle: [[], null, 0.7] };
+                      fold: [[1, 3], 1.4, 0.55], moved: [[1, 3], 1.4, 0.55], gone: [[6, 3, 1, 3], 1.4, 0.6], idle: [[], null, 0.7] };
       const wOf = c => 1 + 8 * Math.sqrt(c / total);
       // compare mode: a branch is "partial" when it carries some of the prefixes but not all of them
       const pc = (k, p) => counts.get(k + "|" + p) || 0;
@@ -518,11 +543,12 @@
           continue;
         }
         ctx.fillStyle = st === "lost" || st === "never" ? th.crit : st === "degraded" ? th.warn : st === "new" ? th.ok : th.muted;
-        const pin = (this.pinned && this.pinned.get(k)) || {};
+        const pin = (this.pinned && this.pinned.get(k)) || {}, mv = this.moved.get(k);
         const cnt = n.level === 0 || n.folded ? "" : st === "never" ? `not carrying you${pin.of ? " via AS" + pin.of : ""}`
           : st === "direct" || st === "elsewhere" ? this.reachText(n.asn, st)
+          : st === "moved" ? `moved to via AS${mv.to}`
           : st === "gone" ? "no longer peered" : st === "lost" ? `0 (was ${b})` : st === "degraded" ? `${c} of ${b}` :
-          st === "new" ? `${c} (new)` : `${c}`;
+          st === "new" ? (mv ? `${c} (moved from via AS${mv.from})` : `${c} (new)`) : `${c}`;
         if (cnt) ctx.fillText(cnt, n.children.length ? lxp : lxp + lw + 6, n.children.length ? y + 7 : y);
         this.hit.push({ x, y, r: Math.max(r, 6), k, n, c, b });
       }
@@ -771,6 +797,9 @@
       const round = kind === "elsewhere" && tc && tc.how === "round" ? (tc.ref >= minp
         ? ` That's through AS${of}, but not straight from it, although it carries AS${of}'s own prefixes straight from AS${of} (${tc.ref} RIS peers). The direct path would normally win, so your prefix is probably not accepted on that session${tc.flag ? " (the transit filter check has a notice open)" : ""}.`
         : ` That's through AS${of}, but not straight from it. RIS sees it in front of AS${of} at only ${tc.ref} RIS peer${tc.ref === 1 ? "" : "s"} even for AS${of}'s own prefixes, so it can't tell whether the direct path is missing.`) : "";
+      const mv = rp.moved && rp.moved.get(h.k);
+      const moved = mv && mv.to ? `\nMoved, not lost: it carried ${h.b} peers' paths here ${ref}, and now carries ${mv.peers} via AS${mv.to}. A network uses its best route.`
+        : mv && mv.from ? `\nIt carried you via AS${mv.from} ${ref} (${mv.peers} peers) and moved here.` : "";
       const never = kind === "direct" ? `\nIt's your direct neighbour too, so it prefers its own path to you over AS${of}'s: not carrying you through AS${of} is expected.`
         : kind === "elsewhere" ? (round ? `\nIt reaches you ${rp.reachText(h.n.asn, kind, true)}.${round}`
                                         : `\nIt reaches you ${rp.reachText(h.n.asn, kind, true)} rather than through AS${of}, so not carrying you through AS${of} is expected.`)
@@ -779,7 +808,7 @@
                                       : "\nCarried none of your paths in this window") : "";
       showTip(h.per
         ? `${nm}${role}\n` + h.per.map((v, p) => `${data.prefixes[p]}: ${v ? v + " peers" : "MISSING on this branch"}`).join("\n")
-        : `${nm}${role}\nAt selected time: ${h.c} peers · ${ref}: ${h.b}${never}`);
+        : `${nm}${role}\nAt selected time: ${h.c} peers · ${ref}: ${h.b}${moved}${never}`);
     });
     canvas.addEventListener("mouseleave", () => tip.style.display = "none");
     if (q("play")) q("play").onclick = () => {

@@ -256,8 +256,8 @@ class Engine:
 
     def _rib_summary(self, prefix):
         """For a bucket row: (chains JSON, upstreams JSON, {neighbour: RIS peers reaching you through it},
-        {neighbour: {the network in front of it: RIS peers}}). Counted again only after the prefix's paths change:
-        a replayed week has 20,160 buckets, most of them quiet."""
+        {neighbour: {the network in front of it: RIS peers}}, the chains as a dict). Counted again only after the
+        prefix's paths change: a replayed week has 20,160 buckets, most of them quiet."""
         ver = self.rib_ver.get(prefix, 0)
         c = self._summ.get(prefix)
         if c is None or c[0] != ver:
@@ -272,8 +272,18 @@ class Engine:
                         f = fronts.setdefault(e.path[-2], {})
                         f[e.path[-3]] = f.get(e.path[-3], 0) + 1
             c = self._summ[prefix] = (ver, json.dumps(chains), json.dumps(ups),
-                                      {int(k): n for k, n in ups.items() if k != "None"}, fronts)
+                                      {int(k): n for k, n in ups.items() if k != "None"}, fronts, chains)
         return c[1:]
+
+    def _where_now(self, prefix, asns):
+        """Through which of your upstreams each of `asns` carries `prefix` right now, from the live RIB:
+        {asn: {upstream: RIS peers}} (an empty dict for one on none of your paths)."""
+        want, out = set(asns), {a: {} for a in asns}
+        for e in self.rib.get(prefix, {}).values():
+            if e.path and e.path[-1] == self.asn and len(e.path) >= 2:
+                for a in set(e.path[:-1]) & want:
+                    out[a][e.path[-2]] = out[a].get(e.path[-2], 0) + 1
+        return out
 
     # ------------------------------------------------------------------ control prefixes
     def seen(self, prefix):
@@ -737,20 +747,23 @@ class Engine:
         typ = self._typical(m, u)
         return typ if typ >= floor and n <= typ * pct / 100 else 0
 
-    def _detect_shift(self, p, m, now, v, ups):
+    def _detect_shift(self, p, m, now, v, ups, chains=None):
         """Upstream shift: many RIS peers moving between your upstreams within a few minutes while visibility
-        holds (a session flap / re-route an outage alert wouldn't catch). Warning; checks run from service."""
+        holds (a session flap / re-route an outage alert wouldn't catch). Warning; checks run from service.
+        `chains`: {chain: RIS peers} now (see _rib_summary), to say who moved: the move is usually one network
+        behind your upstreams changing which way it reaches you (paths.movers)."""
         W, pct = self.cfg.shift_window_seconds, self.cfg.shift_pct
         if m.state != "ok" or m.dip_start is not None:
             m.ups_hist.clear()   # an outage / dip is alerted on its own; don't compare across it
             m.shift_hits = 0
-        m.ups_hist.append((now, ups))
+        m.ups_hist.append((now, ups, chains or {}))
         while m.ups_hist and m.ups_hist[0][0] < now - W:
             m.ups_hist.popleft()
         key = f"shift|{p}"
         open_ = self.anomalies.get(key)
         base = m.baseline() or v
-        then = m.ups_hist[0][1]
+        then, then_chains = m.ups_hist[0][1], m.ups_hist[0][2]
+        floor = max(3, int(base * 0.02))   # a mover: a network that moved at least this many peers' paths
         moved = sum(max(0, n - then.get(u, 0)) for u, n in ups.items())
         step = lambda a, b: sum(max(0, n - a.get(u, 0)) for u, n in b.items())   # peers moved between two buckets
         prev = m.ups_hist[-2][1] if len(m.ups_hist) > 1 else ups
@@ -772,6 +785,10 @@ class Engine:
                 how = ("traffic went back to its previous upstreams" if back < base * pct / 200
                        else "it settled on a new mix: " + ", ".join(f"{nm(u)} {n}" for u, n in
                                                                     sorted(ups.items(), key=lambda x: -x[1])))
+                if back >= base * pct / 200:   # (who moved, between how it stood before the shift and now)
+                    mv = paths.movers(open_.get("chains") or {}, chains or {}, floor)
+                    if mv:
+                        how += f"; {paths.mover_text(mv[0], self._label)}"
                 self._close_event(open_["id"], open_.get("last_move") or open_.get("last_big", now),
                                   title=f"{p}: upstream shift of up to {open_.get('peak', 0)} RIS peers ended; {how}")
                 del self.anomalies[key]
@@ -796,16 +813,20 @@ class Engine:
         hist = list(m.ups_hist)
         began = next((hist[i][0] - self.B for i in range(1, len(hist))
                       if step(hist[i - 1][1], hist[i][1]) >= base * pct / 400), hist[0][0])
+        # who moved: the networks behind your upstreams whose next hop toward you changed (or whose reach did)
+        mv = paths.movers(then_chains, chains or {}, floor)
+        who = "; ".join(paths.mover_text(x, self._label) for x in mv[:3])
         eid = self._new_event(
             "upstream_shift", "warning", p, began,
             f"{p}: {moved} of {base:.0f} RIS peers moved between upstreams ({desc})",
             {"key": key, "mix_before": {str(u): n for u, n in then.items()}, "mix_after": {str(u): n for u, n in ups.items()},
-             "moved": moved, "baseline": base, "window_s": W,
+             "moved": moved, "baseline": base, "window_s": W, "movers": mv[:6],
              "note": "Visibility stayed up, but a large share of the internet changed which of your upstreams it "
                      "uses to reach you, within minutes. Usually a BGP session reset or a re-route at or behind "
-                     "one upstream. Brief packet loss is common while routes converge."})
+                     "one upstream. Brief packet loss is common while routes converge."
+                     + (f" Behind it: {who}." if who else "")})
         self.anomalies[key] = {"id": eid, "zero_since": None, "sev": "warning", "last_big": now, "peak": moved,
-                               "before": then, "last_move": now}
+                               "before": then, "last_move": now, "chains": then_chains}
 
     def _detect_peering(self, p, m, now, v, nb):
         """Per bucket, for one prefix (`nb`: neighbour -> RIS peers reaching you through it):
@@ -870,12 +891,35 @@ class Engine:
             h["since"] = (h["since"] or now) if low else None
             if low and now - h["since"] >= S:
                 gone = sorted(u for u, t in h["seen"].items() if u not in here and t >= now - W)
+                # where the peers that stopped went: still on your paths through your transit (then it's your side
+                # of the exchange), or nowhere (they lost you entirely: their side, or your route filtered further on)
+                where = self._where_now(p, gone)
+                via = {a: w for a, w in where.items() if w}
+                nowhere = [a for a in gone if a not in via]
+                through = {}
+                for w in via.values():
+                    for u, n in w.items():
+                        through[u] = through.get(u, 0) + n
+                tops = self._labels([u for u, _ in sorted(through.items(), key=lambda x: -x[1])[:2]]) if through else ""
+                if via and nowhere:
+                    went = (f" Of the {len(gone)} that stopped, {len(via)} still reach you through your transit ({tops}) "
+                            f"and {len(nowhere)} carr{'ies' if len(nowhere) == 1 else 'y'} you nowhere now: "
+                            f"{self._labels(nowhere[:4])}{', and more' if len(nowhere) > 4 else ''}.")
+                elif via:
+                    went = (f" All {len(gone)} still reach you through your transit ({tops}): their routes to you moved "
+                            f"from the exchange to transit, which points at your side of the exchange.")
+                elif gone:
+                    went = (f" None of the {len(gone)} reach you any other way now: they lost you entirely, which points "
+                            f"beyond your port (their side, or your route filtered at their transit).")
+                else:
+                    went = ""
                 eid = self._new_event(
                     "exchange_loss", "warning", p, h["since"], f"{p}: {base - cnt} of {base} {g} peers stopped carrying it",
                     {"key": key, "exchange": g, "baseline": base, "carrying": cnt, "lost": gone[:200],
+                     "via_transit": {str(a): w for a, w in list(via.items())[:200]}, "nowhere": nowhere[:200],
                      "note": "Many peers at one exchange stopped carrying this prefix at the same time. That usually "
                              "points at your port or BGP sessions there, the exchange's route servers, or the exchange "
-                             "itself. Those networks now reach you through your transit providers instead."})
+                             "itself." + went})
                 self.anomalies[key] = {"id": eid, "zero_since": None, "sev": "warning", "ref": base, "low": cnt}
                 h["since"] = None
         # peer leak: reach far beyond its usual (the average while it's normal: over everything seen for the first
@@ -941,7 +985,7 @@ class Engine:
             t = self.last_bucket
             for p, m in self.mons.items():
                 v = self.visible(p)
-                chains, ups, nb, fronts = self._rib_summary(p)   # nb: neighbour -> RIS peers via it
+                chains, ups, nb, fronts, chaind = self._rib_summary(p)   # nb: neighbour -> RIS peers via it
                 # The chains / upstreams JSON (6 KB for a prefix seen through hundreds of paths) is stored only when
                 # it changes: NULL means "the same as the bucket before" (db.fill_mix fills it in). It's stored anyway
                 # in the first bucket of each UTC day and after any break, so it's never more than a day back.
@@ -958,7 +1002,7 @@ class Engine:
                 # peers coming and going isn't an upstream shift; they have checks of their own
                 ups_t = {u: n for u, n in nb.items() if not self.peer_group(u)}
                 self._detect_upstream_down(p, m, t + self.B, v, ups_t, fronts)
-                self._detect_shift(p, m, t + self.B, v, ups_t)
+                self._detect_shift(p, m, t + self.B, v, ups_t, chaind)
                 self._detect_peering(p, m, t + self.B, v, nb)
             self._tick_controls(t + self.B)
             self.last_bucket += self.B

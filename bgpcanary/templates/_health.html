@@ -25,6 +25,19 @@
       <td>{% if not h.route_views.configured %}none configured, so outages can't be checked against them{% else %}{{ rv_ok|length }} of {{ h.route_views.configured }} collector{{ 's' if h.route_views.configured != 1 }} answered in the last day{% if h.route_views.blocked %} · daily limit used up: {{ h.route_views.blocked|join(', ') }}{% endif %}
         · {{ 'outages are checked against them' if h.confirm_outages else 'outage check off' }}{% endif %}</td></tr>
   </table></div>
+  {% if rvb %}
+  <details style="margin-top:8px"><summary class="muted" style="font-size:13px">Route Views' daily limits: today's use from this server</summary>
+    <div class="scroll"><table style="margin-top:6px">
+      <tr><th>Collector</th><th>Status</th><th class="right">Connections</th><th class="right">Downloaded</th></tr>
+      {% for r in rvb %}
+      <tr><td>{{ r.server }}</td>
+        <td>{% if r.ok %}<span class="badge b-ok">ok</span>{% elif 'rate-limited' in (r.why or '') %}<span class="badge b-warning">paused</span> <span class="muted">{{ r.why }}</span>{% else %}<span class="badge b-info">budget reached</span> <span class="muted">{{ r.why }}</span>{% endif %}</td>
+        <td class="right">{{ r.conns }} / 100</td><td class="right">{{ '%.0f'|format(r.kb) }} / 500 KB</td></tr>
+      {% endfor %}
+    </table></div>
+    <p class="muted" style="font-size:12px;margin:6px 0 0">Route Views allows 100 telnet connections and 500 KB per collector per day; scheduled polling stays under half, the rest is kept for events and manual checks.</p>
+  </details>
+  {% endif %}
   <p class="muted" style="font-size:12px;margin-bottom:0">An outage seen in RIS is checked against Route Views (and RIPE Atlas, if set up) before it's
     reported as critical. If they still see the prefix, or RIS lost sight of the control prefixes too, it's reported as a
     problem with RIPE's data instead.</p>

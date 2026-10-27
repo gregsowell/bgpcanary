@@ -105,9 +105,9 @@ document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev
 </script>
 {% endif %}
 
-<div class="panel">
-  <h2>BGP updates around the start ({{ ups|length }}{% if ups|length >= 3000 %}+{% endif %})</h2>
-  <div class="scroll" style="max-height:600px;overflow-y:auto"><table class="mono">
+<details class="panel">
+  <summary><h2 style="display:inline;margin:0">Raw BGP updates around the start</h2> <span class="muted" style="font-size:13px">({{ ups|length }}{% if ups|length >= 3000 %}+{% endif %} rows · click to expand){% if ev.prefix in cfg.prefixes %} · <a href="/data?tab=changes&prefix={{ ev.prefix|urlencode }}&start={{ (ev.start_ts - 1800)|int }}&end={{ ((ev.end_ts or now) + 1800)|int }}">what changed, as bursts</a>{% endif %}</span></summary>
+  <div class="scroll" style="max-height:600px;overflow-y:auto;margin-top:10px"><table class="mono">
     <tr><th>Time</th><th>Collector</th><th>Peer</th><th></th><th>AS path</th><th>Source</th></tr>
     {% for u in ups %}
     <tr><td><time data-ts="{{ u.ts }}" data-sec="1"></time></td><td>{{ u.collector }}</td><td>{{ u.peer }}{% if u.peer_asn %} <span class="muted">AS{{ u.peer_asn }}</span>{% endif %}</td>
@@ -115,5 +115,5 @@ document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev
       <td>{{ u.path or '' }}</td><td class="muted">{{ u.source }}</td></tr>
     {% endfor %}
   </table></div>
-</div>
+</details>
 {% endblock %}

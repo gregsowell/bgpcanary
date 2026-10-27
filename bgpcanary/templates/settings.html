@@ -130,7 +130,7 @@
       <noscript><button type="submit">Save</button></noscript>
     </form>
   </div>
-  <p class="muted" style="margin-top:0">Every {{ cfg.transit_filter_minutes }} min, this compares how each upstream's <em>own</em> prefixes reach the internet with how yours do. If a provider carries the upstream's own prefixes to at least {{ cfg.transit_filter_min_peers }} RIS peers but none of yours, it posts an FYI notice. That usually means a prefix filter or IRR record somewhere between the two. Registry checks (IRR, as-sets, RPKI) are on the <a href="/registry">Registry</a> page.</p>
+  <p class="muted" style="margin-top:0">Every {{ cfg.transit_filter_minutes }} min, this compares how each upstream's <em>own</em> prefixes reach the internet with how yours do. If a provider carries the upstream's own prefixes to at least {{ cfg.transit_filter_min_peers }} RIS peers but none of yours straight from it, it posts an FYI notice. That usually means a prefix filter or IRR record somewhere between the two. A provider that reaches you another way, your own neighbour or a network behind another upstream of yours, isn't reported: a network passes on only its best route. Registry checks (IRR, as-sets, RPKI) are on the <a href="/registry">Registry</a> page.</p>
   {% if tf_enabled %}
   <table>
     <tr><th>Upstream</th><th>Their transit</th><th class="right">Carries upstream's own prefixes</th><th class="right">Carries yours via upstream</th><th>Status</th></tr>
@@ -138,7 +138,7 @@
     <tr><td>AS{{ r.upstream }} <span class="muted">{{ names.get(r.upstream, '') }}</span></td>
       <td>AS{{ r.transit }} <span class="muted">{{ names.get(r.transit, '') }}</span></td>
       <td class="right">{{ r.ref }} peers</td><td class="right">{{ r.ours }} peers</td>
-      <td>{% if r.flag %}<span class="badge b-info">not carrying yours</span>{% elif r.ours %}<span class="badge b-ok">ok</span>{% else %}<span class="muted">below threshold</span>{% endif %}</td></tr>
+      <td>{% if r.flag %}<span class="badge b-info">not carrying yours</span>{% if r.how == 'round' %} <span class="muted">carries them only via AS{{ r.via[0] }}, the long way round</span>{% endif %}{% elif r.ours %}<span class="badge b-ok">ok</span>{% elif r.how == 'direct' %}<span class="muted">your own neighbour: it has its own path to you</span>{% elif r.how == 'other' %}<span class="muted">reaches you via AS{{ r.via[0] }}{% if names.get(r.via[0]) %} {{ names.get(r.via[0]) }}{% endif %} instead</span>{% else %}<span class="muted">below threshold</span>{% endif %}</td></tr>
     {% else %}<tr><td colspan="5" class="muted">No check has run yet. The first runs about 3 minutes after the service starts.</td></tr>{% endfor %}
   </table>
   {% if tf_last %}<p class="muted" style="margin-bottom:0">Last check <time data-ts="{{ tf_last }}" data-sec="1"></time></p>{% endif %}

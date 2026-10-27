@@ -6,6 +6,15 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-27
+
+### Changed
+- **The transit filter check and the Registry page read "not carrying you" the way the tree does.** Both treated every transit of an upstream that carries none of your paths straight from it as a gap, and the Registry table explained each one as a filter. A transit that reaches you another way, your own neighbour or a network behind another upstream of yours, prefers that path and passes on only its best route, so that said nothing. Now:
+  - the Registry table says how it reaches you instead ("via AS64502", "directly") and that the pair's filters can't be seen from there;
+  - the check no longer opens a notice for those (open ones close by themselves, two checks after the update);
+  - a transit that carries you only the long way round, through that upstream but not straight from it, although it carries the upstream's own prefixes straight from it, is still reported, and the notice, the table and the tree's tooltip say so: the direct path would normally win, so your prefix is probably not accepted on that session;
+  - where RIS barely sees the pair at all, even for the upstream's own prefixes, the table says it can't tell.
+
 ## [1.5.7] - 2026-10-26
 
 ### Changed
@@ -316,7 +325,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.5.8...HEAD
+[1.5.8]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/gregsowell/bgpcanary/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/gregsowell/bgpcanary/compare/v1.5.4...v1.5.5

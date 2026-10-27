@@ -135,6 +135,10 @@ RIPEstat), including the ones that carry none of your paths *through that upstre
   your own peer or another upstream of yours, so it never routes to you through this one. That's a network
   using its best route, not a problem. The *Upstream neighbours* control can fold these into one "+N reach you
   another way" line per upstream, or hide the upstreams' neighbours altogether.
+- The Registry page's *who carries you* table and the transit filter check read the same pairs the same way: a
+  transit that reaches you another way isn't a gap ("via AS64502"), and one that carries you only the long way
+  round, through that upstream but not straight from it, is reported with the path it takes. The direct path would
+  normally win, so your prefix is probably not accepted on that session.
 - A neighbour that peers with you privately where RIS has no vantage point can still show red. List it under
   **Peers** in Settings › Monitored network and it's treated as your direct neighbour.
 

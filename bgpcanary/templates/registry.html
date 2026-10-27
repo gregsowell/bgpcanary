@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Registry · {{ cfg.site_name }}{% endblock %}
+{% macro named(a) %}AS{{ a }}{% if names.get(a) %} {{ names.get(a) }}{% endif %}{% endmacro %}
 {% block content %}
 <h1>Registry watch</h1>
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
@@ -51,7 +52,7 @@
       {% else %}<tr><td colspan="4" class="muted">None. No as-set lists your ASN directly.</td></tr>{% endfor %}
     </table>
     <h2 style="margin-top:16px">Your upstreams' registrations &amp; who carries you</h2>
-    <p class="muted" style="font-size:12px;margin-top:0">Your upstream accepting your routes is one step. Its <em>transits</em> then filter what it sends them, usually with a prefix list built from the as-set the upstream registered in PeeringDB. The first line shows whether that registration would include your prefix; the table shows which of its transits actually carry you right now (live RIS data) and why.</p>
+    <p class="muted" style="font-size:12px;margin-top:0">Your upstream accepting your routes is one step. Its <em>transits</em> then filter what it sends them, usually with a prefix list built from the as-set the upstream registered in PeeringDB. The first line shows whether that registration would include your prefix; the table shows which of its transits actually carry you right now (live RIS data) and why. One that reaches you another way, your own neighbour or a network behind another upstream of yours, isn't a gap: a network passes on only its best route.</p>
     {% for f in rep.filters %}
     <div class="upblock">
       <div><strong>AS{{ f.upstream }}</strong> <span class="muted">{{ names.get(f.upstream, '') }}</span></div>
@@ -65,12 +66,15 @@
         <tr><th>Its transit / peer</th><th class="right">Carrying you now</th><th>Why</th></tr>
         {% for r in reality.get(f.upstream, []) %}
         <tr><td>AS{{ r.transit }} <span class="muted">{{ names.get(r.transit, '') }}</span></td>
-          <td class="right">{% if r.ours %}<span class="badge b-ok">{{ r.ours }} peers</span>{% else %}<span class="badge b-info">no</span>{% endif %}</td>
+          <td class="right">{% if r.ours %}<span class="badge b-ok">{{ r.ours }} peers</span>{% elif r.how == 'direct' %}<span class="badge b-info">directly</span>{% elif r.how == 'other' %}<span class="badge b-info">via AS{{ r.via[0] }}</span>{% else %}<span class="badge b-info">no</span>{% endif %}</td>
           <td style="font-size:13px">
             {% if r.ours and r.own_sets %}Its own as-set <span class="mono">{{ r.own_sets|join(', ') }}</span> lists you, so it doesn't depend on AS{{ f.upstream }}'s registration
             {% elif r.ours and f.includes_prefix %}AS{{ f.upstream }}'s registration includes you
             {% elif r.ours %}Accepts you some other way (a manual prefix list, or another registry)
-            {% elif f.includes_prefix %}Not carrying you, although AS{{ f.upstream }}'s registration includes you. Either AS{{ f.upstream }} isn't announcing your prefix to them, or they filter on something else (for example only AS{{ f.upstream }}'s own route objects, or a manual prefix list)
+            {% elif r.how == 'direct' %}Your own neighbour, so it has its own path to you and prefers it over AS{{ f.upstream }}'s. Not carrying you through AS{{ f.upstream }} is expected and says nothing about its filters
+            {% elif r.how == 'other' %}Reaches you via {{ named(r.via[0]) }} instead ({{ r.n }} peers). A network passes on only its best route, so it isn't expected to carry you through AS{{ f.upstream }} as well; whether it would accept your prefix from AS{{ f.upstream }} can't be seen from here
+            {% elif r.how == 'round' %}Carries you only the long way round, via {{ named(r.via[0]) }} and then AS{{ f.upstream }} ({{ r.n }} peers){% if r.ref %}, although it carries AS{{ f.upstream }}'s own prefixes straight from AS{{ f.upstream }} ({{ r.ref }} peers){% endif %}. The direct path would normally win, so your prefix is probably not accepted on the AS{{ f.upstream }}–AS{{ r.transit }} session itself: {% if f.includes_prefix %}AS{{ f.upstream }} isn't announcing it there, or AS{{ r.transit }} filters on something other than AS{{ f.upstream }}'s registration (which includes you){% else %}filters built from AS{{ f.upstream }}'s registration would exclude you{% endif %}
+            {% elif f.includes_prefix %}Not carrying you at all, although AS{{ f.upstream }}'s registration includes you. Either AS{{ f.upstream }} isn't announcing your prefix to them, or they filter on something else (for example only AS{{ f.upstream }}'s own route objects, or a manual prefix list).{% if not r.ref or r.ref < cfg.transit_filter_min_peers %} RIS {% if r.ref %}sees it in front of AS{{ f.upstream }} at only {{ r.ref }} peer{{ 's' if r.ref != 1 }}, even for AS{{ f.upstream }}'s own prefixes{% else %}doesn't see it in front of AS{{ f.upstream }} for AS{{ f.upstream }}'s own prefixes either{% endif %}, so it can't tell much here{% endif %}
             {% else %}Filters built from AS{{ f.upstream }}'s registration exclude you{% if r.ref %} (it carries AS{{ f.upstream }}'s own prefixes to {{ r.ref }} peers){% endif %}
             {% endif %}</td></tr>
         {% else %}<tr><td colspan="3" class="muted">No transit data yet (the transit filter check runs every {{ cfg.transit_filter_minutes }} min).</td></tr>{% endfor %}

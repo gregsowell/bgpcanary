@@ -1031,14 +1031,15 @@ async def upstream_neighbors(data):
             data["names"][str(a)] = nm
     # for the tree's "not carrying you" (see replay.js build): the neighbours you've configured, and the transit
     # filter check's latest look at each (upstream, transit) pair: how many RIS peers see the transit carrying the
-    # upstream's own prefixes (ref), yours from it (ours) and yours at all (elsewhere)
+    # upstream's own prefixes (ref), yours from it (ours) and yours at all (elsewhere), and its verdict (how, n,
+    # via: see transit.verdict)
     data["known_neighbours"] = sorted(set(cfg.expected_upstreams) | set(cfg.peers))
     pfx = set(data.get("prefixes") or data.get("combined") or [data.get("prefix")])
     rows = {}
     for r in svc.transit.last_result:
         key = f"{r['upstream']}|{r['transit']}"
         if r["prefix"] in pfx and (key not in rows or r["ref"] > rows[key]["ref"]):
-            rows[key] = {"ref": r["ref"], "ours": r["ours"], "elsewhere": r["elsewhere"], "flag": r["flag"]}
+            rows[key] = {k: r.get(k) for k in ("ref", "ours", "elsewhere", "flag", "how", "n", "via")}
     data["transit_check"] = {"rows": rows, "min_peers": cfg.transit_filter_min_peers, "at": svc.transit.last_run}
     return data
 
@@ -1433,7 +1434,8 @@ async def settings_page(request: Request, msg: str = ""):
     size = os.path.getsize(cfg.db_path) if os.path.exists(cfg.db_path) else 0
     tf_rows = svc.transit.last_result
     conn = rconn()
-    nm = names(conn, {r["upstream"] for r in tf_rows} | {r["transit"] for r in tf_rows})
+    nm = names(conn, {r["upstream"] for r in tf_rows} | {r["transit"] for r in tf_rows}
+               | {a for r in tf_rows for a in r.get("via", [])[:1]})
     conn.close()
     return render(request, "settings.html", msg=msg, log_rows=log_rows, counts=counts, size=size, oldest=oldest,
                   tf_enabled=transit.enabled(cfg, svc.aconn), tf_rows=tf_rows, tf_last=svc.transit.last_run, names=nm,
@@ -1453,15 +1455,13 @@ async def registry_page(request: Request, msg: str = ""):
                         "ORDER BY start_ts DESC LIMIT 50").fetchall()
     conn.close()
     rep = svc.registry.report
-    # Reality next to the simulation: which of each upstream's transits carry us right now (live RIS), and
-    # whether that transit has its own as-set listing us (which is how it can carry us even when the
-    # upstream's registration wouldn't allow it).
-    carry = {}
-    for p in cfg.prefixes:
-        for e in list(svc.engine.rib.get(p, {}).values()):
-            if e.path and e.path[-1] == cfg.asn and len(e.path) >= 3:
-                key = (e.path[-2], e.path[-3])
-                carry[key] = carry.get(key, 0) + 1
+    # Reality next to the simulation: how each of each upstream's transits carries us right now (live RIS), read
+    # the way the transit filter check and the connectivity tree read it (transit.verdict: straight from the
+    # upstream, another way it prefers, only the long way round, or not at all), and whether that transit has its
+    # own as-set listing us (which is how it can carry us even when the upstream's registration wouldn't allow it).
+    mine = [e.path for p in cfg.prefixes for e in list(svc.engine.rib.get(p, {}).values())
+            if e.path and e.path[-1] == cfg.asn]
+    tails, direct = transit.reach_of(mine, cfg.asn, set(cfg.expected_upstreams) | set(cfg.peers))
     tf = {(r["upstream"], r["transit"]): r for r in svc.transit.last_result}
     ups = [f["upstream"] for f in (rep or {}).get("filters", [])]
     try:   # each upstream's full transit/peer list from the global table (cached 6 h), carrying us or not
@@ -1471,15 +1471,16 @@ async def registry_page(request: Request, msg: str = ""):
     reality, asns = {}, set()
     for f in (rep or {}).get("filters", []):
         u = f["upstream"]
-        transits = {t for (uu, t) in carry if uu == u} | {t for (uu, t) in tf if uu == u} | \
+        transits = {p[-3] for p in mine if len(p) >= 3 and p[-2] == u} | {t for (uu, t) in tf if uu == u} | \
                    {t for t, _power in nbrs.get(u, []) if t != cfg.asn}
         rows = []
         for t in transits:
             own = [a["name"] for a in rep.get("assets", [])
                    if a["name"].upper().startswith(f"AS{t}:") or re.search(rf"\bAS{t}\b", a.get("mnt", "").upper())]
-            ref = tf.get((u, t), {}).get("ref")
-            rows.append({"transit": t, "ours": carry.get((u, t), 0), "ref": ref, "own_sets": own})
+            v = transit.verdict(tails, direct, cfg.asn, u, t)
+            rows.append({"transit": t, "ref": tf.get((u, t), {}).get("ref"), "own_sets": own, **v})
             asns.add(t)
+            asns.update(v["via"][:1])
         rows.sort(key=lambda r: (-r["ours"], -(r["ref"] or 0)))
         reality[u] = rows
         asns.add(u)

@@ -72,7 +72,7 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 | Covering announcement | warning | |
 | Your ASN in someone else's path | warning | |
 | Unmonitored prefix from your ASN | warning | |
-| Transit not carrying you | info | An upstream's transit carries the upstream's routes but not yours, usually a prefix filter |
+| Transit not carrying you | info | An upstream's transit carries the upstream's routes straight from it but yours not at all, or only the long way round (through that upstream, but not straight from it): usually a prefix filter. One that reaches you another way, your own neighbour or a network behind another upstream of yours, is using its best route and isn't reported |
 | Registry problem / filter simulation / IRR / as-set change | info–critical | From the registry watch |
 | Watched path changed | info | A network on the [Path finder](#path-finder)'s watch list: the path to it (or back from it) changed in two checks in a row |
 

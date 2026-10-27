@@ -361,8 +361,10 @@ ALERT_TYPES = [
      "sev": ("warning",), "desc": "Your ASN originates a prefix you don't monitor.", "tuning": ["max_unmonitored"]},
     {"kind": "transit_filter", "group": "Background checks", "name": "Transit not carrying you (FYI)",
      "sev": ("info",), "check": "transit",
-     "desc": "One of your upstream's transits carries the upstream's own prefixes but not yours: usually a prefix "
-             "filter or IRR issue.", "tuning": ["transit_filter_min_peers", "transit_filter_minutes"]},
+     "desc": "One of your upstream's transits carries the upstream's own prefixes straight from it but yours not at "
+             "all, or only the long way round: usually a prefix filter or IRR issue. One that reaches you another "
+             "way (your own neighbour, or through another upstream of yours) is using its best route and isn't "
+             "reported.", "tuning": ["transit_filter_min_peers", "transit_filter_minutes"]},
     {"kind": "registry", "group": "Background checks", "name": "Registry problem", "sev": ("info", "warning", "critical"),
      "check": "registry", "desc": "IRR route objects or RPKI problems for your space (missing, conflicting, invalid).",
      "tuning": ["registry_minutes"]},

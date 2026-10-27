@@ -761,13 +761,19 @@
         pin && pin.upstream ? "\nYour direct upstream" : peerAt ? `\nPeers with you (${peerAt})` : "";
       const peak = rp.maxC.get(h.k) || 0, kind = pin && pin.kind, of = pin && pin.of;
       // why a neighbour of your upstream doesn't carry you through it: expected (it has a path it prefers), or
-      // a real gap, with the transit filter check's view of that pair when it has one
+      // a real gap, with the transit filter check's view of that pair when it has one (transit.verdict)
       const tc = ((data.transit_check || {}).rows || {})[`${of}|${h.n.asn}`], minp = (data.transit_check || {}).min_peers || 5;
       const verdict = kind !== "never" || !tc ? "" : tc.ref >= minp
         ? ` The transit filter check: it carries AS${of}'s own prefixes to ${tc.ref} RIS peers but none of yours from it${tc.flag ? " (an open notice)" : ""}: usually a prefix filter between them.`
         : ` RIS can't tell much here: it sees it in front of AS${of} at only ${tc.ref} RIS peer${tc.ref === 1 ? "" : "s"}, even for AS${of}'s own prefixes.`;
+      // ...or the long way round: through this upstream, but not straight from it, although the direct path would
+      // normally win (the check reports that one)
+      const round = kind === "elsewhere" && tc && tc.how === "round" ? (tc.ref >= minp
+        ? ` That's through AS${of}, but not straight from it, although it carries AS${of}'s own prefixes straight from AS${of} (${tc.ref} RIS peers). The direct path would normally win, so your prefix is probably not accepted on that session${tc.flag ? " (the transit filter check has a notice open)" : ""}.`
+        : ` That's through AS${of}, but not straight from it. RIS sees it in front of AS${of} at only ${tc.ref} RIS peer${tc.ref === 1 ? "" : "s"} even for AS${of}'s own prefixes, so it can't tell whether the direct path is missing.`) : "";
       const never = kind === "direct" ? `\nIt's your direct neighbour too, so it prefers its own path to you over AS${of}'s: not carrying you through AS${of} is expected.`
-        : kind === "elsewhere" ? `\nIt reaches you ${rp.reachText(h.n.asn, kind, true)} rather than through AS${of}, so not carrying you through AS${of} is expected.`
+        : kind === "elsewhere" ? (round ? `\nIt reaches you ${rp.reachText(h.n.asn, kind, true)}.${round}`
+                                        : `\nIt reaches you ${rp.reachText(h.n.asn, kind, true)} rather than through AS${of}, so not carrying you through AS${of} is expected.`)
         : kind === "never" ? `\nRIS sees no route from it to you at all, through AS${of} or any other way.${verdict}`
         : pin && !h.c && !h.b ? (peak ? `\nNot carrying you now (carried up to ${peak} peers earlier in this window)`
                                       : "\nCarried none of your paths in this window") : "";

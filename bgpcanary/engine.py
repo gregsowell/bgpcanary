@@ -7,6 +7,7 @@ RIS Live (live), BGPlay (backfill) and the RIPEstat looking glass (resync). Ever
 
 All methods here are synchronous and must be called from one thread at a time.
 """
+import copy
 import ipaddress
 import json
 import logging
@@ -129,6 +130,9 @@ class Engine:
         self.rib_ver: dict[str, int] = {}
         self._vis, self._summ = {}, {}
         self.anomalies: dict[str, dict] = {}
+        # a gap filler (for_gap): entries with "id" None are known from the live engine or the gap's starting state;
+        # they get no event, and nothing is closed when they end
+        self.gap_fill = False
         self.B = cfg.bucket_seconds
         self.last_bucket = None
         self.historical = False
@@ -367,6 +371,8 @@ class Engine:
         return eid
 
     def _close_event(self, eid, end_ts, **fields):
+        if eid is None:   # a condition this engine only knows about (see for_gap): no event of its own to close
+            return
         # (never before it started: a recovery seen through data stamped earlier, such as a looking-glass answer
         # older than the event, would otherwise give it a negative duration)
         sets = ["end_ts=MAX(?, start_ts)"]
@@ -594,6 +600,13 @@ class Engine:
                                       + ". If these are yours, list them as monitored prefixes or under "
                                         "'Other address space you hold' in Settings > Monitoring."}]
         return out
+
+    def know_anomalies(self):
+        """Take what's wrong in the current state as known: no event for it, none to close when it ends. A gap
+        filler calls this on the gap's starting state: what was already there isn't news (the live engine saw it),
+        only what begins inside the gap is."""
+        for key in self._anomaly_counts():
+            self.anomalies.setdefault(key, {"id": None, "zero_since": None, "sev": None})
 
     def _missing_upstreams(self, now):
         """Expected upstreams that currently carry none of a monitored prefix's paths (live mode only)."""
@@ -1033,6 +1046,8 @@ class Engine:
                 # "lowest" of 1 peer and a churn spike of every initial route
                 m.bucket_min = self.visible(m.prefix)
                 m.bucket_updates = m.bucket_withdrawals = 0
+            if self.gap_fill:
+                self.know_anomalies()
             if not ticks:
                 self.conn.commit()
                 return
@@ -1142,8 +1157,28 @@ def close_open(engine, ts, note="data gap ended"):
             engine.conn.execute("UPDATE events SET end_ts=?, min_visible=?, title=title || ' (' || ? || ')' "
                                 "WHERE id=?", (ts, m.min_vis, note, m.event_id))
     for a in engine.anomalies.values():
-        engine.conn.execute("UPDATE events SET end_ts=? WHERE id=? AND end_ts IS NULL", (ts, a["id"]))
+        if a["id"] is not None:   # (known from the live engine or the starting state: not this engine's to close)
+            engine.conn.execute("UPDATE events SET end_ts=? WHERE id=? AND end_ts IS NULL", (ts, a["id"]))
     engine.conn.commit()
+
+
+def for_gap(cfg, conn, peering, live, start):
+    """An engine to fill a gap in the live engine's data from BGPlay (Service._fill_gaps): historical, its baselines
+    as of `start`, and knowing everything `live` has open (its anomalies without their events, an outage without its
+    event) plus whatever the gap's starting state shows (know_anomalies), so it reports only what begins inside the
+    gap. Before 1.6.1 every gap fill reported what was already open all over again, as a short "(backfill)" event
+    per RIS Live reconnect."""
+    f = Engine(cfg, conn, restore=False, peering=peering)
+    f.historical = f.gap_fill = True
+    f.seed_baseline(start)
+    f.last_bucket = int(-(-start // f.B) * f.B)
+    f.anomalies = {k: dict(copy.deepcopy(a), id=None) for k, a in live.anomalies.items()}
+    for p, m in f.mons.items():
+        lm = live.mons.get(p)
+        if lm and lm.state == "down":   # an outage open across the gap isn't a new one
+            m.state, m.event_id, m.event_sev, m.min_vis, m.ref_base = "down", None, lm.event_sev, lm.min_vis, lm.ref_base
+            m.confirm, m.confirm_why = lm.confirm, lm.confirm_why
+    return f
 
 
 def _parse_ts(s):

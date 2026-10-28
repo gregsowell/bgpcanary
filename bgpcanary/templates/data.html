@@ -22,7 +22,7 @@
 
 {% if tab == 'paths' %}
 <div class="panel">
-  <h2>How the internet reaches you <span class="muted" style="font-weight:400;font-size:13px">· {{ total }} RIS peers have a route · grouped by the way in (transit → upstream), then by the next network out</span></h2>
+  <h2>How the internet reaches you <span class="muted" style="font-weight:400;font-size:13px">· {{ total }} RIS peers have a route · grouped by the way in (transit → upstream), then by the next network out · click a way in for the networks behind it and its peers</span></h2>
   {% if groups %}
   <div class="chain-hdr"><span>Way in</span><span class="right">RIS peers</span><span>Share</span><span>Route Views</span><span>Changes, 7 d</span></div>
   {% for g in groups %}

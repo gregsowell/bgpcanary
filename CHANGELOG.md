@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-27
+
+### Fixed
+- **The same warning again after every RIS Live reconnect, marked "(backfill)".** The gap filler replayed each gap in an engine that knew nothing of what was already open, so an unexpected upstream, an outage or a shift that existed before the gap was reported again as a short backfill event every time the feed dropped, several times a day on some networks. It now knows what the live engine has open and what the gap's starting state shows, and reports only what begins inside the gap. Events already recorded stay as they are.
+
+### Changed
+- **BGP data › Paths:** each way in is plainly expandable now: a chevron that turns when open, a highlight under the pointer, and a hint in the heading. Opening one shows the next network out and the peers behind it, as before.
+
 ## [1.6.0] - 2026-10-27
 
 ### Added
@@ -345,7 +353,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/gregsowell/bgpcanary/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/gregsowell/bgpcanary/compare/v1.5.8...v1.6.0
 [1.5.8]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...v1.5.8
 [1.5.7]: https://github.com/gregsowell/bgpcanary/compare/v1.5.6...v1.5.7

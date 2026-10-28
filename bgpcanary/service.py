@@ -10,7 +10,7 @@ import time
 
 from . import (alerts, atlas, config, db, pathfinder, paths, registry, ripe, routeviews, sanity, transit, tree, updates,
                watch)
-from .engine import Engine, _parse_ts as ripe_ts, close_open
+from .engine import Engine, _parse_ts as ripe_ts, close_open, for_gap
 from .peering import Peering
 
 log = logging.getLogger("bgpcanary.service")
@@ -477,7 +477,6 @@ class Service:
         gaps = db.kv_get(self.aconn, "gaps", [])
         if not gaps:
             return
-        B = self.cfg.bucket_seconds
         remaining = []
         for s, e in gaps:
             probe = await self._bgplay_merged(e - 60, e)
@@ -488,10 +487,8 @@ class Service:
                 continue
             # The filler writes through the service's single writer connection: a second connection on
             # this thread can deadlock against the live engine's open transaction ("database is locked").
-            f = Engine(self.cfg, self.aconn, restore=False, peering=self.peering)
-            f.historical = True
-            f.seed_baseline(s)
-            f.last_bucket = int(-(-s // B) * B)
+            # It knows what the live engine has open, so it reports only what began inside the gap.
+            f = for_gap(self.cfg, self.aconn, self.peering, self.engine, s)
             await self._replay(f, s, e, label="gap fill")
             close_open(f, e)
             log.info("gap %s -> %s filled from BGPlay", time.strftime("%m-%d %H:%M:%S", time.gmtime(s)),

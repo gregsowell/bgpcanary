@@ -174,13 +174,19 @@ a.card:hover { text-decoration: none; border-color: var(--accent); transform: tr
 .came .asn { color: var(--ok); font-weight: 650; }
 .small { font-size: 12px; }
 .chain-hdr, details.chain > summary { display: grid; grid-template-columns: minmax(280px, 1.6fr) 80px minmax(140px, 1fr) 160px 120px; gap: 12px; align-items: center; }
-.chain-hdr { padding: 0 12px; margin-top: 10px; }
+.chain-hdr { padding: 0 12px 0 32px; margin-top: 10px; }
 .chain-hdr span { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
-details.chain { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
-details.chain > summary { list-style: none; cursor: pointer; }
+/* a way in: a whole row that opens, with a chevron on the left that turns when open and a tint under the pointer */
+details.chain { border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; }
+details.chain > summary { list-style: none; cursor: pointer; position: relative; padding: 8px 12px 8px 32px; border-radius: 8px; }
 details.chain > summary::-webkit-details-marker { display: none; }
-details.chain[open] > summary { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-details.hop { margin: 6px 0 2px 8px; } details.hop > summary { font-size: 13px; }
+details.chain > summary::before { content: ""; position: absolute; left: 13px; top: 50%; width: 8px; height: 8px; border-right: 2px solid var(--accent);
+                                  border-bottom: 2px solid var(--accent); transform: translateY(-65%) rotate(-45deg); transition: transform .15s; }
+details.chain > summary:hover { background: rgba(36, 99, 235, .07); }
+details.chain[open] > summary { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+details.chain[open] > summary::before { transform: translateY(-80%) rotate(45deg); }
+details.hop { margin: 6px 0 2px 8px; } details.hop > summary { font-size: 13px; } details.hop > summary:hover { color: var(--accent); }
+details.chain > details.hop { margin: 6px 12px 2px 24px; } details.chain > details.hop:last-of-type { margin-bottom: 10px; }
 table.peers td { padding: 4px 8px; font-size: 12.5px; }
 details.burst { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
 details.burst > summary { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; cursor: pointer; }

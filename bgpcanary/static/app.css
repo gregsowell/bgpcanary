@@ -121,6 +121,7 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 button.pf-backbtn { background: #9b4dca; border-color: #9b4dca; color: #fff; font-weight: 600; }
 button.pf-backbtn:disabled { opacity: .6; cursor: default; }
 .toolbar label { color: var(--muted); font-size: 13px; }
+#events a.kind { color: inherit; }   /* a type in the Events list filters to that type; it stays muted, underlined on hover */
 .rp-gifbox { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .rp-gifbox input[type=datetime-local] { padding: 4px 6px; }
 .formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 16px; }

@@ -2,12 +2,13 @@
 {% block title %}Events · {{ cfg.site_name }}{% endblock %}
 {% block content %}
 <h1>Events</h1>
-<form class="toolbar" method="get">
-  <select name="kind"><option value="">All types</option>{% for k in kinds %}<option value="{{ k }}" {{ 'selected' if k == kind }}>{{ kind_names.get(k, k.replace('_', ' ')) }}</option>{% endfor %}</select>
-  <select name="severity"><option value="">Warning + critical</option>{% for s in ['critical','warning','info'] %}<option {{ 'selected' if s == severity }}>{{ s }}</option>{% endfor %}</select>
+<form class="toolbar" method="get" data-filters>
+  <select name="state" aria-label="Open or closed"><option value="">Open and closed</option><option value="open" {{ 'selected' if state == 'open' }}>Open</option><option value="closed" {{ 'selected' if state == 'closed' }}>Closed</option></select>
+  <select name="kind" aria-label="Type"><option value="">All types</option>{% for k in kinds %}<option value="{{ k }}" {{ 'selected' if k == kind }}>{{ kind_names.get(k, k.replace('_', ' ')) }}</option>{% endfor %}</select>
+  <select name="severity" aria-label="Severity"><option value="">Warning + critical</option>{% for s in ['critical','warning','info'] %}<option {{ 'selected' if s == severity }}>{{ s }}</option>{% endfor %}</select>
   <label><input type="checkbox" name="info" value="1" {{ 'checked' if info }}> include info (dips, new chains, FYI notices)</label>
   <button type="submit">Filter</button>
-  <span class="muted">{{ total }} event{{ 's' if total != 1 }}</span>
+  <span class="muted">{{ total }} {{ state ~ ' ' if state }}event{{ 's' if total != 1 }}{% if kind %} of this type{% endif %}</span>
 </form>
 <form class="panel scroll" method="get" action="/events/replay" data-pick>
 <div class="toolbar" style="margin:0 0 8px">
@@ -23,16 +24,22 @@
     <td>{% if e.end_ts %}<time data-ts="{{ e.end_ts }}" data-sec="1"></time>{% else %}<span class="badge b-{{ 'info' if e.severity == 'info' else 'critical' }}">open</span>{% endif %}</td>
     <td>{{ ((e.end_ts or now) - e.start_ts)|dur }}</td>
     <td><span class="badge b-{{ e.severity }}">{{ e.severity }}</span></td>
-    <td class="muted" style="white-space:nowrap">{{ kind_names.get(e.kind, e.kind.replace('_', ' ')) }}</td>
+    <td class="muted" style="white-space:nowrap"><a class="kind" href="?state={{ state }}&kind={{ e.kind }}&severity={{ severity }}&info={{ info }}" title="Only this type">{{ kind_names.get(e.kind, e.kind.replace('_', ' ')) }}</a></td>
     <td class="mono muted">{{ e.prefix or '' }}</td>
     <td><a href="/events/{{ e.id }}">{{ e.title }}</a>{% if e.historical %} <span class="muted">(backfill)</span>{% endif %}</td>
     <td style="white-space:nowrap">{% if e.min_visible is not none %}{{ e.min_visible }}{% if e.baseline %}<span class="muted"> / {{ '%.0f'|format(e.baseline) }} ({{ '%.0f'|format(100 * e.min_visible / e.baseline) }}%)</span>{% endif %}{% endif %}</td>
   </tr>
-  {% else %}<tr><td colspan="9" class="muted">No events.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="9" class="muted">No {{ state ~ ' ' if state }}events{% if kind or severity %} of that kind{% endif %}.</td></tr>{% endfor %}
 </table>
 </form>
 <script>
-(function () {   // "Replay selected together": on once two or more are ticked
+(function () {
+  // the filters apply as soon as one changes (the Filter button stays for browsers without scripts)
+  const filters = document.querySelector("[data-filters]");
+  filters.addEventListener("change", () => filters.submit());
+  // back to this page: show the filters the address says, not the ones the browser remembers picking
+  window.addEventListener("pageshow", () => filters.reset());
+  // "Replay selected together": on once two or more are ticked
   const f = document.querySelector("[data-pick]"), go = f.querySelector("[data-pick-go]"), say = f.querySelector("[data-pick-count]");
   const hint = say.textContent;
   f.addEventListener("change", () => {
@@ -56,7 +63,7 @@
 })();
 </script>
 <p class="toolbar">
-  {% if page > 1 %}<a class="btn" href="?kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page - 1 }}">← Newer</a>{% endif %}
-  {% if page * 100 < total %}<a class="btn" href="?kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page + 1 }}">Older →</a>{% endif %}
+  {% if page > 1 %}<a class="btn" href="?state={{ state }}&kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page - 1 }}">← Newer</a>{% endif %}
+  {% if page * 100 < total %}<a class="btn" href="?state={{ state }}&kind={{ kind }}&severity={{ severity }}&info={{ info }}&page={{ page + 1 }}">Older →</a>{% endif %}
 </p>
 {% endblock %}

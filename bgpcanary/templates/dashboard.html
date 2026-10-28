@@ -211,7 +211,7 @@
         <td>{{ ((e.end_ts or now) - e.start_ts)|dur if e.end_ts or e.kind == 'outage' else '' }}{% if not e.end_ts %} <span class="badge b-{{ 'info' if e.severity == 'info' else 'critical' }}">open</span>{% endif %}</td></tr>
       {% else %}<tr><td colspan="4" class="muted">No warning or critical events.</td></tr>{% endfor %}
     </table></div>
-    <p><a href="/events">All events →</a></p>
+    <p><a href="/events">All events →</a> <span class="muted">·</span> <a href="/events?state=open">Open events →</a></p>
 </div>
 
 {% if health %}{% with h = health %}{% include "_health.html" %}{% endwith %}{% endif %}

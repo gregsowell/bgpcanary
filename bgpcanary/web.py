@@ -720,7 +720,8 @@ async def api_status(request: Request):
 
 
 @app.get("/events", response_class=HTMLResponse)
-async def events_page(request: Request, kind: str = "", severity: str = "", info: int = 0, page: int = 1):
+async def events_page(request: Request, kind: str = "", severity: str = "", info: int = 0, state: str = "",
+                      page: int = 1):
     user(request)
     conn = rconn()
     where, args = [], []
@@ -732,6 +733,9 @@ async def events_page(request: Request, kind: str = "", severity: str = "", info
         args.append(severity)
     elif not info:
         where.append("severity!='info'")
+    state = state if state in ("open", "closed") else ""   # open: still going on (no end yet)
+    if state:
+        where.append("end_ts IS NULL" if state == "open" else "end_ts IS NOT NULL")
     w = ("WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(f"SELECT COUNT(*) c FROM events {w}", args).fetchone()["c"]
     rows = conn.execute(f"SELECT * FROM events {w} ORDER BY start_ts DESC LIMIT 100 OFFSET ?",
@@ -739,7 +743,7 @@ async def events_page(request: Request, kind: str = "", severity: str = "", info
     kinds = [r["kind"] for r in conn.execute("SELECT DISTINCT kind FROM events ORDER BY kind")]
     conn.close()
     return render(request, "events.html", rows=rows, total=total, page=page, kind=kind, severity=severity,
-                  info=info, kinds=kinds, kind_names=KIND_NAMES)
+                  info=info, state=state, kinds=kinds, kind_names=KIND_NAMES)
 
 
 KIND_NAMES = {t["kind"]: t["name"].replace(" (FYI)", "") for t in config.ALERT_TYPES}

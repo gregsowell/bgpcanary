@@ -6,6 +6,15 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-28
+
+### Added
+- **Events page: open or closed.** A new first filter shows only the events still going on (no end yet) or only the ones that have ended, alone or together with the type and severity filters. The filters apply as soon as you change one; the count says what you're looking at ("3 open events"). Coming back to the page shows the filters its address says, not the ones the browser remembers picking. The dashboard's recent-events panel links to the open ones.
+- **Events page: a type in the list is clickable** and filters to that type, keeping the other filters.
+
+### Changed
+- **Container image:** the base image (`python:3.13-alpine3.24`) refreshed to its current build for the latest Alpine and Python fixes.
+
 ## [1.6.1] - 2026-10-27
 
 ### Fixed
@@ -353,7 +362,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/gregsowell/bgpcanary/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/gregsowell/bgpcanary/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/gregsowell/bgpcanary/compare/v1.5.8...v1.6.0
 [1.5.8]: https://github.com/gregsowell/bgpcanary/compare/v1.5.7...v1.5.8

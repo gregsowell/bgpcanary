@@ -6,6 +6,9 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Changed
+- README: screenshots of the Path finder (the tree and the traceroute), BGP data (Paths and Changes), the Events page with its filters, an upstream-down event, several events replayed together and a neighbouring network's page; the connectivity tree screenshot now shows the "moved" and "reaches you another way" states.
+
 ## [1.6.3] - 2026-10-28
 
 ### Added

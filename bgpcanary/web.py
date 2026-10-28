@@ -811,17 +811,43 @@ async def event_page(request: Request, eid: int, msg: str = ""):
                         "AND (stopped IS NULL OR stopped>=?) ORDER BY created DESC LIMIT 1", (end, ev["start_ts"])).fetchone()
     ev_data = await _evidence(conn, ev)
     nb = event_neighbour(ev)
-    nb_info = None
-    if nb:
-        nb_info = {"asn": nb, "name": names(conn, [nb]).get(nb, ""),
-                   "role": "transit" if nb in cfg.expected_upstreams else "listed peer" if nb in cfg.peers
-                   else "exchange peer" if svc.engine.peer_group(nb) else None,
-                   "exchange": svc.peering.label(nb)}
+    nb_info = neighbour_info(conn, nb) if nb else None
     conn.close()
     return render(request, "event.html", ev=ev, ups=ups, probes=probes, snaps=snaps, alerts=alerts_sent,
                   win_start=ev["start_ts"] - pad, win_end=end + pad, atlas_msms=atlas_msms,
                   atlas_target=base["target"] if base else None, evd=ev_data, compare_all=",".join(svc.atlas.targets()),
-                  nb=nb_info, msg=msg)
+                  nb=nb_info, back=f"/events/{eid}", msg=msg)
+
+
+def neighbour_info(conn, asn):
+    """What a neighbouring network is to you, for the "what is it to you?" panel (_neighbour.html)."""
+    return {"asn": asn, "name": names(conn, [asn]).get(asn, ""),
+            "role": "transit" if asn in cfg.expected_upstreams else "listed peer" if asn in cfg.peers
+            else "exchange peer" if svc.engine.peer_group(asn) else None,
+            "exchange": svc.peering.label(asn)}
+
+
+NEIGHBOUR_KINDS = ("unexpected_upstream", "new_upstream", "new_peer", "peer_leak")   # the events about one neighbour
+
+
+@app.get("/neighbours/{asn}", response_class=HTMLResponse)
+async def neighbour_page(request: Request, asn: int, msg: str = ""):
+    """A neighbouring network: what it is to you, with the one-click answer (no event needed: the dashboard's
+    "unexpected" badge leads here), how many RIS peers reach you through it now, and the events about it."""
+    user(request)
+    if not 0 < asn < 2 ** 32:
+        raise HTTPException(404)
+    conn = rconn()
+    nb = neighbour_info(conn, asn)
+    eng = svc.engine
+    paths_now = sum(1 for p in eng.mons for e in list(eng.rib.get(p, {}).values())
+                    if e.path and e.path[-1] == cfg.asn and paths.upstream(e.path) == asn)
+    rows = [r for r in conn.execute(f"SELECT * FROM events WHERE kind IN ({','.join('?' * len(NEIGHBOUR_KINDS))}) "
+                                    "AND detail LIKE ? ORDER BY start_ts DESC LIMIT 200", NEIGHBOUR_KINDS + (f"%{asn}%",))
+            if event_neighbour(r) == asn][:20]
+    conn.close()
+    return render(request, "neighbour.html", nb=nb, paths_now=paths_now, rows=rows, msg=msg, back=f"/neighbours/{asn}",
+                  kind_names=KIND_NAMES)
 
 
 async def _evidence(conn, ev):
@@ -1925,7 +1951,7 @@ async def neighbor_role(request: Request, asn: int = Form(...), role: str = Form
     who = admin(request)
     if role not in ("transit", "peer") or not 0 < asn < 2 ** 32:
         raise HTTPException(400, "Bad request")
-    back = back if re.fullmatch(r"/events/\d+", back) else "/events"
+    back = back if re.fullmatch(r"/events/\d+|/neighbours/\d+", back) else "/events"
     data = dict(db.kv_get(svc.aconn, config.MONITOR_KV) or config.monitor_settings_dict(cfg))
     ups = [u for u in data.get("expected_upstreams", cfg.expected_upstreams) if u != asn]
     prs = [u for u in data.get("peers", cfg.peers) if u != asn]

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}AS{{ nb.asn }} · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>AS{{ nb.asn }}{% if nb.name %} <span class="muted" style="font-weight:400">{{ nb.name }}</span>{% endif %}</h1>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<p class="muted" style="margin-top:0">{% if paths_now %}{{ paths_now }} RIS peer{{ 's' if paths_now != 1 }} reach you through it right now.{% else %}No RIS peer reaches you through it right now.{% endif %}
+  <a href="https://bgp.tools/as/{{ nb.asn }}" target="_blank" rel="noopener">bgp.tools</a> · <a href="https://www.peeringdb.com/asn/{{ nb.asn }}" target="_blank" rel="noopener">PeeringDB</a></p>
+{% include "_neighbour.html" %}
+<div class="panel">
+  <h2>Events about it</h2>
+  <div class="scroll"><table>
+    <tr><th>Start</th><th>End</th><th>Severity</th><th>Type</th><th>Event</th></tr>
+    {% for e in rows %}
+    <tr>
+      <td><time data-ts="{{ e.start_ts }}"></time></td>
+      <td>{% if e.end_ts %}<time data-ts="{{ e.end_ts }}"></time>{% else %}<span class="badge b-{{ 'info' if e.severity == 'info' else 'critical' }}">open</span>{% endif %}</td>
+      <td><span class="badge b-{{ e.severity }}">{{ e.severity }}</span></td>
+      <td class="muted" style="white-space:nowrap">{{ kind_names.get(e.kind, e.kind.replace('_', ' ')) }}</td>
+      <td><a href="/events/{{ e.id }}">{{ e.title }}</a>{% if e.historical %} <span class="muted">(backfill)</span>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">None recorded.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}

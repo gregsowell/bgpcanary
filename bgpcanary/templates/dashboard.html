@@ -33,7 +33,7 @@
   <div class="panel stat">
     <div class="label">Upstream{{ 's' if c.upstreams|length > 1 }} <span style="text-transform:none">(paths, all selected prefixes)</span></div>
     <div class="value" style="font-size:18px">
-      {% for u, n in c.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span>{% if cfg.expected_upstreams and u not in cfg.expected_upstreams %} <span class="badge b-warning" title="Neither one of your expected upstreams nor a known peer">unexpected</span>{% endif %}<br>{% else %}{% if not c.peers %}—{% endif %}{% endfor %}
+      {% for u, n in c.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span>{% if cfg.expected_upstreams and u not in cfg.expected_upstreams %} <a class="badge b-warning" href="/neighbours/{{ u }}" title="Neither one of your expected upstreams nor a known peer. Click to say what it is">unexpected</a>{% endif %}<br>{% else %}{% if not c.peers %}—{% endif %}{% endfor %}
       {% for u in c.missing %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }}</span> <span class="badge b-warning">not seen</span><br>{% endfor %}
       {% set groups = c.peers %}{% include "_peer_groups.html" %}
     </div>
@@ -91,7 +91,7 @@
   <div class="panel stat">
     <div class="label">Upstream{{ 's' if s.upstreams|length > 1 }}</div>
     <div class="value" style="font-size:18px">
-      {% for u, n in s.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span>{% if cfg.expected_upstreams and u not in cfg.expected_upstreams %} <span class="badge b-warning" title="Neither one of your expected upstreams nor a known peer">unexpected</span>{% endif %}<br>{% else %}{% if not s.peers %}—{% endif %}{% endfor %}
+      {% for u, n in s.upstreams %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }} ({{ n }})</span>{% if cfg.expected_upstreams and u not in cfg.expected_upstreams %} <a class="badge b-warning" href="/neighbours/{{ u }}" title="Neither one of your expected upstreams nor a known peer. Click to say what it is">unexpected</a>{% endif %}<br>{% else %}{% if not s.peers %}—{% endif %}{% endfor %}
       {% for u in s.missing %}AS{{ u }} <span class="muted" style="font-size:13px">{{ names.get(u, '') }}</span> <span class="badge b-warning">not seen</span><br>{% endfor %}
       {% set groups = s.peers %}{% include "_peer_groups.html" %}
     </div>

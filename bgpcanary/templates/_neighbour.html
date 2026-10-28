@@ -1,0 +1,17 @@
+{# "What is ASn to you?": on an event page and on /neighbours/<asn>. Needs nb (web.neighbour_info) and back (where the
+   one-click answer returns to). Everyone sees the explanation; the buttons are for admins. #}
+<div class="panel" id="neighbour">
+  <h2>What is AS{{ nb.asn }}{% if nb.name %} <span class="muted" style="font-weight:400">{{ nb.name }}</span>{% endif %} to you?</h2>
+  <p class="muted" style="margin-top:0">{% if nb.role == 'transit' %}It's one of your expected upstreams (transit). You can change that under Settings › <a href="/settings/monitor">Monitored network</a>.{% else %}{% if nb.role == 'exchange peer' %}It's a peer at {{ nb.exchange }} (from PeeringDB).{% elif nb.role == 'listed peer' %}It's in your list of peers.{% else %}bgpcanary doesn't know: it's neither one of your expected upstreams nor a peer.{% endif %}
+    {% if is_admin %}Tell bgpcanary what it is and it's handled that way from now on: transits are expected to carry you to the whole internet, peers only to their own customers. You can change this later under Settings › <a href="/settings/monitor">Monitored network</a>.{% else %}An admin can file it here as a peer or as a transit: transits are expected to carry you to the whole internet, peers only to their own customers.{% endif %}{% endif %}</p>
+  {% if not nb.role %}
+  <p style="margin-top:0"><strong>Not peering with it directly?</strong> It can still be your direct neighbour in the public BGP data. Route servers at an exchange don't add their own ASN to the path, so every network they hand your routes to looks adjacent to you, and some exchanges pass their route-server routes on to partner exchanges, whose members then look adjacent too. If you peer with route servers, that's almost always what this is, and <em>a peer</em> is the right answer. To see it for yourself, look at the routes you receive over your route-server sessions.</p>
+  {% endif %}
+  {% if is_admin %}
+  <form method="post" action="/settings/neighbor" class="toolbar" style="margin:0">
+    <input type="hidden" name="asn" value="{{ nb.asn }}"><input type="hidden" name="back" value="{{ back }}">
+    {% if not nb.role %}<button type="submit" name="role" value="peer" class="primary">Add as a peer</button>{% endif %}
+    {% if nb.role != 'transit' %}<button type="submit" name="role" value="transit">One of my transit providers</button>{% endif %}
+  </form>
+  {% endif %}
+</div>

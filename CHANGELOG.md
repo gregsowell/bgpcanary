@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-10-28
+
+### Added
+- **A page for each neighbouring network** (`/neighbours/<ASN>`): what it is to you with the one-click answer (**Add as a peer**, or one of your transits), how many RIS peers reach you through it right now, and the events about it. The dashboard's "unexpected" badge leads there, so filing a network as a peer no longer needs an open event.
+
+### Changed
+- **"What is this network to you?"** now explains why a network you don't peer with directly can appear as your neighbour (route servers don't add their own ASN to the path, and some exchanges pass route-server routes on to partner exchanges), is shown to viewers too (the buttons stay admin-only), and its peer button reads **Add as a peer**.
+
 ## [1.6.2] - 2026-10-28
 
 ### Added
@@ -362,7 +370,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/gregsowell/bgpcanary/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/gregsowell/bgpcanary/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/gregsowell/bgpcanary/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/gregsowell/bgpcanary/compare/v1.5.8...v1.6.0

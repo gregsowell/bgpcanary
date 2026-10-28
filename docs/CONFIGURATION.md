@@ -41,9 +41,12 @@ bgpcanary keeps them apart from your upstreams:
   - **Peer leak:** one peer suddenly carries a prefix to a large share of the internet, far beyond its usual
     reach. That usual reach is learned first, so a big peer with many customers of its own isn't flagged.
   - **New peer** (information): a peer carries a prefix for the first time.
-- **Unknown neighbors** still raise "unexpected upstream". The event's page asks what the network is to you:
-  **One of my transit providers** or **A peer**. One click files it, the warning closes by itself, and no
-  restart is needed.
+- **Unknown neighbors** still raise "unexpected upstream". The event's page, and the **unexpected** badge next to
+  the network on the dashboard, ask what it is to you: **Add as a peer** or **One of my transit providers**. One
+  click files it, the warning closes by itself, and no restart is needed. A network you don't peer with directly
+  can still show up as your neighbor: route servers at an exchange don't add their own ASN to the path, so every
+  network they hand your routes to looks adjacent to you, and some exchanges pass their route-server routes on to
+  partner exchanges. If you peer with route servers, that's almost always what it is: a peer.
 
 Settings › Monitored network shows which exchanges PeeringDB lists for you, with a **Look up again now** button.
 

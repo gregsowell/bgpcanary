@@ -1,4 +1,4 @@
-{# The "not live yet" banner's content: base.html shows it, and /api/status sends it again as it changes.
+{# The "not live yet" banner's content: base.html shows it, and /api/loading sends it again as it changes.
    `ld` comes from web.loading(). #}
 {% if ld.what == 'history' %}
 <strong>Loading {{ ld.days }} days of history from RIPE RIS: week {{ ld.week }} of {{ ld.weeks }}</strong>

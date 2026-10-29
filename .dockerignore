@@ -3,6 +3,7 @@
 .git
 .github
 docs
+tests
 *.mp4
 *.mov
 *.tscproj

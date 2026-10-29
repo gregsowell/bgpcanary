@@ -11,11 +11,14 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadData, URLSafeTimedSerializer
 from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (REPO, __version__, alerts, atlas, auth, config, db, evidence, pathfinder, paths, peering, registry, ripe,
@@ -219,25 +222,78 @@ async def _admin_only(request, exc):
     return resp
 
 
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request, exc):
+    """On the API every error is JSON, {"error": "..."} with the status; the pages keep FastAPI's usual answers."""
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": exc.detail if isinstance(exc.detail, str) else "error"},
+                            status_code=exc.status_code, headers=getattr(exc, "headers", None))
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def _bad_request(request, exc):
+    """A parameter of the wrong kind (limit=ten): on the API a 400 naming it, instead of FastAPI's 422 report."""
+    if request.url.path.startswith("/api/"):
+        e = (exc.errors() or [{}])[0]
+        where = ".".join(str(x) for x in e.get("loc", ()) if x not in ("query", "path", "body"))
+        msg = e.get("msg", "invalid")
+        return JSONResponse({"error": f"{where}: {msg}" if where else msg}, status_code=400)
+    return await request_validation_exception_handler(request, exc)
+
+
 def user(request: Request, allow_must_change=False):
     """The logged-in username. Looks the account up on every request, so role changes and deletions take
-    effect immediately."""
-    u = request.session.get("user")
-    if not u:
-        raise NeedLogin()
-    row = auth.get_user(svc.aconn, u)
-    if (not row or request.session.get("v", 0) != row["session_ver"]
-            or not auth.session_valid(svc.aconn, u, request.session.get("sid"))):
-        # deleted, signed out (here or everywhere), or a password / role change since this session started.
-        # Cookies from before 1.2.3 have no session id: they sign in once more.
-        request.session.clear()
-        raise NeedLogin()
+    effect immediately. On the API (/api/v1/) a request may carry an API token instead of the session cookie."""
+    tok = api_token(request)
+    if tok is not None:
+        u, row = tok["username"], auth.get_user(svc.aconn, tok["username"])
+        if not row:   # the account is gone (its tokens go with it; a race at most)
+            raise NeedLogin()
+        request.state.token = tok["name"]
+    else:
+        u = request.session.get("user")
+        if not u:
+            raise NeedLogin()
+        row = auth.get_user(svc.aconn, u)
+        if (not row or request.session.get("v", 0) != row["session_ver"]
+                or not auth.session_valid(svc.aconn, u, request.session.get("sid"))):
+            # deleted, signed out (here or everywhere), or a password / role change since this session started.
+            # Cookies from before 1.2.3 have no session id: they sign in once more.
+            request.session.clear()
+            raise NeedLogin()
     request.state.role = row["role"]
     if row["must_change"] and not allow_must_change:
         raise MustChangePassword()
     if not cfg.configured and not request.url.path.startswith(SETUP_PATHS):
         raise NeedSetup()
     return u
+
+
+API_PATH = "/api/v1/"   # the documented API (docs/API.md, api.py): the only place an API token is accepted
+# Bad tokens per address: 20 in 15 minutes, then 429 for the rest of the window. Both of the throttle's keys are the
+# address (the account side of a login doesn't apply: a token names no account until it's valid).
+token_throttle = auth.Throttle(limit=20, window=900, device_limit=20)
+
+
+def api_token(request):
+    """The row of the API token a request on the API carries ("Authorization: Bearer bgpc_..."); None without one,
+    and off the API, where the header is ignored. A token that isn't one is refused outright: a script has no
+    cookie to fall back on, and a wrong token shouldn't quietly turn into a login page."""
+    h = request.headers.get("authorization", "")
+    if not request.url.path.startswith(API_PATH) or h[:7].lower() != "bearer ":
+        return None
+    ip = client_ip(request)
+    if not token_throttle.attempt(ip, "", device=ip):
+        if token_throttle.first_refusal(ip, ""):
+            log.warning("API tokens from %s refused for a while (too many bad ones)", ip)
+        raise HTTPException(429, "too many bad tokens from your address; try again later")
+    tok = auth.token_user(svc.aconn, h[7:].strip(), ip)
+    if tok is None:
+        log.warning("bad API token from %s", ip)
+        raise NeedLogin()
+    token_throttle.success(ip, "", device=ip)
+    return tok
 
 
 def admin(request: Request):
@@ -340,8 +396,8 @@ def render(request, name, **ctx):
     return templates.TemplateResponse(request, name, ctx)
 
 
-@app.get("/api/status")
-async def api_status(request: Request):
+@app.get("/api/loading")
+async def api_loading(request: Request):
     """For the "not live yet" banner, which polls this: its new content, or html=null once bgpcanary is live."""
     user(request)
     ld = loading()
@@ -830,6 +886,20 @@ def neighbour_info(conn, asn):
 NEIGHBOUR_KINDS = ("unexpected_upstream", "new_upstream", "new_peer", "peer_leak")   # the events about one neighbour
 
 
+def neighbour_events(conn, asn, limit=20):
+    """The latest events about neighbour `asn`, newest first."""
+    return [r for r in conn.execute(f"SELECT * FROM events WHERE kind IN ({','.join('?' * len(NEIGHBOUR_KINDS))}) "
+                                    "AND detail LIKE ? ORDER BY start_ts DESC LIMIT 200", NEIGHBOUR_KINDS + (f"%{asn}%",))
+            if event_neighbour(r) == asn][:limit]
+
+
+def neighbour_paths_now(asn):
+    """How many RIS peers reach you through neighbour `asn` right now."""
+    eng = svc.engine
+    return sum(1 for p in eng.mons for e in list(eng.rib.get(p, {}).values())
+               if e.path and e.path[-1] == cfg.asn and paths.upstream(e.path) == asn)
+
+
 @app.get("/neighbours/{asn}", response_class=HTMLResponse)
 async def neighbour_page(request: Request, asn: int, msg: str = ""):
     """A neighbouring network: what it is to you, with the one-click answer (no event needed: the dashboard's
@@ -839,14 +909,10 @@ async def neighbour_page(request: Request, asn: int, msg: str = ""):
         raise HTTPException(404)
     conn = rconn()
     nb = neighbour_info(conn, asn)
-    eng = svc.engine
-    paths_now = sum(1 for p in eng.mons for e in list(eng.rib.get(p, {}).values())
-                    if e.path and e.path[-1] == cfg.asn and paths.upstream(e.path) == asn)
-    rows = [r for r in conn.execute(f"SELECT * FROM events WHERE kind IN ({','.join('?' * len(NEIGHBOUR_KINDS))}) "
-                                    "AND detail LIKE ? ORDER BY start_ts DESC LIMIT 200", NEIGHBOUR_KINDS + (f"%{asn}%",))
-            if event_neighbour(r) == asn][:20]
+    rows = neighbour_events(conn, asn)
     conn.close()
-    return render(request, "neighbour.html", nb=nb, paths_now=paths_now, rows=rows, msg=msg, back=f"/neighbours/{asn}",
+    return render(request, "neighbour.html", nb=nb, paths_now=neighbour_paths_now(asn), rows=rows, msg=msg,
+                  back=f"/neighbours/{asn}",
                   kind_names=KIND_NAMES)
 
 
@@ -855,22 +921,29 @@ async def _evidence(conn, ev):
     return evidence.collect(conn, cfg, ev, atlas_payload, nbrs, svc.atlas.label, lambda a: names(conn, a))
 
 
-@app.get("/events/{eid}/report.txt")
-async def event_report(request: Request, eid: int):
-    """The event's evidence as plain text, to attach to a ticket with an upstream provider."""
-    user(request)
+async def report_response(eid):
+    """The event's evidence as plain text, to attach to a ticket with an upstream provider (the page's report.txt,
+    and the API's /report); None for an unknown event."""
     conn = rconn()
     try:
         ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
         if not ev:
-            raise HTTPException(404)
+            return None
         text = evidence.as_text(cfg, ev, await _evidence(conn, ev),
                                 link=f"{cfg.base_url}/events/{eid}" if cfg.base_url else "")
     finally:
         conn.close()
-    from fastapi.responses import PlainTextResponse
     stamp = time.strftime("%Y%m%d-%H%M", time.gmtime(ev["start_ts"]))
     return PlainTextResponse(text, headers={"Content-Disposition": f'inline; filename="bgpcanary-event-{eid}-{stamp}.txt"'})
+
+
+@app.get("/events/{eid}/report.txt")
+async def event_report(request: Request, eid: int):
+    user(request)
+    resp = await report_response(eid)
+    if resp is None:
+        raise HTTPException(404)
+    return resp
 
 
 def replay_payload(conn, prefix, s, e):
@@ -1652,7 +1725,7 @@ async def action_resync(request: Request):
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, msg: str = ""):
-    user(request)
+    me = user(request)
     conn = rconn()
     log_rows = conn.execute("SELECT a.*, e.title FROM alert_log a LEFT JOIN events e ON e.id=a.event_id "
                             "ORDER BY a.ts DESC LIMIT 30").fetchall()
@@ -1673,7 +1746,8 @@ async def settings_page(request: Request, msg: str = ""):
                   alert_types_on=sum(1 for t in config.ALERT_TYPES if config.alert_mode(cfg, t["kind"]) != "off"),
                   alert_types_total=len(config.ALERT_TYPES),
                   n_admins=sum(1 for u in auth.list_users(svc.aconn) if u["role"] == "admin"),
-                  n_viewers=sum(1 for u in auth.list_users(svc.aconn) if u["role"] == "viewer"))
+                  n_viewers=sum(1 for u in auth.list_users(svc.aconn) if u["role"] == "viewer"),
+                  n_tokens=len(auth.list_tokens(svc.aconn, me)))
 
 
 @app.get("/registry", response_class=HTMLResponse)
@@ -2319,12 +2393,57 @@ async def signout_others(request: Request):
     return RedirectResponse("/settings?msg=" + quote("Signed out everywhere else"), status_code=303)
 
 
+# ---------------------------------------------------------------------- API tokens (docs/API.md)
+def _site_base(request):
+    return cfg.base_url or str(request.base_url).rstrip("/")
+
+
+@app.get("/account/tokens", response_class=HTMLResponse)
+async def account_tokens(request: Request, msg: str = "", err: int = 0):
+    u = user(request)
+    return render(request, "tokens.html", tokens=auth.list_tokens(svc.aconn, u), new=None, msg=msg, err=err,
+                  max_tokens=auth.TOKEN_MAX_PER_USER, base=_site_base(request))
+
+
+@app.post("/account/tokens")
+async def account_tokens_add(request: Request, name: str = Form("")):
+    """Creates a token and shows it, this once, on the page itself: never in a URL (logs) or a cookie."""
+    u = user(request)
+    name = auth.clean_name(name)
+    try:
+        tok = auth.new_token(svc.aconn, u, name)
+    except ValueError as ex:
+        return RedirectResponse(f"/account/tokens?msg={quote(str(ex))}&err=1", status_code=303)
+    log.info("user %s created API token %r", u, name)
+    resp = render(request, "tokens.html", tokens=auth.list_tokens(svc.aconn, u), new=tok, new_name=name, msg="", err=0,
+                  max_tokens=auth.TOKEN_MAX_PER_USER, base=_site_base(request))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.post("/account/tokens/{tid}/revoke")
+async def account_tokens_revoke(request: Request, tid: int):
+    u = user(request)
+    if not auth.revoke_token(svc.aconn, u, tid):
+        return RedirectResponse("/account/tokens?msg=" + quote("No such token") + "&err=1", status_code=303)
+    log.info("user %s revoked an API token", u)
+    return RedirectResponse("/account/tokens?msg=" + quote("Token revoked"), status_code=303)
+
+
+@app.post("/account/tokens/revoke-all")
+async def account_tokens_revoke_all(request: Request):
+    u = user(request)
+    n = auth.revoke_tokens(svc.aconn, u)
+    log.info("user %s revoked all %d of their API tokens", u, n)
+    return RedirectResponse("/account/tokens?msg=" + quote(f"Revoked {n} token{'s' if n != 1 else ''}"), status_code=303)
+
+
 # ---------------------------------------------------------------------- user management (admins)
 @app.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request, msg: str = "", err: int = 0):
     me = admin(request)
     return render(request, "users.html", users=auth.list_users(svc.aconn), me=me, msg=msg, err=err,
-                  min_pw=auth.MIN_PASSWORD)
+                  min_pw=auth.MIN_PASSWORD, tokens=auth.token_counts(svc.aconn))
 
 
 def _users_redirect(msg, err=False):
@@ -2389,6 +2508,16 @@ async def users_delete(request: Request, username: str):
     auth.delete_user(svc.aconn, username)
     log.info("user %s deleted user %s", me, username)
     return _users_redirect(f"Deleted {username}")
+
+
+@app.post("/users/{username}/tokens/revoke")
+async def users_tokens_revoke(request: Request, username: str):
+    me = admin(request)
+    if not auth.get_user(svc.aconn, username):
+        return _users_redirect("Unknown user", True)
+    n = auth.revoke_tokens(svc.aconn, username)
+    log.info("user %s revoked the %d API token(s) of %s", me, n, username)
+    return _users_redirect(f"Revoked {n} API token{'s' if n != 1 else ''} of {username}")
 
 
 # ---------------------------------------------------------------------- RIPE Atlas (optional)
@@ -2768,3 +2897,10 @@ async def atlas_settings_save(request: Request):
     else:
         msg = "Saved."
     return RedirectResponse(f"/settings/atlas?msg={quote(msg)}" + ("&err=1" if err else ""), status_code=303)
+
+
+# The documented JSON API (/api/v1/, docs/API.md) is api.py, which uses this module's helpers: included last, once
+# everything it needs exists.
+from . import api  # noqa: E402
+
+app.include_router(api.router)

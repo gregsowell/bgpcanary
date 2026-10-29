@@ -27,6 +27,10 @@ jobs:
               env.get_template(os.path.basename(t))
           print("templates ok")
           EOF
+      - name: Tests
+        run: |
+          pip install pytest==9.2.0
+          pytest -q
       - name: Shell scripts parse
         run: for f in deploy/*.sh deploy/docker/*.sh deploy/docker/bgpcanary-admin; do bash -n "$f"; done
       - name: Version is valid

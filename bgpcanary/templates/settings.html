@@ -83,6 +83,13 @@
     <p class="card-desc">Change the password for <strong>{{ user }}</strong>.{% if is_admin %} To reset someone else's, use Users.{% endif %}</p>
     <span class="card-open">Change →</span>
   </a>
+
+  <a class="card" href="/account/tokens">
+    <div class="card-head"><span class="card-title">API tokens</span>{% if n_tokens %}<span class="badge b-ok">{{ n_tokens }}</span>{% endif %}</div>
+    <p class="card-desc">For your own scripts and dashboards: a read-only JSON API with the monitor's status, the events and your neighbours.</p>
+    <div class="card-sum">{{ n_tokens }} token{{ 's' if n_tokens != 1 }} for <strong>{{ user }}</strong></div>
+    <span class="card-open">Manage →</span>
+  </a>
 </div>
 
 {% if is_admin %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}API tokens · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>API tokens</h1>
+<p class="muted">For your own scripts and dashboards: the <a href="https://github.com/{{ repo }}/blob/main/docs/API.md">JSON API</a> answers with the monitor's status, the events, and what a neighbouring network is to you. A token can read what you can; the API is read-only.</p>
+{% if msg %}<div class="msg {{ 'err' if err }}">{{ msg }}</div>{% endif %}
+{% if new %}
+<div class="panel">
+  <h2>Token “{{ new_name }}” created</h2>
+  <p><strong>Copy it now.</strong> It's shown this once; bgpcanary keeps only a hash of it. If you lose it, revoke it and create another.</p>
+  <pre>{{ new }}</pre>
+  <p class="muted" style="font-size:13px">Try it:</p>
+  <pre>curl -H "Authorization: Bearer {{ new }}" {{ base }}/api/v1/me</pre>
+</div>
+{% endif %}
+<div class="grid g2">
+  <div class="panel scroll">
+    <h2>Your tokens</h2>
+    {% if tokens %}
+    <table>
+      <tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr>
+      {% for t in tokens %}
+      <tr>
+        <td><strong>{{ t.name }}</strong></td>
+        <td class="mono">{{ t.hint }}…</td>
+        <td><time data-ts="{{ t.created }}" data-day></time></td>
+        <td>{% if t.last_used %}<time data-ts="{{ t.last_used }}" data-day></time>{% if t.last_ip %} <span class="muted">from {{ t.last_ip }}</span>{% endif %}{% else %}<span class="muted">never</span>{% endif %}</td>
+        <td><form method="post" action="/account/tokens/{{ t.id }}/revoke" class="inline" onsubmit='return confirm({{ ("Revoke the token " ~ t.name ~ "? Whatever uses it stops working.")|tojson }})'><button type="submit">Revoke</button></form></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <form method="post" action="/account/tokens/revoke-all" style="margin-top:12px" onsubmit="return confirm('Revoke all of your tokens?')"><button type="submit">Revoke all</button></form>
+    {% else %}
+    <p class="muted">No tokens yet.</p>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <h2>Create a token</h2>
+    <form method="post" action="/account/tokens" class="grid" style="max-width:340px;gap:8px">
+      <input name="name" placeholder="What it's for, e.g. grafana" maxlength="60" required autocomplete="off">
+      <button class="primary" type="submit">Create token</button>
+    </form>
+    <p class="muted" style="font-size:12px">Up to {{ max_tokens }} per account. Changing your password doesn't revoke tokens; revoking them here does, at once.</p>
+    <h2 style="margin-top:20px">Using it</h2>
+    <p>Send it in the <code>Authorization: Bearer …</code> header of requests to:</p>
+    <dl class="kv">
+      <dt><code>/api/v1/status</code></dt><dd>each prefix's visibility, state and neighbours, and how many events are open</dd>
+      <dt><code>/api/v1/events</code></dt><dd>the events, with the Events page's filters</dd>
+      <dt><code>/api/v1/events/ID</code></dt><dd>one event and the alerts sent for it; <code>/report</code> after it for its text report</dd>
+      <dt><code>/api/v1/neighbours/ASN</code></dt><dd>what a neighbouring network is to you, and the events about it</dd>
+      <dt><code>/api/v1/me</code></dt><dd>who the token is</dd>
+    </dl>
+    <p class="muted" style="font-size:12px">Every field, examples, and what's promised to stay the same: <a href="https://github.com/{{ repo }}/blob/main/docs/API.md">docs/API.md</a>.</p>
+  </div>
+</div>
+{% endblock %}

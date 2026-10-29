@@ -7,7 +7,7 @@
   <div class="panel scroll">
     <h2>Accounts</h2>
     <table>
-      <tr><th>User</th><th>Role</th><th>Change role</th><th>Reset password</th><th></th></tr>
+      <tr><th>User</th><th>Role</th><th>Change role</th><th>Reset password</th><th>API tokens</th><th></th></tr>
       {% for u in users %}
       <tr>
         <td><strong>{{ u.username }}</strong>{% if u.username == me %} <span class="muted">(you)</span>{% endif %}
@@ -28,6 +28,10 @@
             <button type="submit">Reset</button>
           </form>
         </td>
+        <td>{% set n = tokens.get(u.username, 0) %}{{ n }}{% if n %}
+          <form method="post" action="/users/{{ u.username|urlencode }}/tokens/revoke" class="inline" onsubmit='return confirm({{ ("Revoke all API tokens of " ~ u.username ~ "? Whatever uses them stops working.")|tojson }})'>
+            <button type="submit">Revoke</button>
+          </form>{% endif %}</td>
         <td>{% if u.username != me %}
           <form method="post" action="/users/{{ u.username|urlencode }}/delete" class="inline" onsubmit='return confirm({{ ("Delete " ~ u.username ~ "? This cannot be undone.")|tojson }})'>
             <button type="submit">Delete</button>
@@ -50,7 +54,7 @@
     </form>
     <h2 style="margin-top:20px">Roles</h2>
     <dl class="kv">
-      <dt><span class="badge b-info">viewer</span></dt><dd>Sees everything (dashboard, events, paths, updates, registry, probes, settings) and can export GIFs and change their own password. Can't run probes, start checks, change toggles, send test alerts or manage users.</dd>
+      <dt><span class="badge b-info">viewer</span></dt><dd>Sees everything (dashboard, events, paths, updates, registry, probes, settings) and can export GIFs, change their own password and create API tokens (read-only, like them). Can't run probes, start checks, change toggles, send test alerts or manage users.</dd>
       <dt><span class="badge b-warning">admin</span></dt><dd>Everything, including this page.</dd>
     </dl>
     {% if container %}

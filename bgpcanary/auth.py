@@ -76,6 +76,7 @@ def sign_out_everywhere(conn, username):
 def delete_user(conn, username):
     conn.execute("DELETE FROM users WHERE username=?", (username,))
     conn.execute("DELETE FROM sessions WHERE username=?", (username,))
+    conn.execute("DELETE FROM api_tokens WHERE username=?", (username,))
     conn.commit()
 
 
@@ -118,6 +119,71 @@ def end_session(conn, sid):
     if isinstance(sid, str) and sid:
         conn.execute("DELETE FROM sessions WHERE id=?", (_sid_hash(sid),))
         conn.commit()
+
+
+# ---------------------------------------------------------------- API tokens (docs/API.md)
+TOKEN_PREFIX = "bgpc_"      # so a token is recognisable in a config file or a leak scan
+TOKEN_MAX_PER_USER = 20
+TOKEN_NAME_MAX = 60
+_TOKEN_TOUCH_EVERY = 300    # "last used" is written at most every 5 minutes per token
+
+
+def clean_name(name):
+    return " ".join(str(name or "").split())[:TOKEN_NAME_MAX]
+
+
+def new_token(conn, username, name):
+    """A new API token for `username`, returned this once: only its SHA-256 is stored, like a session id.
+    ValueError (with the reason to show) for an empty name or an account at its limit."""
+    name = clean_name(name)
+    if not name:
+        raise ValueError("Give the token a name (what it's for).")
+    n = conn.execute("SELECT COUNT(*) c FROM api_tokens WHERE username=?", (username,)).fetchone()["c"]
+    if n >= TOKEN_MAX_PER_USER:
+        raise ValueError(f"An account can have {TOKEN_MAX_PER_USER} tokens at most. Revoke one first.")
+    tok = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    conn.execute("INSERT INTO api_tokens(hash, username, name, hint, created) VALUES(?,?,?,?,?)",
+                 (_sid_hash(tok), username, name, tok[:len(TOKEN_PREFIX) + 6], time.time()))
+    conn.commit()
+    return tok
+
+
+def token_user(conn, tok, ip=""):
+    """The row of a presented token (its username, name, ...), or None. Notes when and from where it was last used."""
+    if not isinstance(tok, str) or not tok.startswith(TOKEN_PREFIX) or not 20 <= len(tok) <= 200:
+        return None
+    r = conn.execute("SELECT * FROM api_tokens WHERE hash=?", (_sid_hash(tok),)).fetchone()
+    if r is None:
+        return None
+    now = time.time()
+    if (r["last_used"] or 0) < now - _TOKEN_TOUCH_EVERY:
+        conn.execute("UPDATE api_tokens SET last_used=?, last_ip=? WHERE id=?", (now, (ip or "")[:64], r["id"]))
+        conn.commit()
+    return r
+
+
+def list_tokens(conn, username):
+    return conn.execute("SELECT id, name, hint, created, last_used, last_ip FROM api_tokens WHERE username=? "
+                        "ORDER BY created DESC, id DESC", (username,)).fetchall()
+
+
+def token_counts(conn):
+    """{username: how many tokens}, for the Users page."""
+    return {r["username"]: r["c"] for r in conn.execute("SELECT username, COUNT(*) c FROM api_tokens GROUP BY username")}
+
+
+def revoke_token(conn, username, tid):
+    """Deletes one of `username`'s tokens; False if it had none with that id."""
+    n = conn.execute("DELETE FROM api_tokens WHERE id=? AND username=?", (tid, username)).rowcount
+    conn.commit()
+    return n > 0
+
+
+def revoke_tokens(conn, username):
+    """Deletes every token of an account (by its owner, or an admin from the Users page); returns how many."""
+    n = conn.execute("DELETE FROM api_tokens WHERE username=?", (username,)).rowcount
+    conn.commit()
+    return n
 
 
 def ensure_default_admin(conn):

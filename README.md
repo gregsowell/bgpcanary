@@ -46,6 +46,7 @@ networks.
   - one-off tests to any address.
 - **Evidence for providers:** every event page collects the timeline, upstream mix, raw AS paths, Route Views output and Atlas results. One click turns it into a plain-text report to attach to a ticket.
 - **Events replayed together:** tick several events and watch them one after another in the connectivity tree, with the quiet time between them cut out.
+- **A JSON API** for your own scripts and dashboards, with per-user tokens: the monitor's status, the events, and what a neighbouring network is to you ([docs/API.md](docs/API.md)).
 - **Multi-prefix and IPv6.** Viewer and admin roles. Everything configurable in the web UI.
 
 ## Screenshots
@@ -115,6 +116,7 @@ first starts.
 | [Containers](docs/DOCKER.md) | The Docker/Podman image: reverse proxies, settings, updates, backups |
 | [Upgrading](docs/UPGRADING.md) | Updates, backups, rolling back |
 | [Configuration](docs/CONFIGURATION.md) | Every setting, alerts, RIPE Atlas, the command line, where files live |
+| [API](docs/API.md) | The JSON API: tokens, status, events, neighbours, and the webhook payload |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common problems and how to fix them |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 | [Contributing](CONTRIBUTING.md) | Reporting bugs, suggesting features, sending changes |

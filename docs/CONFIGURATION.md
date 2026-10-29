@@ -178,6 +178,14 @@ your credits and Route Views' allowance, so the bottom of the Path finder page (
 them: everyone signed in (the default), admins only, or nobody. Looking paths up is always open to everyone
 signed in.
 
+## API tokens (Settings › API tokens)
+
+Your own scripts and dashboards can read bgpcanary through a small JSON API (`/api/v1/`): the monitor's status
+with each prefix's visibility and state, the events with the Events page's filters, and what a neighbouring
+network is to you. Any signed-in user creates tokens under **Settings › API tokens**; a token is shown once (only
+a hash is kept), can read what its owner can, and is sent as `Authorization: Bearer …`. Revoke tokens there, or
+as an admin on the Users page. Endpoints, examples and what's promised to stay the same: [API.md](API.md).
+
 ## The config file
 
 `/etc/bgpcanary/config.toml` holds the settings needed before the service starts:

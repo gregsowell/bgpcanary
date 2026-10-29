@@ -2,7 +2,8 @@
 
 What the installer and systemd do for a server install, this does inside the container:
 - first start: creates the config file next to the database, with a random secret key, and the initial 'admin'
-  account (its password goes to the container log and to <data>/initial-admin-password until it's changed);
+  account (its password goes to the container log unless BGPCANARY_LOG_INITIAL_PASSWORD=0, and to
+  <data>/initial-admin-password until it's changed);
 - before a new version first runs: backs up the database into <data>/backups (the newest 3 are kept);
 - runs the web app (uvicorn, one process). Settings that need a restart restart it in place, so the container
   keeps running whatever its restart policy is.
@@ -14,6 +15,7 @@ Environment (all optional; see docs/DOCKER.md):
   BGPCANARY_TRUSTED_PROXIES  addresses/networks of reverse proxies whose X-Forwarded-For/-Proto are believed
                              (default: the private networks; this machine itself always is)
   BGPCANARY_INSECURE_COOKIES=1  allow signing in over plain HTTP (for a quick test without a proxy)
+  BGPCANARY_LOG_INITIAL_PASSWORD=0  don't print the initial admin password to the container log
 """
 import ipaddress
 import json
@@ -169,9 +171,10 @@ def initial_admin(db_path):
                         "This file is only a record of the generated password: editing it does NOT change the password.\n"
                         "To set a new admin password: docker exec -it bgpcanary bgpcanary-admin useradd admin\n")
             bar = "=" * 72
-            print(f"\n{bar}\n bgpcanary: initial admin login\n   username: admin\n   password: {pw}\n"
-                  " You'll choose a new password when you first sign in.\n"
-                  f" (Until then it's also in {pw_file}.)\n{bar}\n", file=sys.stderr, flush=True)
+            if os.environ.get("BGPCANARY_LOG_INITIAL_PASSWORD") != "0":
+                print(f"\n{bar}\n bgpcanary: initial admin login\n   username: admin\n   password: {pw}\n"
+                      " You'll choose a new password when you first sign in.\n"
+                      f" (Until then it's also in {pw_file}.)\n{bar}\n", file=sys.stderr, flush=True)
         elif os.path.exists(pw_file):
             users = auth.list_users(conn)
             if users and not any(u["must_change"] for u in users):

@@ -17,6 +17,7 @@ jobs:
         run: |
           python -m compileall -q bgpcanary
           python -c "import bgpcanary.config, bgpcanary.db, bgpcanary.engine, bgpcanary.paths, bgpcanary.updates, bgpcanary.container"
+          python -m unittest discover -s tests -v
       - name: Templates compile
         run: |
           python - <<'EOF'

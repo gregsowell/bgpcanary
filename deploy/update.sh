@@ -37,6 +37,17 @@ done
 [ "$(id -u)" = 0 ] || [ "$MODE" = check ] || { echo "Run as root: sudo bgpcanary-update"; exit 1; }
 CUR=$(current)
 
+# Service management abstraction (systemd vs OpenRC)
+if command -v systemctl >/dev/null 2>&1; then
+  svc_stop() { systemctl stop bgpcanary; }
+  svc_start() { systemctl start bgpcanary; }
+  LOG_HINT="journalctl -u bgpcanary -n 50"
+else
+  svc_stop() { rc-service bgpcanary stop; }
+  svc_start() { rc-service bgpcanary start; }
+  LOG_HINT="cat /var/log/bgpcanary.err"
+fi
+
 # Backups live in a directory only root can write. The service account owns $DATA, so anything root did in
 # there (writing, chown, pruning) could be pointed at other files by a compromised service. Here the database
 # is read as the service user (so it can only ever yield what the service could read anyway) and root only
@@ -85,7 +96,7 @@ if [ "$MODE" = rollback ]; then
   echo "Rolling back from $CUR to $(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$APP/bgpcanary.old/__init__.py")"
   [ -n "$DB" ] && echo "and restoring the database saved before the update: $DB"
   read -r -p "Continue? [y/N] " a; [ "$a" = y ] || [ "$a" = Y ] || exit 1
-  systemctl stop bgpcanary
+  svc_stop
   mv "$APP/bgpcanary" "$APP/bgpcanary.rolledback.$(date +%s)"
   mv "$APP/bgpcanary.old" "$APP/bgpcanary"
   if [ -n "$DB" ]; then
@@ -95,8 +106,8 @@ if [ "$MODE" = rollback ]; then
     runuser -u bgpcanary -- sh -c 'umask 027; cat > "$1"' sh "$DATA/bgpcanary.db.restore" < "$DB"
     runuser -u bgpcanary -- mv -f "$DATA/bgpcanary.db.restore" "$DATA/bgpcanary.db"
   fi
-  systemctl start bgpcanary
-  v=$(healthy) && echo "Rolled back: bgpcanary $v is running." || { echo "The service didn't come back; see: journalctl -u bgpcanary -n 50"; exit 1; }
+  svc_start
+  v=$(healthy) && echo "Rolled back: bgpcanary $v is running." || { echo "The service didn't come back; see: $LOG_HINT"; exit 1; }
   exit 0
 fi
 
@@ -137,7 +148,7 @@ if v=$(healthy) && [ "$v" = "$NEW" ]; then
   echo "Updated: bgpcanary $CUR -> $NEW is running. (If something looks wrong: sudo bgpcanary-update --rollback)"
 else
   echo
-  echo "The new version didn't report healthy. Check: journalctl -u bgpcanary -n 50"
+  echo "The new version didn't report healthy. Check: $LOG_HINT"
   echo "To go back to $CUR: sudo bgpcanary-update --rollback"
   exit 1
 fi

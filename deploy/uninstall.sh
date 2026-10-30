@@ -12,16 +12,33 @@ PURGE=0; [ "${1:-}" = "--purge" ] && PURGE=1
 echo "This removes bgpcanary from this server."
 [ $PURGE = 1 ] && echo "--purge: the database, all history, backups, settings and certificate will be DELETED permanently."
 read -r -p "Continue? [y/N] " a; [ "$a" = y ] || [ "$a" = Y ] || exit 1
-systemctl disable -q --now bgpcanary 2>/dev/null || true
-rm -f /etc/systemd/system/bgpcanary.service /etc/nginx/conf.d/bgpcanary.conf
-systemctl daemon-reload
-systemctl reload nginx 2>/dev/null || true
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable -q --now bgpcanary 2>/dev/null || true
+  rm -f /etc/systemd/system/bgpcanary.service
+  systemctl daemon-reload
+  systemctl reload nginx 2>/dev/null || true
+elif command -v rc-service >/dev/null 2>&1; then
+  rc-service bgpcanary stop 2>/dev/null || true
+  rc-update del bgpcanary default 2>/dev/null || true
+  rm -f /etc/init.d/bgpcanary
+  rc-service nginx reload 2>/dev/null || true
+fi
+
+rm -f /etc/nginx/conf.d/bgpcanary.conf /etc/nginx/http.d/bgpcanary.conf
 rm -f /usr/bin/bgpcanary-admin /usr/bin/bgpcanary-update /usr/sbin/bgpcanary-uninstall
 rm -rf /opt/bgpcanary
+
 if [ $PURGE = 1 ]; then
-  rm -rf /var/lib/bgpcanary /var/backups/bgpcanary /etc/bgpcanary /etc/pki/tls/certs/bgpcanary.crt \
-    /etc/pki/tls/private/bgpcanary.key
-  userdel bgpcanary 2>/dev/null || true
+  rm -rf /var/lib/bgpcanary /var/backups/bgpcanary /etc/bgpcanary \
+    /etc/pki/tls/certs/bgpcanary.crt /etc/pki/tls/private/bgpcanary.key \
+    /etc/ssl/bgpcanary /etc/ssl/private/bgpcanary.key
+  if command -v userdel >/dev/null 2>&1; then
+    userdel bgpcanary 2>/dev/null || true
+  else
+    deluser bgpcanary 2>/dev/null || true
+    delgroup bgpcanary 2>/dev/null || true
+  fi
   echo "bgpcanary and all its data were removed."
 else
   echo "bgpcanary was removed. Your data, backups and settings are still in /var/lib/bgpcanary,"

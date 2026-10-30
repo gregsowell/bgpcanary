@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+
+name="bgpcanary"
+description="bgpcanary BGP visibility monitor"
+
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+
+export BGPCANARY_CONFIG="/etc/bgpcanary/config.toml"
+
+directory="/opt/bgpcanary"
+command="/opt/bgpcanary/venv/bin/uvicorn"
+command_args="bgpcanary.web:app --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log"
+command_user="bgpcanary:bgpcanary"
+output_log="/var/log/bgpcanary.log"
+error_log="/var/log/bgpcanary.err"
+umask=0027
+
+depend() {
+    need net
+    use dns logger nginx
+}
+
+start_pre() {
+    checkpath -d -m 0755 -o bgpcanary:bgpcanary /run/bgpcanary
+    checkpath -d -m 0750 -o bgpcanary:bgpcanary /var/lib/bgpcanary
+    checkpath -f -m 0644 -o bgpcanary:bgpcanary /var/log/bgpcanary.log
+    checkpath -f -m 0644 -o bgpcanary:bgpcanary /var/log/bgpcanary.err
+}

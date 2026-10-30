@@ -6,6 +6,9 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+- **HTTPX trust:** update certifi to 2026.10.23, which removes the compromised emSign ECC Root CA - G3 while retaining unaffected emSign roots.
+
 ## [1.7.0] - 2026-10-29
 
 ### Added

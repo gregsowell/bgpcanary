@@ -30,7 +30,10 @@ docker run -d --name bgpcanary --restart unless-stopped -p 8080:8080 -e BGPCANAR
 docker logs bgpcanary
 ```
 
-The log shows the initial admin password. Open `http://<host>:8080/`.
+The log shows the initial admin password. Open `http://<host>:8080/`. To keep it out of logs from the start,
+set `BGPCANARY_LOG_INITIAL_PASSWORD=0` in the container environment before its first start. Setting it later
+does not remove the password from earlier logs. It remains in the owner-only `initial-admin-password` file in
+the data volume until it is changed.
 
 Over plain HTTP, passwords and session cookies cross the network unencrypted. That's why signing in needs
 `BGPCANARY_INSECURE_COOKIES=1`. For real use, put it behind HTTPS as described below. To remove the trial
@@ -158,8 +161,9 @@ around the per-address login limit. The per-account limits still apply. To close
 
 ## First start
 
-1. Get the initial admin password from `docker logs bgpcanary`. Until you change it, it's also in the volume:
-   `docker exec bgpcanary cat /var/lib/bgpcanary/initial-admin-password`.
+1. Get the initial admin password from `docker logs bgpcanary`, unless you set
+   `BGPCANARY_LOG_INITIAL_PASSWORD=0` before first start. In either case, until you change it, the password is
+   also in the volume: `docker exec bgpcanary cat /var/lib/bgpcanary/initial-admin-password`.
 2. Open the site, sign in as **admin** and choose a new password.
 3. Enter your ASN and prefixes. bgpcanary restarts itself inside the container to apply them; the container keeps
    running. It then loads 90 days of history, usually in a few minutes, with a progress bar on every page. Live
@@ -176,6 +180,7 @@ All are optional. Everything else is set in the web UI, as on a server install.
 | `BGPCANARY_BASE_URL` | (none) | The address people use, e.g. `https://bgp.example.com`, for links in alerts. It's read only when the config file is first created. To change it later, use Settings › Alert channels. |
 | `BGPCANARY_TRUSTED_PROXIES` | the private ranges | Reverse proxies whose X-Forwarded-For and X-Forwarded-Proto headers are believed, besides the machine itself: addresses or networks, comma-separated. `none` means only the machine itself. See [above](#which-addresses-may-send-these-headers). |
 | `BGPCANARY_INSECURE_COOKIES` | off | `1` allows signing in over plain HTTP. Only for testing. |
+| `BGPCANARY_LOG_INITIAL_PASSWORD` | on | Set to `0` before first start to keep the initial admin password out of the container log. The owner-only password file remains available until the password is changed. |
 | `BGPCANARY_HOST`, `BGPCANARY_PORT` | `0.0.0.0`, `8080` | Where the app listens inside the container (useful with host networking). |
 | `BGPCANARY_CONFIG` | `/var/lib/bgpcanary/config.toml` | The config file. It's created on first start if it doesn't exist. Point this at your own file, mounted read-only, if you prefer. |
 | `TZ` | `UTC` | Time zone for the few local times the command line prints. Log lines are in UTC; the web UI uses your browser's time zone. |

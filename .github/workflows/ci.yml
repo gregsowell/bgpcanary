@@ -13,10 +13,13 @@ jobs:
           python-version: "3.11"   # the oldest Python bgpcanary supports (it needs tomllib)
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Install test runner
+        run: pip install pytest==9.2.0
       - name: Python compiles and imports
         run: |
           python -m compileall -q bgpcanary
           python -c "import bgpcanary.config, bgpcanary.db, bgpcanary.engine, bgpcanary.paths, bgpcanary.updates, bgpcanary.container"
+          python -m unittest discover -s tests -v
       - name: Templates compile
         run: |
           python - <<'EOF'
@@ -28,9 +31,7 @@ jobs:
           print("templates ok")
           EOF
       - name: Tests
-        run: |
-          pip install pytest==9.2.0
-          pytest -q
+        run: pytest -q
       - name: Shell scripts parse
         run: for f in deploy/*.sh deploy/docker/*.sh deploy/docker/bgpcanary-admin; do bash -n "$f"; done
       - name: Version is valid

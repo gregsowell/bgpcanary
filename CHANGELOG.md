@@ -6,6 +6,9 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Changed
+- **Container:** set `BGPCANARY_LOG_INITIAL_PASSWORD=0` to keep the initial admin password out of the log. The owner-only password file remains available until the password is changed.
+
 ## [1.7.0] - 2026-10-29
 
 ### Added

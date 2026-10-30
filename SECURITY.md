@@ -19,5 +19,6 @@ image (`docker compose pull && docker compose up -d`).
 - **Unprivileged service:** the app runs as an unprivileged `bgpcanary` user under systemd sandboxing (`NoNewPrivileges`, read-only system, private /tmp), behind nginx. It never needs root at run time; installing and updating are done on the server with sudo.
 - **Container image:** runs as an unprivileged user (uid 10001) with no Linux capabilities, and works on a read-only root filesystem. Images are built from the tagged source by GitHub Actions and carry a signed build provenance: `gh attestation verify oci://ghcr.io/gregsowell/bgpcanary:<version> --owner gregsowell`.
 - **Passwords:** hashed with scrypt; login attempts are throttled; the first admin password is random and must be changed at first login.
+- **API tokens:** 256-bit random values shown once and stored only as a SHA-256 hash; revocable one by one or per account; accepted only on the API (`/api/v1/`) in the `Authorization` header, never in a URL or a cookie; bad tokens are rate-limited per address.
 - **Secrets:** API keys and SMTP passwords are stored server-side and never shown back in the web UI.
 - **Outbound access only:** it only talks to the public data sources listed in the README, plus GitHub for the daily update check, which can be switched off. Nothing about your installation is sent anywhere.

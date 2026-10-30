@@ -62,7 +62,7 @@
     const tick = async () => {
       let d;
       try {
-        const r = await fetch("/api/status", { cache: "no-store" });
+        const r = await fetch("/api/loading", { cache: "no-store" });
         if (!r.ok) { setTimeout(tick, 15000); return; }
         d = await r.json();
       } catch (e) { setTimeout(tick, 5000); return; }   // e.g. restarting

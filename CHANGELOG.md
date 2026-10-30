@@ -9,6 +9,18 @@ anything, and major releases may need you to read the notes before upgrading.
 ### Changed
 - **Container:** set `BGPCANARY_LOG_INITIAL_PASSWORD=0` to keep the initial admin password out of the log. The owner-only password file remains available until the password is changed.
 
+## [1.7.0] - 2026-10-29
+
+### Added
+- **A JSON API for your own scripts and dashboards** (`/api/v1/`), read-only, with per-user tokens: the monitor's status with each prefix's visibility, state and neighbours and how many events are open; the events with the Events page's filters, a prefix or a time window; one event with the alerts sent for it and its text report; and a neighbouring network with what it is to you and the events about it. Tokens are created under **Settings › API tokens** (shown once; only a hash is kept), carry their owner's role, and can be revoked there or, by an admin, on the Users page. The shapes are a promise: within v1 a field is only ever added. Documented in [docs/API.md](docs/API.md).
+- **Tests** (`tests/`): the first automated tests, run by CI on every push. They hold the API's contract.
+
+### Fixed
+- **The tab icon and title follow the outage state again.** Since 1.3.1 the "not live yet" banner's poll had taken over the `/api/status` address that the once-a-minute check used, so a tab left open kept the plain icon and title when an outage began (and the alert ones after it ended) until the page was reloaded. The banner polls `/api/loading` now, and `/api/status` answers with the monitor's status and each prefix's summary, as before.
+
+### Changed
+- README: screenshots of the Path finder (the tree and the traceroute), BGP data (Paths and Changes), the Events page with its filters, an upstream-down event, several events replayed together and a neighbouring network's page; the connectivity tree screenshot now shows the "moved" and "reaches you another way" states.
+
 ## [1.6.3] - 2026-10-28
 
 ### Added
@@ -373,7 +385,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.6.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/gregsowell/bgpcanary/compare/v1.6.3...v1.7.0
 [1.6.3]: https://github.com/gregsowell/bgpcanary/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/gregsowell/bgpcanary/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/gregsowell/bgpcanary/compare/v1.6.0...v1.6.1

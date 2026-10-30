@@ -122,6 +122,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(username);
 
+-- API tokens (Settings › API tokens; docs/API.md). The token is shown once; only its SHA-256 is stored, as for
+-- sessions, so a copy of the database can't be used to call the API.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id INTEGER PRIMARY KEY,
+    hash TEXT NOT NULL UNIQUE,               -- sha256(token)
+    username TEXT NOT NULL,
+    name TEXT NOT NULL,                      -- what it's for, given by its owner
+    hint TEXT NOT NULL,                      -- the token's first characters, to tell tokens apart
+    created REAL NOT NULL,
+    last_used REAL,
+    last_ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(username);
+
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
     v TEXT

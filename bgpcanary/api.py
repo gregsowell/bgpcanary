@@ -3,7 +3,10 @@
 Read-only, used with a per-user token ("Authorization: Bearer bgpc_...": auth.py, web.user) or a signed-in browser's
 session. It answers from the pages' own helpers, but its shapes are a promise: within v1 a field is only ever added,
 never renamed or removed (tests/test_api.py holds the contract). The unversioned /api/... routes in web.py belong to
-the pages and may change in any release."""
+the pages and may change in any release.
+
+The payload functions (status_payload, events_payload, ...) build the answers; the routes add the sign-in check.
+The MCP server (mcp.py) serves the same payloads, so the two never drift apart."""
 import json
 import time
 
@@ -46,30 +49,17 @@ def events_json(conn, rows):
     return [event_json(conn, r, names) for r in rows]
 
 
-@router.get("/me")
-async def me(request: Request):
-    """Who you are to the API: the account, its role, and whether a token or the browser's session signed you in."""
-    u = web.user(request)
-    tok = getattr(request.state, "token", None)
-    return {"user": u, "role": request.state.role, "auth": "token" if tok else "session", "token": tok}
-
-
-@router.get("/status")
-async def status(request: Request):
-    """The monitor right now: live or not, and each prefix's visibility, state and neighbours (the dashboard's
-    table), with how many warning or critical events are open."""
-    web.user(request)
+# ------------------------------------------------------------------------------------------------ the payloads
+def status_payload(conn):
+    """The monitor right now: live or not, each prefix's visibility, state and neighbours (the dashboard's table),
+    and how many warning or critical events are open."""
     st = web.svc.engine.status
-    conn = web.rconn()
-    try:
-        summ = web.prefix_summary(conn)
-        asns = set(web.cfg.expected_upstreams)
-        for p in summ:
-            asns |= {a for a, _ in p["upstreams"]} | {a for g in p["peers"] for a, _ in g["peers"]} | set(p["missing"])
-        nm = web.names(conn, asns)
-        open_events = conn.execute("SELECT COUNT(*) c FROM events WHERE end_ts IS NULL AND severity!='info'").fetchone()["c"]
-    finally:
-        conn.close()
+    summ = web.prefix_summary(conn)
+    asns = set(web.cfg.expected_upstreams)
+    for p in summ:
+        asns |= {a for a, _ in p["upstreams"]} | {a for g in p["peers"] for a, _ in g["peers"]} | set(p["missing"])
+    nm = web.names(conn, asns)
+    open_events = conn.execute("SELECT COUNT(*) c FROM events WHERE end_ts IS NULL AND severity!='info'").fetchone()["c"]
     phase = st.get("phase") or ""
     return {"version": __version__, "phase": phase, "live": phase.startswith("live"),
             "ris_connected": bool(st.get("ws_connected")), "last_message": st.get("last_msg"),
@@ -84,13 +74,11 @@ async def status(request: Request):
                           "missing": [{"asn": a, "name": nm.get(a, "")} for a in p["missing"]]} for p in summ]}
 
 
-@router.get("/events")
-async def events(request: Request, state: str = "", kind: str = "", severity: str = "", prefix: str = "",
-                 since: float = None, until: float = None, info: int = 0, limit: int = 100, offset: int = 0):
-    """The events, newest first, with the Events page's filters: state (open | closed), kind, severity, and info=1
-    to include the info ones (left out unless asked for, as on the page); plus prefix, and since / until (unix
-    seconds) for the events going on at some point in that window."""
-    web.user(request)
+def events_payload(conn, state="", kind="", severity="", prefix="", since=None, until=None, info=0, limit=100,
+                   offset=0):
+    """The events, newest first, with the Events page's filters: state (open | closed), kind, severity, and info=1 to
+    include the info ones (left out unless asked for, as on the page); plus prefix, and since / until (unix seconds)
+    for the events going on at some point in that window. HTTPException(400) for a bad filter."""
     if state not in ("", "open", "closed"):
         raise HTTPException(400, "state: open or closed")
     if severity not in ("",) + SEVERITIES:
@@ -100,7 +88,7 @@ async def events(request: Request, state: str = "", kind: str = "", severity: st
             prefix = config.normalize_prefix(prefix)
         except ValueError:
             raise HTTPException(400, "prefix: not a prefix") from None
-    limit, offset = max(1, min(limit, LIMIT_MAX)), max(0, offset)
+    limit, offset = max(1, min(int(limit), LIMIT_MAX)), max(0, int(offset))
     where, args = [], []
     if kind:
         where.append("kind=?")
@@ -122,34 +110,74 @@ async def events(request: Request, state: str = "", kind: str = "", severity: st
         where.append("start_ts <= ?")
         args.append(until)
     w = ("WHERE " + " AND ".join(where)) if where else ""
-    conn = web.rconn()
-    try:
-        total = conn.execute(f"SELECT COUNT(*) c FROM events {w}", args).fetchone()["c"]
-        rows = conn.execute(f"SELECT * FROM events {w} ORDER BY start_ts DESC, id DESC LIMIT ? OFFSET ?",
-                            args + [limit, offset]).fetchall()
-        out = events_json(conn, rows)
-    finally:
-        conn.close()
-    return {"total": total, "limit": limit, "offset": offset, "events": out}
+    total = conn.execute(f"SELECT COUNT(*) c FROM events {w}", args).fetchone()["c"]
+    rows = conn.execute(f"SELECT * FROM events {w} ORDER BY start_ts DESC, id DESC LIMIT ? OFFSET ?",
+                        args + [limit, offset]).fetchall()
+    return {"total": total, "limit": limit, "offset": offset, "events": events_json(conn, rows)}
 
 
-@router.get("/events/{eid}")
-async def event(request: Request, eid: int):
-    """One event, with the alerts sent for it and where its text report is."""
-    web.user(request)
-    conn = web.rconn()
-    try:
-        ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
-        if not ev:
-            raise HTTPException(404, "no such event")
-        d = event_json(conn, ev)
-        sent = conn.execute("SELECT ts, channel, ok, error FROM alert_log WHERE event_id=? ORDER BY ts", (eid,)).fetchall()
-    finally:
-        conn.close()
+def event_payload(conn, eid):
+    """One event, with the alerts sent for it and where its text report is. HTTPException(404) when unknown."""
+    ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
+    if not ev:
+        raise HTTPException(404, "no such event")
+    d = event_json(conn, ev)
+    sent = conn.execute("SELECT ts, channel, ok, error FROM alert_log WHERE event_id=? ORDER BY ts", (eid,)).fetchall()
     d["alerts"] = [{"ts": r["ts"], "channel": r["channel"], "ok": bool(r["ok"]),
                     "error": alerts.mask_urls(r["error"]) if r["error"] else None} for r in sent]
     d["report_url"] = link(f"/api/v1/events/{eid}/report")
     return d
+
+
+def neighbour_payload(conn, asn):
+    """A neighbouring network: what it is to you (transit, peer, exchange_peer, or null for one you haven't filed),
+    how many RIS peers reach you through it right now, and the events about it."""
+    if not 0 < asn < 2 ** 32:
+        raise HTTPException(404, "no such ASN")
+    nb = web.neighbour_info(conn, asn)
+    evs = events_json(conn, web.neighbour_events(conn, asn))
+    return {"asn": asn, "name": nb["name"], "role": ROLE.get(nb["role"]), "exchange": nb["exchange"],
+            "paths_now": web.neighbour_paths_now(asn), "events": evs}
+
+
+# ------------------------------------------------------------------------------------------------ the routes
+@router.get("/me")
+async def me(request: Request):
+    """Who you are to the API: the account, its role, and whether a token or the browser's session signed you in."""
+    u = web.user(request)
+    tok = getattr(request.state, "token", None)
+    return {"user": u, "role": request.state.role, "auth": "token" if tok else "session", "token": tok}
+
+
+@router.get("/status")
+async def status(request: Request):
+    web.user(request)
+    conn = web.rconn()
+    try:
+        return status_payload(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/events")
+async def events(request: Request, state: str = "", kind: str = "", severity: str = "", prefix: str = "",
+                 since: float = None, until: float = None, info: int = 0, limit: int = 100, offset: int = 0):
+    web.user(request)
+    conn = web.rconn()
+    try:
+        return events_payload(conn, state, kind, severity, prefix, since, until, info, limit, offset)
+    finally:
+        conn.close()
+
+
+@router.get("/events/{eid}")
+async def event(request: Request, eid: int):
+    web.user(request)
+    conn = web.rconn()
+    try:
+        return event_payload(conn, eid)
+    finally:
+        conn.close()
 
 
 @router.get("/events/{eid}/report")
@@ -164,19 +192,12 @@ async def event_report(request: Request, eid: int):
 
 @router.get("/neighbours/{asn}")
 async def neighbour(request: Request, asn: int):
-    """A neighbouring network: what it is to you (transit, peer, exchange_peer, or null for one you haven't filed),
-    how many RIS peers reach you through it right now, and the events about it."""
     web.user(request)
-    if not 0 < asn < 2 ** 32:
-        raise HTTPException(404, "no such ASN")
     conn = web.rconn()
     try:
-        nb = web.neighbour_info(conn, asn)
-        evs = events_json(conn, web.neighbour_events(conn, asn))
+        return neighbour_payload(conn, asn)
     finally:
         conn.close()
-    return {"asn": asn, "name": nb["name"], "role": ROLE.get(nb["role"]), "exchange": nb["exchange"],
-            "paths_now": web.neighbour_paths_now(asn), "events": evs}
 
 
 # Last, on purpose: web.py imports this module at its own end to include the router, so each finds the other

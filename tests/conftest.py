@@ -121,9 +121,12 @@ def viewer_client(web):
 
 @pytest.fixture
 def token(web):
-    """A fresh token of alice's (an admin)."""
+    """A fresh token of alice's (an admin), revoked again afterwards (an account may hold 20 at most)."""
     from bgpcanary import auth
-    return auth.new_token(web.svc.aconn, "alice", "test")
+    tok = auth.new_token(web.svc.aconn, "alice", "test")
+    yield tok
+    web.svc.aconn.execute("DELETE FROM api_tokens WHERE hash=?", (auth._sid_hash(tok),))
+    web.svc.aconn.commit()
 
 
 def bearer(tok):

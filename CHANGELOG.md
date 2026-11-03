@@ -6,6 +6,11 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-03
+
+### Added
+- **A built-in MCP server** (`/mcp`), so an AI assistant (Claude Code, Cursor, VS Code, Claude Desktop through a bridge, any MCP client that sends a header) can read your bgpcanary and answer "is anything wrong?", "what happened last night?" or "what is this network to me?". Off until an admin turns it on under **Settings › MCP server**; every user connects with their own API token, and it's read-only: the status, the events, one event with its report, a neighbouring network, a connection check. No new dependencies: it speaks the protocol's HTTP transport itself. Setup, the tools and troubleshooting: [docs/MCP.md](docs/MCP.md).
+
 ## [1.7.0] - 2026-10-29
 
 ### Added
@@ -382,7 +387,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/gregsowell/bgpcanary/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/gregsowell/bgpcanary/compare/v1.6.3...v1.7.0
 [1.6.3]: https://github.com/gregsowell/bgpcanary/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/gregsowell/bgpcanary/compare/v1.6.1...v1.6.2

@@ -35,7 +35,8 @@ pytest -q
 The tests run the web app in-process on a temporary database, without network access. `tests/test_api.py` holds
 the API's contract: a field renamed or removed under `/api/v1/` fails it, on purpose (see
 [docs/API.md](docs/API.md), "What's promised"). When you add a field, add it to the expected set there and to the
-documentation. CI runs the same tests on every push.
+documentation. CI runs the same tests on every push. The MCP server's interoperability test needs the MCP SDK
+as well (`pip install "mcp>=2,<3"`); without it, that one test is skipped.
 
 ## Licensing of contributions
 

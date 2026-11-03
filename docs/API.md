@@ -50,7 +50,7 @@ The test suite holds this contract (`tests/test_api.py`).
 
 ### `GET /healthz` (no token)
 
-Is bgpcanary up: `{"ok": true, "version": "1.7.0", "started": 1761782400.1, "phase": "live", "configured": true}`.
+Is bgpcanary up: `{"ok": true, "version": "1.7.0", "started": 1793277600.1, "phase": "live", "configured": true}`.
 `configured` is false until an ASN and a prefix are set. The container's health check and `bgpcanary-update` use
 it.
 
@@ -69,7 +69,7 @@ The monitor right now: the dashboard's table.
   "phase": "live",
   "live": true,
   "ris_connected": true,
-  "last_message": 1761782400.5,
+  "last_message": 1793277600.5,
   "asn": 64500,
   "expected_upstreams": [{"asn": 64496, "name": "UPSTREAM-ONE"}, {"asn": 64497, "name": "UPSTREAM-TWO"}],
   "open_events": 1,
@@ -125,7 +125,7 @@ The events, newest first, with the Events page's filters:
       "kind_name": "Upstream down",
       "severity": "warning",
       "prefix": "192.0.2.0/24",
-      "start_ts": 1761780000.0,
+      "start_ts": 1793275200.0,
       "end_ts": null,
       "open": true,
       "title": "Upstream AS64497 (UPSTREAM-TWO) down: carrying 2 of its usual 120 paths",
@@ -151,7 +151,7 @@ part of the promise, see above).
 
 One event, as above, plus:
 
-- `alerts`: what was sent for it, `[{"ts": 1761780060.2, "channel": "email", "ok": true, "error": null}, …]`
+- `alerts`: what was sent for it, `[{"ts": 1793275260.2, "channel": "email", "ok": true, "error": null}, …]`
   (`channel` is `email` or `webhook:<name>`);
 - `report_url`: where its text report is.
 
@@ -212,6 +212,8 @@ for p in status["prefixes"]:
     print(p["prefix"], p["state"], p["visible"], "of", p["baseline"])
 ```
 
+An AI assistant: the built-in MCP server (`/mcp`) takes the same tokens and serves the same payloads ([MCP.md](MCP.md)).
+
 A Grafana panel: the Infinity data source (or any JSON data source) reads `/api/v1/status` with the header above;
 `$.prefixes[*].pct` is one gauge per prefix, `$.open_events` a stat.
 
@@ -229,7 +231,7 @@ JSON to any URL, when an event opens, escalates, or ends:
   "link": "https://bgp.example.com/events/412",
   "event": {
     "id": 412, "kind": "upstream_down", "severity": "warning", "prefix": "192.0.2.0/24",
-    "start_ts": 1761780000.0, "end_ts": null, "title": "Upstream AS64497 (UPSTREAM-TWO) down: carrying 2 of its usual 120 paths",
+    "start_ts": 1793275200.0, "end_ts": null, "title": "Upstream AS64497 (UPSTREAM-TWO) down: carrying 2 of its usual 120 paths",
     "min_visible": 196, "baseline": 320.0
   }
 }

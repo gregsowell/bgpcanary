@@ -90,6 +90,14 @@
     <div class="card-sum">{{ n_tokens }} token{{ 's' if n_tokens != 1 }} for <strong>{{ user }}</strong></div>
     <span class="card-open">Manage →</span>
   </a>
+
+  <a class="card" href="/settings/mcp">
+    <div class="card-head"><span class="card-title">MCP server</span>
+      {% if mcp_on %}<span class="badge b-ok">on</span>{% else %}<span class="badge b-info">off</span>{% endif %}</div>
+    <p class="card-desc">Let an AI assistant (Claude Code, Cursor, VS Code, ...) read your bgpcanary with an API token: what's wrong, what happened, what a network is to you.</p>
+    <div class="card-sum">{% if mcp_on %}Serving at <span class="mono">{{ cfg.base_url }}/mcp</span>{% else %}<span class="muted">Off.{% if is_admin %} Turn it on and connect an assistant.{% else %} An admin can turn it on.{% endif %}</span>{% endif %}</div>
+    <span class="card-open">{{ 'Open' if mcp_on else 'Set up' }} →</span>
+  </a>
 </div>
 
 {% if is_admin %}

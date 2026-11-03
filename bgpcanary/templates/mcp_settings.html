@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}MCP server · {{ cfg.site_name }}{% endblock %}
+{% block content %}
+<h1>MCP server</h1>
+<p class="muted">Let an AI assistant read your bgpcanary: ask it what's wrong, what happened last night, or what a network is to you, and it answers from the same data the pages show. It can only read; every user connects with their own <a href="/account/tokens">API token</a>.</p>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+<div class="grid g2">
+  <div class="panel">
+    <h2>Status</h2>
+    <p>The MCP server is {% if on %}<span class="badge b-ok">on</span> at <code>{{ base }}/mcp</code>{% else %}<span class="badge b-info">off</span>{% endif %}.</p>
+    {% if is_admin %}
+    <form method="post" action="/settings/mcp">
+      <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if on }}> Serve the MCP endpoint at <code>/mcp</code></label>
+      <p><button class="primary" type="submit">Save</button></p>
+    </form>
+    <p class="muted" style="font-size:13px">Off, the address answers 404 to everyone. On, it answers only requests that carry a valid API token; the browser's sign-in doesn't count there.</p>
+    {% else %}
+    <p class="muted" style="font-size:13px">An admin turns it on or off here.</p>
+    {% endif %}
+    <h2 style="margin-top:20px">What the assistant can do</h2>
+    <dl class="kv">
+      {% for t in tools %}<dt><code>{{ t.name }}</code></dt><dd>{{ t.title.split(': ', 1)[1] if ': ' in t.title else t.title }}</dd>{% endfor %}
+    </dl>
+    <p class="muted" style="font-size:13px">All read-only. It can't change settings, file a neighbour or start checks. The assistant is told what the fields mean (visibility, baseline, the states, the event kinds), so it answers in plain language.</p>
+  </div>
+  <div class="panel">
+    <h2>Connect an assistant</h2>
+    <p>Create a token under <a href="/account/tokens">Settings › API tokens</a>, then give the assistant the address and the token as a header:</p>
+    <p><strong>Claude Code</strong></p>
+    <pre>claude mcp add --transport http bgpcanary {{ base }}/mcp --header "Authorization: Bearer bgpc_…"</pre>
+    <p><strong>Cursor, VS Code, Windsurf</strong> and other clients with a JSON config:</p>
+    <pre>{
+  "mcpServers": {
+    "bgpcanary": {
+      "url": "{{ base }}/mcp",
+      "headers": { "Authorization": "Bearer bgpc_…" }
+    }
+  }
+}</pre>
+    <p><strong>Claude Desktop</strong> needs a bridge, since it only starts local servers: <a href="https://github.com/geelen/mcp-remote">mcp-remote</a> (needs Node.js).</p>
+    <pre>{
+  "mcpServers": {
+    "bgpcanary": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "{{ base }}/mcp", "--header", "Authorization:${AUTH}"],
+      "env": { "AUTH": "Bearer bgpc_…" }
+    }
+  }
+}</pre>
+    <p class="muted" style="font-size:12px">The full guide, with troubleshooting: <a href="https://github.com/{{ repo }}/blob/main/docs/MCP.md">docs/MCP.md</a>.</p>
+  </div>
+</div>
+{% endblock %}

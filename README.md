@@ -47,6 +47,7 @@ networks.
 - **Evidence for providers:** every event page collects the timeline, upstream mix, raw AS paths, Route Views output and Atlas results. One click turns it into a plain-text report to attach to a ticket.
 - **Events replayed together:** tick several events and watch them one after another in the connectivity tree, with the quiet time between them cut out.
 - **A JSON API** for your own scripts and dashboards, with per-user tokens: the monitor's status, the events, and what a neighbouring network is to you ([docs/API.md](docs/API.md)).
+- **A built-in MCP server**, off until you turn it on, so an AI assistant (Claude Code, Cursor, VS Code, Claude Desktop) can ask your bgpcanary what's wrong, what happened and what a network is to you, read-only ([docs/MCP.md](docs/MCP.md)).
 - **Multi-prefix and IPv6.** Viewer and admin roles. Everything configurable in the web UI.
 
 ## Screenshots
@@ -117,6 +118,7 @@ first starts.
 | [Upgrading](docs/UPGRADING.md) | Updates, backups, rolling back |
 | [Configuration](docs/CONFIGURATION.md) | Every setting, alerts, RIPE Atlas, the command line, where files live |
 | [API](docs/API.md) | The JSON API: tokens, status, events, neighbours, and the webhook payload |
+| [MCP server](docs/MCP.md) | Let an AI assistant (Claude Code, Cursor, VS Code, Claude Desktop, ...) read your bgpcanary |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common problems and how to fix them |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 | [Contributing](CONTRIBUTING.md) | Reporting bugs, suggesting features, sending changes |

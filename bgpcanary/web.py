@@ -189,24 +189,30 @@ SETUP_PATHS = ("/settings/monitor", "/restarting", "/account/password", "/settin
                "/settings/alerts")
 
 
+def is_api(request):
+    """The JSON surfaces, whose errors are JSON too: the API (docs/API.md) and the MCP server (docs/MCP.md)."""
+    return request.url.path.startswith("/api/") or request.url.path == MCP_PATH
+
+
 @app.exception_handler(NeedLogin)
 async def _need_login(request, exc):
-    if request.url.path.startswith("/api/"):
-        return JSONResponse({"error": "login required"}, status_code=401)
+    if is_api(request):
+        return JSONResponse({"error": "login required"}, status_code=401,
+                            headers={"WWW-Authenticate": 'Bearer realm="bgpcanary"'})
     here = request.url.path + (f"?{request.url.query}" if request.url.query else "")   # (a shared link keeps its query)
     return RedirectResponse(f"/login?next={quote(here, safe='/')}", status_code=303)
 
 
 @app.exception_handler(MustChangePassword)
 async def _must_change(request, exc):
-    if request.url.path.startswith("/api/"):
+    if is_api(request):
         return JSONResponse({"error": "password change required"}, status_code=403)
     return RedirectResponse("/account/password", status_code=303)
 
 
 @app.exception_handler(NeedSetup)
 async def _need_setup(request, exc):
-    if request.url.path.startswith("/api/"):
+    if is_api(request):
         return JSONResponse({"error": "not configured yet"}, status_code=503)
     if getattr(request.state, "role", None) == "admin":
         return RedirectResponse("/settings/monitor", status_code=303)
@@ -215,7 +221,7 @@ async def _need_setup(request, exc):
 
 @app.exception_handler(AdminOnly)
 async def _admin_only(request, exc):
-    if request.url.path.startswith("/api/"):
+    if is_api(request):
         return JSONResponse({"error": "admin role required"}, status_code=403)
     resp = render(request, "denied.html")
     resp.status_code = 403
@@ -225,7 +231,7 @@ async def _admin_only(request, exc):
 @app.exception_handler(StarletteHTTPException)
 async def _http_error(request, exc):
     """On the API every error is JSON, {"error": "..."} with the status; the pages keep FastAPI's usual answers."""
-    if request.url.path.startswith("/api/"):
+    if is_api(request):
         return JSONResponse({"error": exc.detail if isinstance(exc.detail, str) else "error"},
                             status_code=exc.status_code, headers=getattr(exc, "headers", None))
     return await http_exception_handler(request, exc)
@@ -234,7 +240,7 @@ async def _http_error(request, exc):
 @app.exception_handler(RequestValidationError)
 async def _bad_request(request, exc):
     """A parameter of the wrong kind (limit=ten): on the API a 400 naming it, instead of FastAPI's 422 report."""
-    if request.url.path.startswith("/api/"):
+    if is_api(request):
         e = (exc.errors() or [{}])[0]
         where = ".".join(str(x) for x in e.get("loc", ()) if x not in ("query", "path", "body"))
         msg = e.get("msg", "invalid")
@@ -270,7 +276,14 @@ def user(request: Request, allow_must_change=False):
     return u
 
 
-API_PATH = "/api/v1/"   # the documented API (docs/API.md, api.py): the only place an API token is accepted
+API_PATH = "/api/v1/"   # the documented API (docs/API.md, api.py) and...
+MCP_PATH = "/mcp"       # ...the MCP server (docs/MCP.md, mcp.py): the only places an API token is accepted
+
+
+def takes_tokens(path):
+    return path.startswith(API_PATH) or path == MCP_PATH
+
+
 # Bad tokens per address: 20 in 15 minutes, then 429 for the rest of the window. Both of the throttle's keys are the
 # address (the account side of a login doesn't apply: a token names no account until it's valid).
 token_throttle = auth.Throttle(limit=20, window=900, device_limit=20)
@@ -281,7 +294,7 @@ def api_token(request):
     and off the API, where the header is ignored. A token that isn't one is refused outright: a script has no
     cookie to fall back on, and a wrong token shouldn't quietly turn into a login page."""
     h = request.headers.get("authorization", "")
-    if not request.url.path.startswith(API_PATH) or h[:7].lower() != "bearer ":
+    if not takes_tokens(request.url.path) or h[:7].lower() != "bearer ":
         return None
     ip = client_ip(request)
     if not token_throttle.attempt(ip, "", device=ip):
@@ -294,6 +307,13 @@ def api_token(request):
         raise NeedLogin()
     token_throttle.success(ip, "", device=ip)
     return tok
+
+
+def mcp_user(request):
+    """The MCP server's caller: an API token, never the browser's session (a page must not be able to drive it)."""
+    if request.headers.get("authorization", "")[:7].lower() != "bearer ":
+        raise NeedLogin()
+    return user(request)
 
 
 def admin(request: Request):
@@ -1747,7 +1767,7 @@ async def settings_page(request: Request, msg: str = ""):
                   alert_types_total=len(config.ALERT_TYPES),
                   n_admins=sum(1 for u in auth.list_users(svc.aconn) if u["role"] == "admin"),
                   n_viewers=sum(1 for u in auth.list_users(svc.aconn) if u["role"] == "viewer"),
-                  n_tokens=len(auth.list_tokens(svc.aconn, me)))
+                  n_tokens=len(auth.list_tokens(svc.aconn, me)), mcp_on=mcp.enabled(svc.aconn))
 
 
 @app.get("/registry", response_class=HTMLResponse)
@@ -2438,6 +2458,24 @@ async def account_tokens_revoke_all(request: Request):
     return RedirectResponse("/account/tokens?msg=" + quote(f"Revoked {n} token{'s' if n != 1 else ''}"), status_code=303)
 
 
+# ---------------------------------------------------------------------- the MCP server (docs/MCP.md)
+@app.get("/settings/mcp", response_class=HTMLResponse)
+async def mcp_settings(request: Request, msg: str = ""):
+    user(request)
+    return render(request, "mcp_settings.html", on=mcp.enabled(svc.aconn), base=_site_base(request), msg=msg,
+                  tools=mcp.TOOLS)
+
+
+@app.post("/settings/mcp")
+async def mcp_settings_save(request: Request, enabled: str = Form("")):
+    me = admin(request)
+    on = bool(enabled)
+    mcp.set_enabled(svc.aconn, on)
+    log.info("user %s turned the MCP server %s", me, "on" if on else "off")
+    return RedirectResponse("/settings/mcp?msg=" + quote("The MCP server is " + ("on" if on else "off")),
+                            status_code=303)
+
+
 # ---------------------------------------------------------------------- user management (admins)
 @app.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request, msg: str = "", err: int = 0):
@@ -2899,8 +2937,9 @@ async def atlas_settings_save(request: Request):
     return RedirectResponse(f"/settings/atlas?msg={quote(msg)}" + ("&err=1" if err else ""), status_code=303)
 
 
-# The documented JSON API (/api/v1/, docs/API.md) is api.py, which uses this module's helpers: included last, once
-# everything it needs exists.
-from . import api  # noqa: E402
+# The documented JSON API (/api/v1/, docs/API.md) is api.py and the MCP server (/mcp, docs/MCP.md) is mcp.py; both
+# use this module's helpers, so they're included last, once everything they need exists.
+from . import api, mcp  # noqa: E402
 
 app.include_router(api.router)
+app.include_router(mcp.router)

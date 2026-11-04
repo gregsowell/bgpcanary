@@ -85,8 +85,10 @@ echo "== bgpcanary-uninstall --purge"
 echo y | bgpcanary-uninstall --purge > "$J/uninstall.log" 2>&1 || { cat "$J/uninstall.log"; fail "bgpcanary-uninstall --purge"; }
 check "purge: program, data, settings, user and service are gone" \
   '! [ -e /opt/bgpcanary ] && ! [ -e /var/lib/bgpcanary ] && ! [ -e /etc/bgpcanary ] && ! id bgpcanary >/dev/null 2>&1 && ! running'
-check "purge: nginx no longer serves it" \
-  '! [ -e /etc/nginx/conf.d/bgpcanary.conf ] && ! [ -e /etc/nginx/http.d/bgpcanary.conf ] && [ "$(http http://127.0.0.1/login)" != "301 https://127.0.0.1/login" ]'
+gone() {   # nginx reloads gracefully: an old worker may answer for a moment after the uninstall's reload
+  local _; for _ in $(seq 10); do [ "$(http http://127.0.0.1/login)" != "301 https://127.0.0.1/login" ] && return 0; sleep 1; done; return 1
+}
+check "purge: nginx no longer serves it" '! [ -e /etc/nginx/conf.d/bgpcanary.conf ] && ! [ -e /etc/nginx/http.d/bgpcanary.conf ] && gone'
 if [ "$INIT" = openrc ]; then
   check "purge: the stock site is back; the service, log and logrotate entries are gone" \
     '[ -f /etc/nginx/http.d/default.conf ] && ! grep -q "^# bgpcanary" /etc/nginx/http.d/default.conf && ! [ -e /etc/init.d/bgpcanary ] && ! [ -e /etc/logrotate.d/bgpcanary ] && ! [ -e /var/log/bgpcanary ]'

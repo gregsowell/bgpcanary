@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# bgpcanary under OpenRC (Alpine Linux); deploy/bgpcanary.service is the systemd version. The two must start the
+# same command: CI compares this command line with the unit's ExecStart. supervise-daemon restarts the app when
+# it dies, like Restart=always, and drops to the service user. There is no journal here, so both output streams
+# go to one file, which /etc/logrotate.d/bgpcanary (deploy/bgpcanary.logrotate) turns over.
+description="bgpcanary BGP visibility monitor"
+
+supervisor=supervise-daemon
+command=/opt/bgpcanary/venv/bin/uvicorn
+command_args="bgpcanary.web:app --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log"
+command_user="bgpcanary:bgpcanary"
+directory=/opt/bgpcanary
+export BGPCANARY_CONFIG=/etc/bgpcanary/config.toml
+umask=0027
+no_new_privs=yes
+respawn_delay=5
+respawn_max=0           # (0: never give up)
+output_log=/var/log/bgpcanary/bgpcanary.log
+error_log=/var/log/bgpcanary/bgpcanary.log
+
+depend() {
+	need net
+	use dns logger
+}
+
+start_pre() {
+	checkpath -d -m 0750 -o bgpcanary:bgpcanary /var/log/bgpcanary
+	checkpath -f -m 0640 -o bgpcanary:bgpcanary /var/log/bgpcanary/bgpcanary.log
+}

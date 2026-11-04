@@ -34,8 +34,14 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1 (see --help)"; exit 1 ;;
   esac
 done
-[ "$(id -u)" = 0 ] || [ "$MODE" = check ] || { echo "Run as root: sudo bgpcanary-update"; exit 1; }
+SUDO=sudo; if ! command -v sudo >/dev/null && command -v doas >/dev/null; then SUDO=doas; fi   # (Alpine's default)
+[ "$(id -u)" = 0 ] || [ "$MODE" = check ] || { echo "Run as root: $SUDO bgpcanary-update"; exit 1; }
 CUR=$(current)
+if [ -d /run/systemd/system ]; then
+  svc() { systemctl "$1" bgpcanary; }; LOG="journalctl -u bgpcanary -n 50"
+else   # OpenRC (Alpine)
+  svc() { rc-service bgpcanary "$1"; }; LOG="tail -n 50 /var/log/bgpcanary/bgpcanary.log"
+fi
 
 # Backups live in a directory only root can write. The service account owns $DATA, so anything root did in
 # there (writing, chown, pruning) could be pointed at other files by a compromised service. Here the database
@@ -85,7 +91,7 @@ if [ "$MODE" = rollback ]; then
   echo "Rolling back from $CUR to $(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$APP/bgpcanary.old/__init__.py")"
   [ -n "$DB" ] && echo "and restoring the database saved before the update: $DB"
   read -r -p "Continue? [y/N] " a; [ "$a" = y ] || [ "$a" = Y ] || exit 1
-  systemctl stop bgpcanary
+  svc stop
   mv "$APP/bgpcanary" "$APP/bgpcanary.rolledback.$(date +%s)"
   mv "$APP/bgpcanary.old" "$APP/bgpcanary"
   if [ -n "$DB" ]; then
@@ -95,8 +101,8 @@ if [ "$MODE" = rollback ]; then
     runuser -u bgpcanary -- sh -c 'umask 027; cat > "$1"' sh "$DATA/bgpcanary.db.restore" < "$DB"
     runuser -u bgpcanary -- mv -f "$DATA/bgpcanary.db.restore" "$DATA/bgpcanary.db"
   fi
-  systemctl start bgpcanary
-  v=$(healthy) && echo "Rolled back: bgpcanary $v is running." || { echo "The service didn't come back; see: journalctl -u bgpcanary -n 50"; exit 1; }
+  svc start
+  v=$(healthy) && echo "Rolled back: bgpcanary $v is running." || { echo "The service didn't come back; see: $LOG"; exit 1; }
   exit 0
 fi
 
@@ -134,10 +140,10 @@ echo "==> installing bgpcanary $NEW (was $CUR)"
 bash "$SRC/deploy/install.sh"
 if v=$(healthy) && [ "$v" = "$NEW" ]; then
   echo
-  echo "Updated: bgpcanary $CUR -> $NEW is running. (If something looks wrong: sudo bgpcanary-update --rollback)"
+  echo "Updated: bgpcanary $CUR -> $NEW is running. (If something looks wrong: $SUDO bgpcanary-update --rollback)"
 else
   echo
-  echo "The new version didn't report healthy. Check: journalctl -u bgpcanary -n 50"
-  echo "To go back to $CUR: sudo bgpcanary-update --rollback"
+  echo "The new version didn't report healthy. Check: $LOG"
+  echo "To go back to $CUR: $SUDO bgpcanary-update --rollback"
   exit 1
 fi

@@ -41,6 +41,9 @@ container image, and admins see an "update available" badge within a day.
 3. **Test on a real server.** Use a test VM, not production:
    - `deploy/push.sh user@testhost` installs your working tree there;
    - also test the upgrade path: install the *previous* release, then `sudo bgpcanary-update --from /path/to/new/source`;
+   - `tests/install-smoke.sh` runs an install, update, rollback and uninstall end to end on a throwaway machine:
+     CI does that on Alpine on every push; for EL, run it in a systemd container (`rockylinux/rockylinux:10-ubi-init`)
+     or a scratch VM;
    - and the image: `docker build -t bgpcanary:test . && deploy/docker/smoke-test.sh bgpcanary:test`. CI runs that
      on every push too.
 4. **Update [CHANGELOG.md](../CHANGELOG.md):**
@@ -83,7 +86,7 @@ can run `sudo bgpcanary-update --rollback` in the meantime, or run the previous 
 - **Database:** only ever *add* tables or columns, and add the change to `init()` in `bgpcanary/db.py` so it runs automatically at startup. Never require users to run SQL.
   - A data migration that could take more than a few seconds on a big database runs in the background after startup instead, a batch at a time, picking up where it left off after a restart, with the pages correct at every step (see `Service._compact_buckets`). `init()` runs before the web server answers, and both the updater and the container health check give a new version only a minute.
 - **Settings:** new settings need sensible defaults. If you rename or remove one, keep reading the old name for at least one minor version.
-- **Installer:** `deploy/install.sh` must stay safe to re-run on an existing install. It's what every update runs.
+- **Installer:** `deploy/install.sh` must stay safe to re-run on an existing install. It's what every update runs. It serves two init systems (systemd on EL, OpenRC on Alpine): a change to how the service starts goes into both `deploy/bgpcanary.service` and `deploy/bgpcanary.initd`, and CI checks their command lines match.
 
 ## Pre-releases (optional)
 

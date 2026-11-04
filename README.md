@@ -76,6 +76,8 @@ cd bgpcanary
 sudo ./deploy/install.sh --fqdn bgp.example.com
 ```
 
+On **Alpine Linux 3.22+** it's the same, as root: `apk add bash git` first, then the clone and `./deploy/install.sh`.
+
 Open `https://bgp.example.com/`, sign in as `admin` with the password the installer printed, choose a new
 password, and enter your ASN and prefixes. bgpcanary first loads 90 days of history, usually in a few minutes,
 with a progress bar on every page. Then live monitoring starts and the dashboard switches over by itself.

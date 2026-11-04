@@ -9,8 +9,9 @@ systemctl status bgpcanary nginx
 curl -s http://127.0.0.1:8080/healthz      # {"ok": true, "version": ...} when the app is up
 ```
 
-In a container, the log is `docker logs bgpcanary` (`-f` to follow), and `docker ps` shows whether its health
-check passes.
+On Alpine, the log is `/var/log/bgpcanary/bgpcanary.log`, and the service is driven with `rc-service bgpcanary status`
+(`restart`, `stop`...): read `rc-service` wherever this page says `systemctl`. In a container, the log is
+`docker logs bgpcanary` (`-f` to follow), and `docker ps` shows whether its health check passes.
 
 ## The web page doesn't load
 

@@ -105,6 +105,8 @@ sudo bash /tmp/bgpcanary-1.2.2/deploy/update.sh --from /tmp/bgpcanary-1.2.2
   sudo systemctl start bgpcanary
   ```
 
+  (On Alpine: `rc-service bgpcanary stop` and `start`.)
+
 ## Moving to a new server
 
 1. On the old server, take a backup (above) and copy it plus `/etc/bgpcanary/config.toml` to the new one.

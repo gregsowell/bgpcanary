@@ -32,7 +32,12 @@ jobs:
           pip install pytest==9.2.0 mcp==2.3.0
           pytest -q
       - name: Shell scripts parse
-        run: for f in deploy/*.sh deploy/docker/*.sh deploy/docker/bgpcanary-admin; do bash -n "$f"; done
+        run: for f in deploy/*.sh deploy/bgpcanary.initd deploy/docker/*.sh deploy/docker/bgpcanary-admin tests/*.sh; do bash -n "$f"; done
+      - name: The OpenRC script starts the same command as the systemd unit
+        run: |
+          unit=$(sed -n 's/^ExecStart=//p' deploy/bgpcanary.service)
+          rc="$(sed -n 's/^command=//p' deploy/bgpcanary.initd) $(sed -n 's/^command_args="\(.*\)"$/\1/p' deploy/bgpcanary.initd)"
+          [ "$unit" = "$rc" ] || { echo "::error::deploy/bgpcanary.initd runs '$rc' but the unit's ExecStart is '$unit'"; exit 1; }
       - name: Version is valid
         run: grep -Eq '^__version__ = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?"$' bgpcanary/__init__.py
 
@@ -76,3 +81,19 @@ jobs:
           if grep -q "came over plain HTTP" login.html; then echo "::error::the app didn't see HTTPS through Caddy"; exit 1; fi
           curl -fsSkI --resolve bgp.example.com:443:127.0.0.1 https://bgp.example.com/login | grep -i '^strict-transport-security'
           docker compose -p bgpcanary-caddy down -v
+
+  installer-alpine:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        alpine: ["3.22", "3.24"]   # the oldest release the installer accepts, and the newest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+      - name: Install, re-install, update, roll back and uninstall on Alpine ${{ matrix.alpine }}
+        # OpenRC didn't boot the container: it's told it may run services anyway and that the network is up
+        run: |
+          docker run --rm -v "$PWD:/src:ro" --sysctl net.ipv6.conf.all.disable_ipv6=0 "alpine:${{ matrix.alpine }}" sh -c '
+            apk add -q --no-progress --no-cache bash openrc &&
+            mkdir -p /run/openrc && touch /run/openrc/softlevel &&
+            echo "rc_provide=\"loopback net\"" >> /etc/rc.conf &&
+            bash /src/tests/install-smoke.sh /src'

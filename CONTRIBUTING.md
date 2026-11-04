@@ -18,7 +18,7 @@ instead; see [SECURITY.md](SECURITY.md).
 1. Open an issue first for anything bigger than a small fix, so we can agree on the approach.
 2. Fork the repository and make your change on a branch.
 3. Keep to the existing style: small, readable functions; comments that explain *why*; no new dependencies without discussion.
-4. Run the tests (below), then test on a Rocky / AlmaLinux 9 or 10 machine or VM. `deploy/push.sh user@host` copies your working tree to a test server and runs the installer there.
+4. Run the tests (below), then test on a Rocky / AlmaLinux 9 or 10 machine or VM, and on Alpine 3.22+ if you touched the installer. `deploy/push.sh user@host` copies your working tree to a test server and runs the installer there; `tests/install-smoke.sh` checks a whole install, update and uninstall on a throwaway machine (CI runs it on Alpine).
 5. Add a line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md).
 6. Open a pull request describing what changed and how you tested it.
 

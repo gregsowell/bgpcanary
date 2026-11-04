@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bgpcanary installer for Rocky Linux / AlmaLinux / RHEL 9 and 10. Run as root from the source directory:
+# bgpcanary installer for Rocky Linux / AlmaLinux / RHEL 9 and 10, and Alpine Linux 3.22+. Run as root from the source directory:
 #
 #   sudo ./deploy/install.sh [--fqdn bgp.example.com] [--asn 64500] [--prefix 192.0.2.0/24 ...]
 #                            [--upstream 64501 ...] [--probe 192.0.2.1 ...] [--atlas-probe]
@@ -31,7 +31,36 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1 (see --help)"; exit 1 ;;
   esac
 done
-[ "$(id -u)" = 0 ] || { echo "Run as root: sudo $0 $*"; exit 1; }
+. /etc/os-release
+EL="${PLATFORM_ID:-}"; EL="${EL#platform:}"   # el9 / el10 on Enterprise Linux (Alpine has no PLATFORM_ID)
+case "${ID:-}/$EL" in
+  */el9|*/el10) OS=el ;;
+  alpine/*) OS=alpine ;;
+  *) OS="" ;;
+esac
+if [ "$OS" = alpine ]; then   # 3.22 is the oldest release Alpine still supports; all of them ship Python 3.12+
+  V="${VERSION_ID:-0}"; MINOR="${V#3.}"; MINOR="${MINOR%%[!0-9]*}"
+  { [ "$V" != "${V#3.}" ] && [ "${MINOR:-0}" -ge 22 ]; } || OS=""
+fi
+[ -n "$OS" ] || { echo "bgpcanary supports Rocky Linux, AlmaLinux and RHEL 9 or 10, and Alpine Linux 3.22 or newer (this is ${PRETTY_NAME:-unknown})."; exit 1; }
+SUDO=sudo; if [ "$OS" = alpine ] && ! command -v sudo >/dev/null; then SUDO=doas; fi   # (Alpine's default)
+[ "$(id -u)" = 0 ] || { echo "Run as root: $SUDO $0 $*"; exit 1; }
+
+# What differs between the two: where nginx reads its sites, its web root (Let's Encrypt challenges), where the
+# certificate goes, and the init system (systemd, or OpenRC's supervise-daemon on Alpine).
+if [ "$OS" = el ]; then
+  NGINX_D=/etc/nginx/conf.d; WEBROOT=/usr/share/nginx/html
+  CERT=/etc/pki/tls/certs/bgpcanary.crt; KEY=/etc/pki/tls/private/bgpcanary.key
+else
+  NGINX_D=/etc/nginx/http.d; WEBROOT=/var/lib/nginx/html
+  CERT=/etc/ssl/certs/bgpcanary.crt; KEY=/etc/ssl/private/bgpcanary.key
+fi
+svc() {   # svc start|stop|restart|reload NAME
+  if [ "$OS" = el ]; then systemctl "$1" "$2"; else rc-service "$2" "$1"; fi
+}
+svc_enable() {   # start NAME at boot
+  if [ "$OS" = el ]; then systemctl enable -q "$1"; else rc-update -q add "$1" default; fi
+}
 
 # Backups live in a directory only root can write. The service account owns $DATA, so anything root did in
 # there (writing, chown, pruning) could be pointed at other files by a compromised service. Here the database
@@ -53,12 +82,6 @@ keep_newest() {   # keep_newest N PATTERN : delete all but the newest N files in
   find "$BK" -maxdepth 1 -type f -name "$2" -printf '%T@ %p\n' 2>/dev/null | sort -rn | tail -n +"$(($1 + 1))" \
     | cut -d' ' -f2- | while IFS= read -r f; do rm -f -- "$f"; done
 }
-. /etc/os-release
-EL="${PLATFORM_ID#platform:}"
-case "$EL" in
-  el9|el10) ;;
-  *) echo "bgpcanary supports Rocky Linux, AlmaLinux and RHEL 9 or 10 (this is ${PRETTY_NAME:-unknown})."; exit 1 ;;
-esac
 VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$SRC/bgpcanary/__init__.py")
 for a in "$ASN" "${UPSTREAMS[@]}"; do
   [[ "$a" =~ ^[0-9]+$ ]] || { echo "Not an AS number: '$a' (use digits, e.g. --asn 64500 --upstream 64501)"; exit 1; }
@@ -66,7 +89,7 @@ done
 echo "bgpcanary $VERSION installer on $PRETTY_NAME"
 
 # ---------------------------------------------------------------- upgrade from the pre-1.0 name (bgpmon)
-if [ -d /opt/bgpmon ] && [ ! -d "$APP" ]; then
+if [ "$OS" = el ] && [ -d /opt/bgpmon ] && [ ! -d "$APP" ]; then   # (bgpmon only ever ran on EL)
   echo "==> migrating the old 'bgpmon' installation to 'bgpcanary' (data, settings and users are kept)"
   systemctl disable -q --now bgpmon 2>/dev/null || true
   mv /var/lib/bgpmon "$DATA"
@@ -88,8 +111,8 @@ if [ -d /opt/bgpmon ] && [ ! -d "$APP" ]; then
   systemctl daemon-reload
 fi
 
-if [ -z "$FQDN" ] && [ -f /etc/nginx/conf.d/bgpcanary.conf ]; then   # upgrade: keep the existing name
-  FQDN=$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' /etc/nginx/conf.d/bgpcanary.conf)
+if [ -z "$FQDN" ] && [ -f "$NGINX_D/bgpcanary.conf" ]; then   # upgrade: keep the existing name
+  FQDN=$(awk '$1 == "server_name" {gsub(";", "", $2); print $2; exit}' "$NGINX_D/bgpcanary.conf")
 fi
 [ -n "$FQDN" ] || FQDN=$(hostname -f 2>/dev/null || cat /proc/sys/kernel/hostname)   # (minimal systems lack `hostname`)
 toml_list() { local out="" x; for x in "$@"; do out+="${out:+, }$x"; done; echo "[$out]"; }
@@ -97,12 +120,19 @@ toml_strs() { local out="" x; for x in "$@"; do out+="${out:+, }\"$x\""; done; e
 CHARTJS_URL="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
 
 echo "==> packages"
-# Python 3.11+ is required: EL10's python3 is 3.12; on EL9 (python3 = 3.9) the python3.12 package is used
 PY=python3
-[ "$EL" = el9 ] && PY=python3.12
-PKGS=("$PY" nginx policycoreutils-python-utils openssl sqlite dejavu-sans-fonts tar)
-command -v curl >/dev/null || PKGS+=(curl)   # EL9 minimal ships curl-minimal, which conflicts with the curl package
-dnf -y -q install "${PKGS[@]}" >/dev/null
+if [ "$OS" = el ]; then
+  # Python 3.11+ is required: EL10's python3 is 3.12; on EL9 (python3 = 3.9) the python3.12 package is used
+  [ "$EL" = el9 ] && PY=python3.12
+  PKGS=("$PY" nginx policycoreutils-python-utils openssl sqlite dejavu-sans-fonts tar)
+  command -v curl >/dev/null || PKGS+=(curl)   # EL9 minimal ships curl-minimal, which conflicts with the curl package
+  dnf -y -q install "${PKGS[@]}" >/dev/null
+else
+  # (Alpine 3.22+'s python3 is 3.12 or newer.) coreutils, findutils and runuser: the backup code above and some GNU
+  # options used below (install -o, sort -V, find -printf, sha256sum -c) aren't in busybox. logrotate: for the log.
+  apk add -q --no-progress --no-cache python3 nginx openssl sqlite font-dejavu tar curl ca-certificates \
+      coreutils findutils runuser logrotate
+fi
 
 # Check prefixes / probe addresses, and an existing config file, before changing anything (stdlib only)
 "$PY" - "${PREFIXES[@]}" -- "${PROBES[@]}" <<'PYCHECK' || exit 1
@@ -135,7 +165,12 @@ if [ -f "$ETC/config.toml" ] && ! check_config "$ETC/config.toml"; then
 fi
 
 echo "==> user and directories"
-id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
+if [ "$OS" = el ]; then
+  id bgpcanary &>/dev/null || useradd --system --home-dir "$DATA" --shell /sbin/nologin bgpcanary
+else   # (busybox adduser)
+  getent group bgpcanary >/dev/null || addgroup -S bgpcanary
+  id bgpcanary &>/dev/null || adduser -S -D -H -h "$DATA" -s /sbin/nologin -G bgpcanary bgpcanary
+fi
 install -d -o bgpcanary -g bgpcanary -m 750 "$DATA"
 install -d -o root -g bgpcanary -m 750 "$ETC"
 install -d -o root -g root -m 700 "$BK"
@@ -176,7 +211,7 @@ mv "$APP/bgpcanary.new" "$APP/bgpcanary"
 install -d -m 755 "$APP/deploy"   # kept so the update / uninstall / probe commands work later
 if [ "$SRC" != "$APP" ]; then
   for f in install.sh update.sh uninstall.sh atlas-probe.sh; do install -m 755 "$SRC/deploy/$f" "$APP/deploy/"; done
-  for f in config.example.toml nginx-bgpcanary.conf bgpcanary.service; do install -m 644 "$SRC/deploy/$f" "$APP/deploy/"; done
+  for f in config.example.toml nginx-bgpcanary.conf bgpcanary.service bgpcanary.initd bgpcanary.logrotate; do install -m 644 "$SRC/deploy/$f" "$APP/deploy/"; done
 fi
 
 mkdir -p "$APP/bgpcanary/static/vendor"
@@ -224,49 +259,72 @@ fi
 chown root:bgpcanary "$ETC/config.toml"
 chmod 640 "$ETC/config.toml"
 
-cat > /usr/bin/bgpcanary-admin <<'EOF'
+cat > /usr/bin/bgpcanary-admin <<EOF
 #!/bin/sh
-# runs the bgpcanary command line as the service user (runuser is part of every EL system; sudo may not be)
-[ "$(id -u)" = 0 ] || { echo "Run as root: sudo bgpcanary-admin $*" >&2; exit 1; }
-cd /opt/bgpcanary && exec runuser -u bgpcanary -- env BGPCANARY_CONFIG=/etc/bgpcanary/config.toml /opt/bgpcanary/venv/bin/python -m bgpcanary.cli "$@"
+# runs the bgpcanary command line as the service user (runuser is on every EL system and a small Alpine package;
+# sudo may not be)
+[ "\$(id -u)" = 0 ] || { echo "Run as root: $SUDO bgpcanary-admin \$*" >&2; exit 1; }
+cd /opt/bgpcanary && exec runuser -u bgpcanary -- env BGPCANARY_CONFIG=/etc/bgpcanary/config.toml /opt/bgpcanary/venv/bin/python -m bgpcanary.cli "\$@"
 EOF
 chmod 755 /usr/bin/bgpcanary-admin
 ln -sf "$APP/deploy/update.sh" /usr/bin/bgpcanary-update
 ln -sf "$APP/deploy/uninstall.sh" /usr/sbin/bgpcanary-uninstall
 
 echo "==> TLS (self-signed unless a certificate already exists)"
-if [ ! -f /etc/pki/tls/certs/bgpcanary.crt ]; then
-  openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
-    -keyout /etc/pki/tls/private/bgpcanary.key -out /etc/pki/tls/certs/bgpcanary.crt \
+[ -d "$(dirname "$KEY")" ] || install -d -m 700 "$(dirname "$KEY")"
+if [ ! -f "$CERT" ]; then
+  openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout "$KEY" -out "$CERT" \
     -subj "/CN=$FQDN" -addext "subjectAltName=DNS:$FQDN" 2>/dev/null
-  chmod 600 /etc/pki/tls/private/bgpcanary.key
+  chmod 600 "$KEY"
 fi
 
 echo "==> nginx"
-# HTTP/2 syntax: "http2 on;" from nginx 1.25.1 (EL10); "listen ... http2" before that (EL9)
+# HTTP/2 syntax: "http2 on;" from nginx 1.25.1 (EL10, Alpine); "listen ... http2" before that (EL9)
 NGV=$(nginx -v 2>&1 | sed -n 's|.*nginx/\([0-9.]*\).*|\1|p')
 if [ "$(printf '%s\n1.25.1\n' "$NGV" | sort -V | head -1)" = 1.25.1 ]; then H2_LISTEN=""; H2_ON="http2 on;"; else H2_LISTEN=" http2"; H2_ON=""; fi
 sed -e "s/__FQDN__/$FQDN/g" -e "s/__H2_LISTEN__/$H2_LISTEN/g" -e "s/__H2_ON__/$H2_ON/g" \
-    "$SRC/deploy/nginx-bgpcanary.conf" > /etc/nginx/conf.d/bgpcanary.conf
-chmod 644 /etc/nginx/conf.d/bgpcanary.conf
-setsebool -P httpd_can_network_connect 1 2>/dev/null || true
+    -e "s|__CERT__|$CERT|" -e "s|__KEY__|$KEY|" -e "s|__WEBROOT__|$WEBROOT|" \
+    "$SRC/deploy/nginx-bgpcanary.conf" > "$NGINX_D/bgpcanary.conf"
+chmod 644 "$NGINX_D/bgpcanary.conf"
+if [ "$OS" = alpine ] && ! grep -qs '^# bgpcanary' "$NGINX_D/default.conf"; then
+  # Alpine's stock site claims default_server on port 80 too. It's replaced by a stub rather than deleted: apk
+  # would put a deleted file back with the next nginx upgrade, and nginx would then refuse to reload or start.
+  [ ! -f "$NGINX_D/default.conf" ] || mv "$NGINX_D/default.conf" "$NGINX_D/default.conf.orig"
+  echo "# bgpcanary disabled the stock site here (kept as default.conf.orig); its own server is in bgpcanary.conf" > "$NGINX_D/default.conf"
+fi
+[ "$OS" != el ] || setsebool -P httpd_can_network_connect 1 2>/dev/null || true
 nginx -t -q
-systemctl enable -q --now nginx
-systemctl reload nginx
+svc_enable nginx
+svc start nginx
+svc reload nginx
 
-echo "==> firewall"
-if systemctl is-active -q firewalld; then
-  firewall-cmd -q --permanent --add-service=http --add-service=https
-  firewall-cmd -q --reload
+if [ "$OS" = el ]; then   # (Alpine has no firewall unless you add one; then open 80 and 443 yourself)
+  echo "==> firewall"
+  if systemctl is-active -q firewalld; then
+    firewall-cmd -q --permanent --add-service=http --add-service=https
+    firewall-cmd -q --reload
+  fi
 fi
 
 echo "==> service"
-install -m 644 "$SRC/deploy/bgpcanary.service" /etc/systemd/system/bgpcanary.service
-systemctl daemon-reload
-systemctl enable -q bgpcanary
-systemctl restart bgpcanary
-sleep 2
-systemctl --no-pager --lines=0 status bgpcanary | head -3
+if [ "$OS" = el ]; then
+  install -m 644 "$SRC/deploy/bgpcanary.service" /etc/systemd/system/bgpcanary.service
+  systemctl daemon-reload
+  svc_enable bgpcanary
+  systemctl restart bgpcanary
+  sleep 2
+  systemctl --no-pager --lines=0 status bgpcanary | head -3
+else
+  # OpenRC: supervise-daemon keeps it running (deploy/bgpcanary.initd). There's no journal, so it logs to a file of
+  # its own, which logrotate turns over weekly from Alpine's daily cron.
+  install -d -o bgpcanary -g bgpcanary -m 750 /var/log/bgpcanary
+  install -m 755 "$SRC/deploy/bgpcanary.initd" /etc/init.d/bgpcanary
+  install -m 644 "$SRC/deploy/bgpcanary.logrotate" /etc/logrotate.d/bgpcanary
+  svc_enable bgpcanary
+  rc-service bgpcanary restart || { rc-service bgpcanary zap; rc-service bgpcanary start; }   # (zap: forget a crash)
+  sleep 2
+  rc-service bgpcanary status || true
+fi
 
 echo "==> default admin account"
 CREDS=$(/usr/bin/bgpcanary-admin ensure-admin)
@@ -276,7 +334,7 @@ if [ -n "$CREDS" ]; then
     echo "$CREDS"
     echo
     echo "This file is only a record of the generated password: editing it does NOT change the password."
-    echo "To set a new admin password: sudo bgpcanary-admin useradd admin"; } > "$ETC/initial-admin-password"
+    echo "To set a new admin password: $SUDO bgpcanary-admin useradd admin"; } > "$ETC/initial-admin-password"
   chmod 600 "$ETC/initial-admin-password"
   echo
   echo "  Web login created:"
@@ -294,7 +352,11 @@ else
 fi
 if [ "$ATLAS_PROBE" = 1 ]; then
   echo "==> RIPE Atlas software probe"
-  bash "$SRC/deploy/atlas-probe.sh" || echo "    probe install failed; bgpcanary itself is fine. Retry: sudo $APP/deploy/install.sh --atlas-probe-only"
+  if [ "$OS" = alpine ]; then
+    echo "    RIPE packages the software probe for Enterprise Linux and Debian only; not installed"
+  else
+    bash "$SRC/deploy/atlas-probe.sh" || echo "    probe install failed; bgpcanary itself is fine. Retry: $SUDO $APP/deploy/install.sh --atlas-probe-only"
+  fi
 fi
 echo
 echo "Done: bgpcanary $VERSION. Open https://$FQDN/"

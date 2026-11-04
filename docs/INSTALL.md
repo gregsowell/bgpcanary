@@ -5,7 +5,7 @@ see [DOCKER.md](DOCKER.md).
 
 ## Requirements
 
-- **Operating system:** Rocky Linux, AlmaLinux or Red Hat Enterprise Linux **9 or 10**, x86-64. A fresh minimal install is ideal; bgpcanary brings its own nginx configuration.
+- **Operating system:** Rocky Linux, AlmaLinux or Red Hat Enterprise Linux **9 or 10**, or Alpine Linux **3.22 or newer**, x86-64. A fresh minimal install is ideal; bgpcanary brings its own nginx configuration. (On Alpine the service runs under OpenRC; everything else is the same.)
 - **Size:** 2 vCPU, 2 GB RAM and 20 GB disk is plenty for a few prefixes. The database grows by roughly 0.1–0.3 GB per prefix per year, plus RIPE Atlas results if you use Atlas. Updates keep the last three backups in `/var/backups/bgpcanary`.
 - **Outbound network access:**
 
@@ -16,10 +16,12 @@ see [DOCKER.md](DOCKER.md).
   | `*.routeviews.org` | 23 (telnet) | Route Views snapshots, ping, traceroute |
   | `whois.radb.net`, `whois.cymru.com` | 43 (whois) | IRR registry watch, IP-to-ASN lookups |
 
-- **Inbound:** 80 and 443 from wherever you'll open the web UI. The installer opens them in firewalld if it's running.
+- **Inbound:** 80 and 443 from wherever you'll open the web UI. The installer opens them in firewalld if it's running. (Alpine has no firewall unless you add one; if you did, open them yourself.)
 - **A DNS name** for the server (e.g. `bgp.example.com`). This is optional but recommended, and needed for a real certificate.
 
 ## Install
+
+On Rocky Linux, AlmaLinux or RHEL:
 
 ```bash
 sudo dnf -y install git
@@ -28,13 +30,23 @@ cd bgpcanary
 sudo ./deploy/install.sh --fqdn bgp.example.com
 ```
 
+On Alpine Linux, as root (or put `doas` in front of each command). The installer is a bash script, which Alpine
+doesn't ship, so bash comes first:
+
+```bash
+apk add bash git
+git clone https://github.com/gregsowell/bgpcanary.git
+cd bgpcanary
+./deploy/install.sh --fqdn bgp.example.com
+```
+
 The installer takes a few minutes. It:
 - installs Python, nginx and SQLite from your OS repositories;
 - creates a `bgpcanary` system user;
 - installs the app in `/opt/bgpcanary`;
 - creates a self-signed certificate;
 - configures nginx;
-- starts the `bgpcanary` service;
+- starts the `bgpcanary` service (systemd, or OpenRC on Alpine);
 - creates an `admin` login with a random password, which it prints and also saves in `/etc/bgpcanary/initial-admin-password`.
 
 Prefer not to use git? Download the release `.tar.gz` from the [Releases page](https://github.com/gregsowell/bgpcanary/releases), then:
@@ -60,7 +72,7 @@ sudo ./deploy/install.sh --fqdn bgp.example.com --asn 64500 \
 | `--prefix` | A prefix you announce (repeat for each; IPv4 and IPv6) |
 | `--upstream` | The AS number of a provider you buy transit from (repeat for each) |
 | `--probe` | An address in your space that answers ping, for Route Views and RIPE Atlas tests |
-| `--atlas-probe` | Also install the RIPE Atlas software probe (see [Configuration](CONFIGURATION.md#ripe-atlas)) |
+| `--atlas-probe` | Also install the RIPE Atlas software probe (see [Configuration](CONFIGURATION.md#ripe-atlas)); Rocky / AlmaLinux / RHEL only, RIPE doesn't package it for Alpine |
 
 ## First login
 
@@ -83,22 +95,36 @@ Next steps:
 
 ## Using a real certificate
 
-The certificate lives at `/etc/pki/tls/certs/bgpcanary.crt`, with its key at `/etc/pki/tls/private/bgpcanary.key`.
-Replace both files with your own (full chain in the `.crt`), then run `sudo systemctl reload nginx`.
-Updates never overwrite them.
+The certificate and its key live at:
+
+| | Certificate | Key |
+|---|---|---|
+| Rocky / AlmaLinux / RHEL | `/etc/pki/tls/certs/bgpcanary.crt` | `/etc/pki/tls/private/bgpcanary.key` |
+| Alpine | `/etc/ssl/certs/bgpcanary.crt` | `/etc/ssl/private/bgpcanary.key` |
+
+Replace both files with your own (full chain in the `.crt`), then reload nginx: `sudo systemctl reload nginx`
+(`rc-service nginx reload` on Alpine). Updates never overwrite them.
 
 **Let's Encrypt** works if the server is reachable from the internet on port 80:
 
 ```bash
 sudo dnf -y install epel-release && sudo dnf -y install certbot
-sudo certbot certonly --webroot -w /usr/share/nginx/html -d bgp.example.com
+sudo certbot certonly --webroot -w /usr/share/nginx/html -d bgp.example.com --deploy-hook "systemctl reload nginx"
 sudo ln -sf /etc/letsencrypt/live/bgp.example.com/fullchain.pem /etc/pki/tls/certs/bgpcanary.crt
 sudo ln -sf /etc/letsencrypt/live/bgp.example.com/privkey.pem /etc/pki/tls/private/bgpcanary.key
 sudo systemctl reload nginx
 ```
 
-certbot renews the certificate automatically; to make nginx pick up renewals, add
-`--deploy-hook "systemctl reload nginx"` to the `certonly` command.
+certbot renews the certificate automatically, and the deploy hook makes nginx pick the renewal up. On Alpine:
+`apk add certbot`, the web root is `/var/lib/nginx/html`, the links go to the `/etc/ssl` paths above, and the hook
+is `rc-service nginx reload`.
+
+## Logs
+
+```bash
+sudo journalctl -u bgpcanary -f                 # Rocky / AlmaLinux / RHEL
+tail -f /var/log/bgpcanary/bgpcanary.log         # Alpine (logrotate keeps eight weekly files)
+```
 
 ## Uninstalling
 

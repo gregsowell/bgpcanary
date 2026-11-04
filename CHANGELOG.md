@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-04
+
+### Added
+- **Alpine Linux.** The installer now takes Alpine 3.22 or newer alongside Rocky Linux, AlmaLinux and RHEL 9 and 10: the service runs under OpenRC's supervise-daemon as the unprivileged `bgpcanary` user, nginx gets the same site in `/etc/nginx/http.d`, the certificate lives under `/etc/ssl`, and the log goes to `/var/log/bgpcanary/bgpcanary.log`, rotated weekly. `bgpcanary-update` and `bgpcanary-uninstall` know both init systems, and CI installs, updates and uninstalls on Alpine on every push. Thanks to tcroghan-LCT, whose pull request ([#9](https://github.com/gregsowell/bgpcanary/pull/9)) worked out what Alpine needs and tested it on fresh installs.
+
+### Fixed
+- **Outbound TLS trust:** the bundled certifi is updated to 2026.10.23, which drops the emSign root whose intermediate CAs had compromised keys ([GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2)). It covers the HTTPS calls to RIPEstat, RIPE Atlas, PeeringDB, GitHub and webhooks; RIS Live and email use the system's own trust store. (Proposed in [#11](https://github.com/gregsowell/bgpcanary/pull/11).)
+
 ## [1.7.1] - 2026-11-03
 
 ### Added
@@ -387,7 +395,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/gregsowell/bgpcanary/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/gregsowell/bgpcanary/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/gregsowell/bgpcanary/compare/v1.6.3...v1.7.0
 [1.6.3]: https://github.com/gregsowell/bgpcanary/compare/v1.6.2...v1.6.3

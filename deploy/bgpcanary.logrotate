@@ -1,0 +1,13 @@
+# bgpcanary's log on Alpine, where there is no journal (installed as /etc/logrotate.d/bgpcanary; Alpine's daily
+# cron runs logrotate). The service account owns the file and its directory, so the rotation runs as it;
+# copytruncate because supervise-daemon keeps the file open.
+/var/log/bgpcanary/bgpcanary.log {
+    su bgpcanary bgpcanary
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

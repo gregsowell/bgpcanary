@@ -193,7 +193,8 @@ as an admin on the Users page. Endpoints, examples and what's promised to stay t
 - `[web] listen_host`, `listen_port`, `secret_key` (signs login cookies; keep it secret);
 - first-start defaults for everything else.
 
-Values saved in the web UI take precedence. After editing the file, run `sudo systemctl restart bgpcanary`.
+Values saved in the web UI take precedence. After editing the file, run `sudo systemctl restart bgpcanary`
+(`rc-service bgpcanary restart` on Alpine).
 
 In the container image, the file is `/var/lib/bgpcanary/config.toml` in the data volume. It's created on the
 first start, and the listen address comes from environment variables instead; see
@@ -210,7 +211,7 @@ sudo bgpcanary-admin test-alert                          # send a test alert on 
 sudo bgpcanary-admin version
 sudo bgpcanary-admin backup - > bgpcanary.db             # a consistent copy of the database, while it runs
 sudo bgpcanary-update [--check | --rollback | --version X.Y.Z]
-sudo journalctl -u bgpcanary -f                          # live log
+sudo journalctl -u bgpcanary -f                          # live log (Alpine: tail -f /var/log/bgpcanary/bgpcanary.log)
 ```
 
 In a container, run them as `docker exec -it bgpcanary bgpcanary-admin ...`, without `sudo`. For `backup -`, leave
@@ -225,9 +226,9 @@ out `-it` (a terminal would mangle the data).
 | Backups | `/var/backups/bgpcanary/` (root only; before 1.2.2: `/var/lib/bgpcanary/backups/`) |
 | Settings file | `/etc/bgpcanary/config.toml` |
 | First admin password | `/etc/bgpcanary/initial-admin-password` |
-| Web server config | `/etc/nginx/conf.d/bgpcanary.conf` |
-| Certificate | `/etc/pki/tls/certs/bgpcanary.crt` and `/etc/pki/tls/private/bgpcanary.key` |
-| Service | `bgpcanary.service` (runs as user `bgpcanary`, behind nginx on 127.0.0.1:8080) |
+| Web server config | `/etc/nginx/conf.d/bgpcanary.conf` (Alpine: `/etc/nginx/http.d/bgpcanary.conf`) |
+| Certificate | `/etc/pki/tls/certs/bgpcanary.crt` and `/etc/pki/tls/private/bgpcanary.key` (Alpine: `/etc/ssl/certs/bgpcanary.crt` and `/etc/ssl/private/bgpcanary.key`) |
+| Service | `bgpcanary.service` (Alpine: `/etc/init.d/bgpcanary`, logging to `/var/log/bgpcanary/`); runs as user `bgpcanary`, behind nginx on 127.0.0.1:8080 |
 
 In the container image, everything bgpcanary keeps is in the data volume, `/var/lib/bgpcanary`; see
 [DOCKER.md](DOCKER.md#the-data-volume).

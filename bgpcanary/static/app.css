@@ -131,6 +131,9 @@ button.pf-backbtn:disabled { opacity: .6; cursor: default; }
 .formgrid .span2 { grid-column: 1 / -1; }
 textarea { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
 details summary { cursor: pointer; }
+/* the event page's raw list (event.html): bookkeeping rows only when the tick box asks for them */
+#raw:not(.raw-all) tr.raw-book, #raw:not(.raw-all) table.raw-book-only { display: none; }
+#raw tr.raw-book td { color: var(--muted); }
 /* Settings hub */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
 .card { display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent);

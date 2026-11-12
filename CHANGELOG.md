@@ -6,6 +6,15 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-11-12
+
+### Fixed
+- **Event page: the list of raw BGP updates stopped at the event's end.** It covered the five minutes before the start up to the end, so a short event's list left out the route changes that came right after it: a 15-second ping alert's list was empty although RIS heard 174 updates in the next five minutes. An instant event such as a new upstream chain showed only the five minutes before the change. The list now covers the same half hour either side as the rest of the page, and for a long event the half hours around its start and around its end, each with a link to what changed in it.
+- **Bookkeeping rows in that list wait behind a tick box** that says how many there are. Looking-glass corrections, seed rows after a restart and stale withdrawals only correct the stored state, and on some events they made up most of the list.
+- **When the list reaches its limit it says so:** how many updates the stretch holds, and a link to BGP data for the stretch. It used to stop at 3,000 rows with a "+".
+- **An event stored with its end before its start** (releases before 1.3.3 could close one that way) now gets its page, its tree and *Around this event* from its start, instead of a window that stopped half a minute before it.
+- Event pages find a stretch's stored updates by time, instead of going through the prefix's whole history first: an eight-day event's page came a second quicker.
+
 ## [1.7.5] - 2026-11-12
 
 ### Added
@@ -445,7 +454,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.5...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.6...HEAD
+[1.7.6]: https://github.com/gregsowell/bgpcanary/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/gregsowell/bgpcanary/compare/v1.7.4...v1.7.5
 [1.7.4]: https://github.com/gregsowell/bgpcanary/compare/v1.7.3...v1.7.4
 [1.7.3]: https://github.com/gregsowell/bgpcanary/compare/v1.7.2...v1.7.3

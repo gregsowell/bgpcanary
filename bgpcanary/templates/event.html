@@ -96,15 +96,32 @@ document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ch
 </script>
 {% endif %}
 
-<details class="panel">
-  <summary><h2 style="display:inline;margin:0">Raw BGP updates around the start</h2> <span class="muted" style="font-size:13px">({{ ups|length }}{% if ups|length >= 3000 %}+{% endif %} rows{% if not ev.prefix and shown_prefix %} for <span class="mono">{{ shown_prefix }}</span>{% endif %} · click to expand){% if chart_prefix %} · <a href="/data?tab=changes&prefix={{ chart_prefix|urlencode }}&start={{ (ev.start_ts - 1800)|int }}&end={{ ((ev.end_ts or now) + 1800)|int }}">what changed, as bursts</a>{% endif %}</span></summary>
-  <div class="scroll" style="max-height:600px;overflow-y:auto;margin-top:10px"><table class="mono">
+{% if raw %}
+{# every stored row for the prefix in the stretches the rest of the page covers (evidence.raw_updates); the
+   bookkeeping rows stay hidden until the tick box asks for them (app.css: #raw) #}
+{% set n_up = raw|sum(attribute='updates') %}{% set n_book = raw|sum(attribute='bookkeeping') %}{% set book_shown = raw|sum(attribute='book_shown') %}
+<details class="panel" id="raw">
+  <summary><h2 style="display:inline;margin:0">Raw BGP updates</h2> <span class="muted" style="font-size:13px">({{ n_up }} update{{ 's' if n_up != 1 }} for <span class="mono">{{ shown_prefix }}</span> {{ 'in the half hours around the start and the end' if raw|length > 1 else 'in the half hour either side of the event' }} · click to expand)</span></summary>
+  {% if n_book %}<div class="toolbar" style="margin:10px 0 0;font-size:13px"><label><input type="checkbox" onchange="this.closest('details').classList.toggle('raw-all', this.checked)"> show bookkeeping rows too ({{ n_book }}: looking-glass corrections, seed rows after a restart, stale withdrawals{% if book_shown < n_book %}; the first {{ book_shown }} are listed{% endif %})</label></div>{% endif %}
+  {% for st in raw %}
+  <div class="toolbar" style="margin:10px 0 4px;font-size:13px">
+    {% if st.label %}<strong>{{ st.label[:1]|upper }}{{ st.label[1:] }}</strong>{% endif %}
+    <span class="muted"><time data-ts="{{ st.start }}"></time> to <time data-ts="{{ st.end }}" data-time="1"></time> · {{ st.updates }} update{{ 's' if st.updates != 1 }}</span>
+    {% if chart_prefix %}<a href="/data?tab=changes&prefix={{ chart_prefix|urlencode }}&start={{ st.start|int }}&end={{ st.end|int }}">what changed, as bursts</a>{% endif %}
+  </div>
+  {% if st.updates > st.shown %}<p class="msg" style="margin:4px 0 8px">The list stops at the first {{ st.shown }} of the {{ st.updates }} updates in this stretch.{% if chart_prefix %} <a href="/data?tab=raw&prefix={{ chart_prefix|urlencode }}&start={{ st.start|int }}&end={{ st.end|int }}">BGP data</a> has the stretch, with filters.{% endif %}</p>{% endif %}
+  {% if not st.updates %}<p class="muted" style="margin:4px 0">No updates are stored for this stretch{{ ', only bookkeeping rows' if st.bookkeeping }}.</p>{% endif %}
+  {% if st.rows %}
+  <div class="scroll" style="max-height:600px;overflow-y:auto"><table class="mono{{ ' raw-book-only' if not st.updates }}">
     <tr><th>Time</th><th>Collector</th><th>Peer</th><th></th><th>AS path</th><th>Source</th></tr>
-    {% for u in ups %}
-    <tr><td><time data-ts="{{ u.ts }}" data-sec="1"></time></td><td>{{ u.collector }}</td><td>{{ u.peer }}{% if u.peer_asn %} <span class="muted">AS{{ u.peer_asn }}</span>{% endif %}</td>
+    {% for u in st.rows %}
+    <tr{% if u.book %} class="raw-book"{% endif %}><td><time data-ts="{{ u.ts }}" data-sec="1"></time></td><td>{{ u.collector }}</td><td>{{ u.peer }}{% if u.peer_asn %} <span class="muted">AS{{ u.peer_asn }}</span>{% endif %}</td>
       <td>{% if u.kind == 'W' %}<span class="badge b-critical">W</span>{% else %}<span class="badge b-ok">A</span>{% endif %}</td>
       <td>{{ u.path or '' }}</td><td class="muted">{{ u.source }}</td></tr>
     {% endfor %}
   </table></div>
+  {% endif %}
+  {% endfor %}
 </details>
+{% endif %}
 {% endblock %}

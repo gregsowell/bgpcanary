@@ -11,6 +11,7 @@ from . import changes, db, paths
 PAD = 1800   # look this far before the start and after the end
 LONG = 6 * 3600   # a window longer than this: its route changes are spelled out around the start and the end only
 BURSTS = 4        # ...and the biggest few bursts of each stretch, not every one
+RAW_CAP = 3000    # the event page's raw list of updates: at most this many, shared by its stretches
 
 
 def _when(ts):
@@ -114,9 +115,10 @@ def _rv_runs(conn, ev, s, e):
 
 
 def window(ev, now=None):
-    """The stretch an event's evidence covers: PAD before its start to PAD after its end (or now)."""
+    """The stretch an event's evidence covers: PAD before its start to PAD after its end (or now). An end stored
+    before the start (releases before 1.3.3 could close an event with an older timestamp) counts as the start."""
     now = now or time.time()
-    return ev["start_ts"] - PAD, min((ev["end_ts"] or now) + PAD, now)
+    return ev["start_ts"] - PAD, min(max(ev["end_ts"] or now, ev["start_ts"]) + PAD, now)
 
 
 def focus_prefix(conn, cfg, ev, s, e):
@@ -273,12 +275,44 @@ def _unheard(conn, prefix, spans):
         open_.update((max(a, s), min(b, e)) for a, b in gaps if a <= e and b >= s)
         if since and since <= e:
             open_.add((max(since, s), e))
-        f = conn.execute("SELECT MIN(ts) a, MAX(ts) b, COUNT(*) n FROM updates WHERE prefix=? AND ts>=? AND ts<=? "
+        # (+prefix: found by time, the stretch's rows, not by prefix, whose rows go back as far as the history does)
+        f = conn.execute("SELECT MIN(ts) a, MAX(ts) b, COUNT(*) n FROM updates WHERE +prefix=? AND ts>=? AND ts<=? "
                          "AND source='bgplay'", (prefix, s, e)).fetchone() if prefix else None
         if f and f["n"]:
             filled = {"start": min(f["a"], filled["start"]) if filled else f["a"],
                       "end": max(f["b"], filled["end"]) if filled else f["b"], "n": f["n"] + (filled["n"] if filled else 0)}
     return {"open": sorted(open_), "filled": filled}
+
+
+def raw_updates(conn, prefix, ev, cap=RAW_CAP, now=None):
+    """The event page's raw list for `prefix`: every stored row in the stretches the rest of the page looks at
+    (_spans of window(): the half hour either side, or for a long event around its start and around its end),
+    oldest first, as [{"label", "start", "end", "rows", "updates", "bookkeeping", "shown", "book_shown"}], one per
+    stretch. "rows": the updates (changes.LIVE_SOURCES), up to the stretch's share of `cap`, and the bookkeeping rows
+    (looking-glass corrections, seed rows after a start, stale withdrawals, checkpoints), up to a third of it: the
+    page keeps them hidden until asked for, and a seed snapshot alone is hundreds. Each row has "book".
+    "updates" and "bookkeeping": how many the stretch holds, so the page can say when the cap cut it short."""
+    now = now or time.time()
+    s, e = window(ev, now)
+    spans = _spans(ev, s, e, now)
+    each = max(1, cap // len(spans))
+    live = changes.LIVE_SOURCES
+    q = ",".join("?" * len(live))
+    cols = "ts, collector, peer, peer_asn, kind, path, source"
+    out = []
+    for label, a, b in spans:
+        # (+prefix: found by time, the stretch's rows, not by prefix, whose rows go back as far as the history does)
+        part = []
+        for book, op, limit in ((False, "IN", each), (True, "NOT IN", max(1, each // 3))):
+            where = f"+prefix=? AND ts>=? AND ts<=? AND source {op} ({q})"
+            args = (prefix, a, b, *live)
+            n = conn.execute(f"SELECT COUNT(*) FROM updates WHERE {where}", args).fetchone()[0]
+            rows = conn.execute(f"SELECT {cols} FROM updates WHERE {where} ORDER BY ts, id LIMIT ?", (*args, limit))
+            part.append((n, [dict(r, book=book) for r in rows]))
+        (n_up, ups), (n_book, books) = part
+        out.append({"label": label, "start": a, "end": b, "rows": sorted(ups + books, key=lambda r: r["ts"]),
+                    "updates": n_up, "bookkeeping": n_book, "shown": len(ups), "book_shown": len(books)})
+    return out
 
 
 def _ping_rounds(conn, s, e, label_of):

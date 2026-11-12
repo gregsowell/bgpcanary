@@ -879,8 +879,8 @@ async def event_page(request: Request, eid: int, msg: str = ""):
     # still shows the tree, the charts and the updates of one: the monitored prefix its evidence is drawn from.
     shown = ev["prefix"] or ev_data["prefix"]
     charted = ev["prefix"] if ev["prefix"] in cfg.prefixes else None if ev["prefix"] else ev_data["prefix"]
-    ups = conn.execute("SELECT * FROM updates WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts LIMIT 3000",
-                       (shown, ev["start_ts"] - 300, min(end, ev["start_ts"] + 1800))).fetchall()
+    # (the raw list covers the same stretches as the rest of the page: it used to stop at the event's end)
+    raw = evidence.raw_updates(conn, shown, ev) if shown else []
     probes = conn.execute("SELECT * FROM probes WHERE event_id=? OR (ts>=? AND ts<=?) ORDER BY ts",
                           (eid, ev["start_ts"] - 3600, end + 600)).fetchall()
     snaps = conn.execute("SELECT * FROM rv_snapshots WHERE event_id=? OR (ts>=? AND ts<=?) ORDER BY ts",
@@ -894,7 +894,7 @@ async def event_page(request: Request, eid: int, msg: str = ""):
     nb = event_neighbour(ev)
     nb_info = neighbour_info(conn, nb) if nb else None
     conn.close()
-    return render(request, "event.html", ev=ev, ups=ups, probes=probes, snaps=snaps, alerts=alerts_sent,
+    return render(request, "event.html", ev=ev, raw=raw, probes=probes, snaps=snaps, alerts=alerts_sent,
                   win_start=ev["start_ts"] - pad, win_end=end + pad, atlas_msms=atlas_msms,
                   atlas_target=base["target"] if base else None, evd=ev_data, compare_all=",".join(svc.atlas.targets()),
                   nb=nb_info, back=f"/events/{eid}", msg=msg, shown_prefix=shown, chart_prefix=charted,

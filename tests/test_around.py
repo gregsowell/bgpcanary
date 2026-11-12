@@ -270,6 +270,85 @@ def test_the_text_report_tells_it_too(scene, admin_client):
     assert "No RIS peer changed its path." in quiet and "all as usual." in quiet
 
 
+# ------------------------------------------------------------------------------------------------ the raw list
+def raw_part(page):
+    """The event page's raw list, as HTML."""
+    return page.split('id="raw"', 1)[1].split("</details>", 1)[0]
+
+
+def test_the_raw_list_covers_the_half_hour_either_side(scene, admin_client):
+    # the event lasted 15 s: the updates 16, 17 and 20 s after its start used to be left out, the list stopping at its end
+    t = admin_client.get("/events/9001").text
+    raw = raw_part(t)
+    assert f'28 updates for <span class="mono">{P1}</span> in the half hour either side of the event' in t
+    assert raw.count("<tr>") == 1 + 28 and "raw-book" not in raw   # (a header row, then the updates)
+    assert "Around the start" not in raw and "The list stops" not in raw and "bookkeeping" not in raw
+    assert f'href="/data?tab=changes&prefix={P1}&start={T0 - 1800}&end={T0 + 15 + 1800}"' in raw   # (the same stretch)
+
+
+def test_bookkeeping_rows_wait_behind_a_tick_box(scene, admin_client):
+    conn = scene
+    conn.executemany("INSERT INTO updates(ts, source, collector, peer, peer_asn, prefix, kind, path) VALUES(?,?,?,?,?,?,?,?)",
+                     [(T0 + 300, "resync", "rrc90", "198.18.0.5", 65010, P1, "A", NOW_SAME_UPSTREAM),
+                      (T0 + 400, "stale", "rrc90", "198.18.0.6", 65010, P1, "W", None)])
+    conn.commit()
+    try:
+        t = admin_client.get("/events/9001").text
+        raw = raw_part(t)
+        assert "28 updates for" in t   # (they aren't counted as updates)
+        assert "show bookkeeping rows too (2: looking-glass corrections" in raw and "classList.toggle('raw-all'" in raw
+        assert raw.count('<tr class="raw-book">') == 2 and raw.count("<tr>") == 1 + 28
+        ev = conn.execute("SELECT * FROM events WHERE id=9001").fetchone()
+        from bgpcanary import evidence
+        (st,) = evidence.raw_updates(conn, P1, ev, cap=3)   # bookkeeping rows get a third of the share: 1 here
+        assert (st["bookkeeping"], st["book_shown"], st["shown"]) == (2, 1, 3)
+    finally:
+        conn.execute("DELETE FROM updates WHERE collector='rrc90' AND source IN ('resync', 'stale')")
+        conn.commit()
+
+
+def test_the_raw_list_says_when_it_stops_short(scene, web, admin_client, monkeypatch):
+    from bgpcanary import evidence
+    ev = scene.execute("SELECT * FROM events WHERE id=9001").fetchone()
+    (st,) = evidence.raw_updates(scene, P1, ev, cap=10)
+    assert (st["updates"], st["shown"], len(st["rows"])) == (28, 10, 10)
+    assert (st["bookkeeping"], st["book_shown"]) == (0, 0)
+    assert [r["ts"] for r in st["rows"]] == sorted(r["ts"] for r in st["rows"]) and st["rows"][0]["ts"] == T0 + 1.5
+    real = evidence.raw_updates
+    monkeypatch.setattr(web.evidence, "raw_updates", lambda conn, prefix, ev: real(conn, prefix, ev, cap=10))
+    raw = raw_part(admin_client.get("/events/9001").text)
+    assert "The list stops at the first 10 of the 28 updates in this stretch." in raw
+    assert f'href="/data?tab=raw&prefix={P1}&start={T0 - 1800}&end={T0 + 15 + 1800}"' in raw and raw.count("<tr>") == 1 + 10
+
+
+def test_a_long_events_raw_list_has_its_start_and_its_end(scene, admin_client):
+    from bgpcanary import evidence
+    ev = scene.execute("SELECT * FROM events WHERE id=9006").fetchone()
+    first, last = evidence.raw_updates(scene, P1, ev)
+    assert (first["label"], first["updates"], first["end"]) == ("around the start", 28, ev["start_ts"] + 1800)
+    assert (last["label"], last["updates"], last["start"]) == ("around the end", 0, ev["end_ts"] - 1800)
+    raw = raw_part(admin_client.get("/events/9006").text)
+    assert "Around the start" in raw and "Around the end" in raw and "No updates are stored for this stretch." in raw
+    assert "in the half hours around the start and the end" in admin_client.get("/events/9006").text
+
+
+def test_an_end_stored_before_the_start_counts_as_the_start(scene, admin_client):
+    from bgpcanary import evidence
+    conn = scene
+    conn.execute("INSERT INTO events(id, kind, severity, prefix, start_ts, end_ts, title, detail, historical) "
+                 "VALUES(9012, 'outage', 'critical', ?, ?, ?, 'An outage closed before it began', '{}', 0)", (P1, T0 - 10, T0 - 1840))
+    conn.commit()
+    try:
+        ev = conn.execute("SELECT * FROM events WHERE id=9012").fetchone()
+        assert evidence.window(ev) == (T0 - 10 - 1800, T0 - 10 + 1800)   # (it was cut off 30 s before the start)
+        (st,) = evidence.raw_updates(conn, P1, ev)
+        assert st["updates"] == 28
+        assert "28 updates for" in admin_client.get("/events/9012").text
+    finally:
+        conn.execute("DELETE FROM events WHERE id=9012")
+        conn.commit()
+
+
 # ------------------------------------------------------------------------------------------------ the tree
 def test_the_tree_replays_the_prefix_the_page_is_about(scene, admin_client):
     r = admin_client.get("/api/events/9001/replay")

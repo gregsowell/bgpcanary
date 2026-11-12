@@ -104,7 +104,7 @@ def scratch(tmp_path, monkeypatch):
 def one_day(monkeypatch):
     """The service's pauses pass at once, and it stops when it begins to wait for a second day: one round of what it
     does daily. (Not together with no_waiting: asked for after this one, it passes a day's wait on as no wait at
-    all, and the rounds never end.)"""
+    all, and the rounds never end.) It's the list of the days it has seen begin: emptied, there's another round."""
     sleep, days = asyncio.sleep, []
 
     async def passing(delay, result=None):
@@ -115,6 +115,7 @@ def one_day(monkeypatch):
         return await sleep(0, result)
 
     monkeypatch.setattr(asyncio, "sleep", passing)
+    return days
 
 
 def hold(svc, since, until=None):

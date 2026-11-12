@@ -248,6 +248,8 @@ class Service:
         if last is None and self.cfg.backfill_days > 0:
             gap_start = await self._replay(eng, now - self.cfg.backfill_days * 86400, now, show="all")
             eng.status["phase"] = "finishing the history load"
+            if now - gap_start > B:   # (noted before the check against RIS's snapshot, which goes by it: see below)
+                self._add_gap(gap_start, now)
             # first install: drop routes the replay still holds but RIS no longer has (silent drops)
             d = await self._bgplay_merged(now - 60, now, partial=True)
             if d:
@@ -262,6 +264,12 @@ class Service:
                     "SELECT 1 FROM buckets WHERE prefix=? LIMIT 1", (p,)).fetchone()]
                 if self.pending_backfill:
                     log.info("new prefixes without history: %s (loading in the background)", self.pending_backfill)
+            # From the last bucket stored to now is a gap, for the gap filler. It's noted before the stored history
+            # is checked against RIS's snapshot, because that check goes by it: after a stop longer than BGPlay runs
+            # behind, the history ends before the snapshot's time, and a route withdrawn meanwhile isn't one that
+            # went without a withdrawal (_reconcile_history).
+            if last is not None and now - (last + B) > B:
+                self._add_gap(last + B, now)
             # Seed the RIB from BGPlay's newest snapshot (a few hours old, but it includes peers the
             # looking glass omits). The looking-glass resync then brings it up to date; it's all there is for a
             # prefix the snapshot didn't arrive for, whose stored history is left as it is.
@@ -270,9 +278,6 @@ class Service:
                 await asyncio.to_thread(eng.load_bgplay, d, True, False)
                 self._restore_route_ages()
                 self._reconcile_history(d)
-            gap_start = last + B if last is not None else None
-        if gap_start is not None and now - gap_start > B:
-            self._add_gap(gap_start, now)
 
     def _restore_route_ages(self):
         """Seeding stamps every route with the snapshot time. Where a peer's path is unchanged from what our
@@ -356,10 +361,20 @@ class Service:
           got no snapshot for a prefix, that's every route of it the looking glass hasn't brought.
         A route the engine holds as withdrawn is recorded even when the snapshot lists it: the looking-glass resync
         drops a stale route RIS still holds, and dates that before the row a start stored for the route.
+        The history has to be all there to be judged. While a gap from before the snapshot's time is still to be
+        filled (_unfilled: the service was stopped, RIS Live was down, a history load ended early), a route the
+        snapshot doesn't list, last heard about before that gap ends, is left alone. It may have been withdrawn in
+        the gap, with a withdrawal the gap filler has yet to load: recorded here, right after its last update, it
+        was gone long before the gap, and the filler then stored the routes as they stood at the gap's start and
+        the real withdrawal behind that. A restart after a stop longer than BGPlay runs behind did that to every
+        route withdrawn meanwhile. The check that comes once the gap is filled (the next day's, or the next start's)
+        records what is still unexplained then. A route the snapshot lists isn't held up: no withdrawal of it is
+        waiting in the archive.
         The history of a prefix the snapshot isn't for (d["answered"]) is left alone: at a start nothing was seeded
         for it, so none of its routes is in the RIB, and every route its history holds would be recorded as
         withdrawn."""
         eng, ts, snap, n = self.engine, ripe_ts(d["query_starttime"]), self._snapshot_routes(d), 0
+        waiting, left = [(a, b) for a, b in self._unfilled() if a < ts], 0
         for prefix in self.cfg.prefixes:
             if prefix not in d["answered"]:
                 continue
@@ -372,6 +387,9 @@ class Service:
                 else:                                     # withdrawn, and not by something heard since
                     gone = not e.path and (e.ts < ts or (prefix, *key) in dropped)
                 if r["kind"] == "A" and r["path"] and gone:
+                    if not listed and any(b > r["ts"] for a, b in waiting):
+                        left += 1
+                        continue
                     self.conn.execute("INSERT INTO updates(ts,source,collector,peer,peer_asn,prefix,kind,path,"
                                       "communities) VALUES(?,?,?,?,?,?,?,?,?)",
                                       # dated just after the last real update: nothing shows it existed later
@@ -385,6 +403,17 @@ class Service:
         self.conn.commit()
         if n:
             log.info("history reconciled: %d stale routes withdrawn", n)
+        if left:
+            log.info("history: %d routes that aren't in RIS snapshot are left for a later check: the gap from %s is "
+                     "still to be filled from BGPlay, and their withdrawals may be in it", left,
+                     time.strftime("%m-%d %H:%M", time.gmtime(min(a for a, b in waiting))))
+
+    def _unfilled(self):
+        """The stretches the stored history doesn't hold yet, as (start, end): the gaps on the list, still to be
+        filled from BGPlay, and the one in the making while RIS Live is down."""
+        gaps = [(a, b) for a, b in db.kv_get(self.aconn, "gaps", [])]
+        down = getattr(self, "ws_down_since", None)   # (there once the service is live)
+        return gaps + [(down, time.time())] if down else gaps
 
     async def _ensure_init_rows(self):
         """One-time migration: store the RIB snapshot at the start of recorded history so event replays

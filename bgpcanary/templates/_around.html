@@ -66,5 +66,5 @@
     </dd>
     {% endif %}
   </dl>
-  {% if shown_prefix %}<p class="muted" style="margin:10px 0 0;font-size:13px">The <a href="#replay">path tree below</a> replays these minutes{% if chart_prefix %}, and <a href="/data?tab=changes&prefix={{ chart_prefix|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">BGP data</a> lists every path change in them{% endif %}.</p>{% endif %}
+  {% if shown_prefix %}<p class="muted" style="margin:10px 0 0;font-size:13px">The <a href="#replay">path tree below</a> replays these minutes with a pin on its timeline for each of them{% if chart_prefix %}, and <a href="/data?tab=changes&prefix={{ chart_prefix|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">BGP data</a> lists every path change in them{% endif %}.</p>{% endif %}
 </div>

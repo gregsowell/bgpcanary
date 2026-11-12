@@ -284,6 +284,67 @@ def test_the_tree_replays_the_prefix_the_page_is_about(scene, admin_client):
     assert admin_client.get("/api/events/999999/replay").status_code == 404
 
 
+def test_the_timeline_gets_a_mark_for_each_thing_the_panel_lists(scene, admin_client):
+    d = admin_client.get("/api/events/9001/replay").json()
+    assert (d["start"], d["end"]) == (T0 - 1800, T0 + 15 + 1800)   # the same half hour either side as the panel
+    marks = d["marks"]
+    assert [m["t"] for m in marks] == sorted(m["t"] for m in marks)
+    by = {}
+    for m in marks:
+        by.setdefault(m["kind"], []).append(m)
+    (burst,) = by["routes"]   # the burst of path changes, as a stretch
+    assert T0 < burst["t"] < burst["end"] < T0 + B and burst["level"] == "info"
+    assert burst["text"].startswith(f"27 of 40 RIS peers changed their path to {P1}: 20 moved from AS64510 FAR-AWAY")
+    loss, slow = by["ping"]   # the two rounds that stood out, as moments
+    assert (loss["level"], slow["level"]) == ("critical", "warning") and loss["end"] is None
+    assert loss["text"] == f"{LINK}: 1 of 10 probes got a reply (usually 9)" and T0 <= loss["t"] <= T0 + 10
+    assert slow["text"] == f"{LOOPBACK}: median round trip 200 ms (usually 40)" and slow["t"] > T0 + 1700
+    # every other event that began in the window, the info one too; not the one already open before it
+    assert [(m["id"], m["level"]) for m in by["event"]] == [(9006, "warning"), (9002, "info"), (9003, "warning")]
+    assert "unheard" not in by and all(m.get("id") != 9004 for m in marks)
+    # an event with nothing around it has no marks, and the page explains the pins
+    assert admin_client.get("/api/events/9005/replay").json()["marks"] == []
+    page = admin_client.get("/events/9001").text
+    assert 'data-rp="note"' in page and "The pins on the strip are what" in page and "with a pin on its timeline" in page
+
+
+def test_marks_of_a_long_event_and_of_a_stretch_not_heard(scene, web):
+    from bgpcanary import db, evidence
+    conn = scene
+    ev = conn.execute("SELECT * FROM events WHERE id=9006").fetchone()
+    marks = evidence.marks(conn, web.cfg, ev, lambda target: "link-a" if target == LINK else "", lambda asns: {})
+    rest = [m for m in marks if m["kind"] != "event"]
+    assert [m["kind"] for m in rest] == ["ping", "routes", "ping"]   # the lost round, the burst, the slow round
+    assert rest[0]["text"] == f"{LINK} (link-a): 1 of 10 probes got a reply (usually 9)"   # (with the target's label)
+    assert {m["id"] for m in marks if m["kind"] == "event"} == {9001, 9002, 9003, 9005, 9007}
+    # a reachability-loss event is a ping round itself: that round is the event on the timeline, not a pin beside it
+    conn.execute("UPDATE events SET detail=? WHERE id=9001", (json.dumps({"target": LINK, "msm": 990000001}),))
+    conn.commit()
+    try:
+        loss_event = conn.execute("SELECT * FROM events WHERE id=9001").fetchone()
+        pings = [m for m in evidence.marks(conn, web.cfg, loss_event, lambda t: "", lambda a: {}) if m["kind"] == "ping"]
+        assert [m["level"] for m in pings] == ["warning"]   # (the slow round to the other address stays)
+    finally:
+        conn.execute("UPDATE events SET detail='{}' WHERE id=9001")
+        conn.commit()
+    # the state at the window's start, when the caller read it for another prefix, isn't taken for this one's
+    assert evidence.marks(conn, web.cfg, ev, lambda t: "", lambda a: {}, state=(P2, [])) == \
+        evidence.marks(conn, web.cfg, ev, lambda t: "", lambda a: {})
+    kept = db.kv_get(conn, "gaps", None)
+    db.kv_set(conn, "gaps", [[QUIET - 100, QUIET + 200]])
+    conn.commit()
+    try:
+        quiet = conn.execute("SELECT * FROM events WHERE id=9005").fetchone()
+        (gap,) = evidence.marks(conn, web.cfg, quiet, lambda t: "", lambda a: {})
+        assert (gap["kind"], gap["t"], gap["end"]) == ("unheard", QUIET - 100, QUIET + 200) and "RIS Live" in gap["text"]
+    finally:
+        if kept is None:
+            conn.execute("DELETE FROM kv WHERE k='gaps'")
+        else:
+            db.kv_set(conn, "gaps", kept)
+        conn.commit()
+
+
 def test_the_strip_under_a_tree_shades_every_warning_and_critical_event(scene, admin_client):
     r = admin_client.get("/api/replay", params={"prefix": P1, "start": T0 - 3600, "end": T0 + 3600})
     assert r.status_code == 200

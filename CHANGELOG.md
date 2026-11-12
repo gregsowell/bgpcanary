@@ -6,6 +6,21 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-11-12
+
+### Added
+- **Pins on an event's timeline.** The strip under the path tree on an event's page now carries a pin for the event and one for each thing *Around this event* lists, so you can see when each of them happened and go there:
+  - blue where a burst of route changes began, with a faint band for as long as it lasted;
+  - red or orange for a RIPE Atlas ping round that stood out, and for another critical or warning event;
+  - grey for an info event (a new upstream chain, say) and for a stretch that wasn't heard live.
+
+  Point at a pin to read what it is. Click it, or drag the slider onto it, and a line under the slider says it in full for as long as the slider stays there. Pins that would sit on each other stack.
+- **The line under the slider names shaded events too**, on the dashboard's tree and on events replayed together: drag onto a shaded stretch or a mark and it says which event that is.
+
+### Changed
+- **An event's tree replays the same half hour either side as *Around this event*.** A short event's replay covered ten minutes either side, so some of what the panel listed fell outside it.
+- The strip's tooltip says what each entry is: an event, route changes, or a ping round.
+
 ## [1.7.4] - 2026-11-12
 
 ### Added
@@ -430,7 +445,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.4...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.5...HEAD
+[1.7.5]: https://github.com/gregsowell/bgpcanary/compare/v1.7.4...v1.7.5
 [1.7.4]: https://github.com/gregsowell/bgpcanary/compare/v1.7.3...v1.7.4
 [1.7.3]: https://github.com/gregsowell/bgpcanary/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/gregsowell/bgpcanary/compare/v1.7.1...v1.7.2

@@ -972,14 +972,15 @@ async def event_report(request: Request, eid: int):
     return resp
 
 
-def replay_payload(conn, prefix, s, e):
+def replay_payload(conn, prefix, s, e, base=None):
     """Peer-level path history for [s, e], for the path-tree replay (runs in a worker thread).
 
     Returns the RIB at `s` plus every change inside the window, compactly:
     peers[i] = [collector, peer_ip, peer_asn]; paths[j] = "a b c ... origin";
     init[i] = path index or -1; updates = [[ts, peer_index, path_index_or_-1], ...]
+    `base`: db.state_at's rows for `s`, when the caller has read them.
     """
-    base = db.state_at(conn, prefix, s)
+    base = db.state_at(conn, prefix, s) if base is None else base
     ups = conn.execute("SELECT ts, collector, peer, peer_asn, kind, path FROM updates "
                        "WHERE prefix=? AND ts>? AND ts<=? ORDER BY ts, id", (prefix, s, e)).fetchall()
     peer_idx, peers, path_idx, plist = {}, [], {}, []
@@ -1180,6 +1181,21 @@ async def upstream_neighbors(data):
     return data
 
 
+def event_replay(conn, ev):
+    """An event's tree replay (runs in a worker thread): the stretch its page's "around this event" covers, half an
+    hour either side, with what that panel lists as "marks" for the timeline (evidence.marks). One read of the
+    stored state at the window's start serves both. None when there's no prefix to replay."""
+    s, e = evidence.window(ev)
+    # (an event that names no prefix replays the monitored prefix its page is about: see event_page)
+    prefix = ev["prefix"] or evidence.focus_prefix(conn, cfg, ev, s, e)[0]
+    if not prefix:
+        return None
+    base = db.state_at(conn, prefix, s)
+    out = replay_payload(conn, prefix, s, e, base=base)
+    out["marks"] = evidence.marks(conn, cfg, ev, svc.atlas.label, lambda a: names(conn, a), state=(prefix, base))
+    return out
+
+
 @app.get("/api/events/{eid}/replay")
 async def api_event_replay(request: Request, eid: int):
     user(request)
@@ -1188,14 +1204,9 @@ async def api_event_replay(request: Request, eid: int):
         ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
         if not ev:
             raise HTTPException(404)
-        # (an event that names no prefix replays the monitored prefix its page is about: see event_page)
-        prefix = ev["prefix"] or evidence.focus_prefix(conn, cfg, ev, *evidence.window(ev))[0]
-        if not prefix:
+        out = await asyncio.to_thread(event_replay, conn, ev)
+        if out is None:
             raise HTTPException(404)
-        end = ev["end_ts"] or time.time()
-        pad = min(1800, max(600, (end - ev["start_ts"]) * 0.08))
-        s, e = ev["start_ts"] - pad, min(end + pad, time.time())
-        out = await asyncio.to_thread(replay_payload, conn, prefix, s, e)
     finally:
         conn.close()
     out["event"] = {"id": ev["id"], "title": ev["title"], "severity": ev["severity"], "kind": ev["kind"],

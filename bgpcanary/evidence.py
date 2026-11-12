@@ -281,6 +281,75 @@ def _unheard(conn, prefix, spans):
     return {"open": sorted(open_), "filled": filled}
 
 
+def _ping_rounds(conn, s, e, label_of):
+    """Every RIPE Atlas ping round to your own targets between `s` and `e`, each judged against what's usual for
+    its measurement (_judge_rounds)."""
+    mine = {r["target"] for r in conn.execute("SELECT DISTINCT target FROM atlas_msm WHERE purpose IN ('baseline','check')")}
+    prow = conn.execute("SELECT r.msm_id, r.prb_id, r.ts, r.sent, r.rcvd, r.rtt_avg, m.target, m.purpose FROM atlas_result r "
+                        "JOIN atlas_msm m ON m.id=r.msm_id WHERE r.kind='ping' AND r.ts>=? AND r.ts<=? "
+                        "ORDER BY r.msm_id, r.ts", (s, e)).fetchall()
+    out = []
+    for rs in _rounds([r for r in prow if r["target"] in mine]):
+        sent = sum(r["sent"] or 0 for r in rs)
+        rtts = [r["rtt_avg"] for r in rs if r["rtt_avg"] is not None]
+        failed = [r["prb_id"] for r in rs if r["sent"] and not r["rcvd"]]
+        out.append({
+            "ts": rs[0]["ts"], "target": rs[0]["target"], "label": label_of(rs[0]["target"]), "purpose": rs[0]["purpose"],
+            "msm": rs[0]["msm_id"], "probes": len(rs), "no_reply": len(failed), "failed_probes": failed,
+            "loss": 100 * (1 - sum(r["rcvd"] or 0 for r in rs) / sent) if sent else None,
+            "median_rtt": statistics.median(rtts) if rtts else None})
+    _judge_rounds(conn, out, s)
+    return out
+
+
+def _round_text(r):
+    """A ping round that stood out (_judge_rounds), in words."""
+    return ((r["target"] + (f" ({r['label']})" if r["label"] else "") + ": ")
+            + (f"{r['probes'] - r['no_reply']} of {r['probes']} probes got a reply (usually {r['probes'] - r['usual_no_reply']})"
+               if r["odd"] == "loss" else f"median round trip {r['median_rtt']:.0f} ms (usually {r['usual_rtt']:.0f})"))
+
+
+def marks(conn, cfg, ev, label_of, name_of, state=None):
+    """What an event's "around this event" lists, as moments for the timeline under its tree, oldest first:
+    [{"t", "end" (None: a moment), "kind", "level", "text"}], an event's with its "id". The kinds: "routes", a burst
+    of path changes (level "info"); "ping", a round that stood out ("critical" when probes got no reply, "warning"
+    when it was slow); "event", another event that began in the window (its severity); "unheard", a stretch RIS
+    Live missed that isn't filled in yet. `state`: (prefix, db.state_at's rows at the window's start) when the
+    caller has read them, as the replay of that prefix has."""
+    ev = dict(ev)
+    now = time.time()
+    s, e = window(ev, now)
+    prefix, _how = focus_prefix(conn, cfg, ev, s, e)
+    spans, out, bursts, asns = _spans(ev, s, e, now), [], [], set()
+    if prefix:
+        have = {s: state[1]} if state and state[0] == prefix else {}
+        have.update(_states(conn, prefix, [s0 for _span, s0, _e0 in spans if s0 not in have]))
+        for span, s0, e0 in spans:
+            sp = _routes(conn, prefix, span, s0, e0, cfg.bucket_seconds, have[s0])
+            for b in (sp["bursts"] if sp else []):
+                bursts.append((sp, b))
+                asns.update(a for way, _n in b["moves"] for c in way if c for a in c if a)
+    names = name_of([a for a in asns if a]) if asns else {}
+    for sp, b in bursts:
+        text = changes.burst_text(b, names)
+        out.append({"t": b["start"], "end": b["end"], "kind": "routes", "level": "info",
+                    "text": f"{b['peers']} of {sp['peers']} RIS peers changed their path to {prefix}" + (f": {text}" if text else "")})
+    # (a reachability-loss event is itself a ping round: that one is the event on the timeline, not a mark beside it)
+    own = json.loads(ev["detail"] or "{}").get("msm") if ev["kind"] == "reachability_loss" else None
+    for r in _ping_rounds(conn, s, e, label_of):
+        if r["odd"] and not (r["msm"] == own and ev["start_ts"] - 120 <= r["ts"] <= (ev["end_ts"] or ev["start_ts"]) + 5):
+            out.append({"t": r["ts"], "end": None, "kind": "ping", "level": "critical" if r["odd"] == "loss" else "warning",
+                        "text": _round_text(r)})
+    for r in _other_events(conn, ev, s, e, now):
+        if r["start_ts"] >= s:   # (one already open when the window begins has no moment in it)
+            out.append({"t": r["start_ts"], "end": r["end_ts"], "kind": "event", "level": r["severity"], "text": r["title"],
+                        "id": r["id"]})
+    for a, b in _unheard(conn, prefix, spans)["open"]:
+        out.append({"t": a, "end": b, "kind": "unheard", "level": "info",
+                    "text": "RIS Live wasn't being received, and RIPE's archive hasn't filled this stretch in yet"})
+    return sorted(out, key=lambda m: m["t"])
+
+
 def collect(conn, cfg, ev, atlas_payload, nbrs, label_of, name_of):
     """Evidence for one event. `atlas_payload(conn, target, s, e, msm, nbrs=)` builds traceroute views;
     `label_of(target)` gives a baseline target's label; `name_of(asns)` returns {asn: name}."""
@@ -327,20 +396,7 @@ def collect(conn, cfg, ev, atlas_payload, nbrs, label_of, name_of):
         "SELECT * FROM probes WHERE event_id=? OR (ts>=? AND ts<=?) ORDER BY ts", (ev["id"], s, e)).fetchall())
 
     # RIPE Atlas: every ping round to your own targets in the window, and every traceroute run
-    mine = {r["target"] for r in conn.execute("SELECT DISTINCT target FROM atlas_msm WHERE purpose IN ('baseline','check')")}
-    prow = conn.execute("SELECT r.msm_id, r.prb_id, r.ts, r.sent, r.rcvd, r.rtt_avg, m.target, m.purpose FROM atlas_result r "
-                        "JOIN atlas_msm m ON m.id=r.msm_id WHERE r.kind='ping' AND r.ts>=? AND r.ts<=? "
-                        "ORDER BY r.msm_id, r.ts", (s, e)).fetchall()
-    for rs in _rounds([r for r in prow if r["target"] in mine]):
-        sent = sum(r["sent"] or 0 for r in rs)
-        rtts = [r["rtt_avg"] for r in rs if r["rtt_avg"] is not None]
-        failed = [r["prb_id"] for r in rs if r["sent"] and not r["rcvd"]]
-        out["atlas_rounds"].append({
-            "ts": rs[0]["ts"], "target": rs[0]["target"], "label": label_of(rs[0]["target"]), "purpose": rs[0]["purpose"],
-            "msm": rs[0]["msm_id"], "probes": len(rs), "no_reply": len(failed), "failed_probes": failed,
-            "loss": 100 * (1 - sum(r["rcvd"] or 0 for r in rs) / sent) if sent else None,
-            "median_rtt": statistics.median(rtts) if rtts else None})
-    _judge_rounds(conn, out["atlas_rounds"], s)
+    out["atlas_rounds"] = _ping_rounds(conn, s, e, label_of)
     around.update(rounds=len(out["atlas_rounds"]), targets=len({r["target"] for r in out["atlas_rounds"]}),
                   odd=[r for r in out["atlas_rounds"] if r["odd"]])
     tmsms = conn.execute("SELECT DISTINCT m.id, m.target, m.purpose, m.created FROM atlas_msm m JOIN atlas_result r "
@@ -476,10 +532,7 @@ def around_text(d):
         w(f"RIPE Atlas ping rounds: {ar['rounds']} to {ar['targets']} of your addresses"
           + (":" if ar["odd"] else ", all as usual."))
         for r in ar["odd"]:
-            tgt = r["target"] + (f" ({r['label']})" if r["label"] else "")
-            w(f"  {hm(r['ts'])}  {tgt}: "
-              + (f"{r['probes'] - r['no_reply']} of {r['probes']} probes got a reply (usually {r['probes'] - r['usual_no_reply']})"
-                 if r["odd"] == "loss" else f"median round trip {r['median_rtt']:.0f} ms (usually {r['usual_rtt']:.0f})"))
+            w(f"  {hm(r['ts'])}  {_round_text(r)}")
         if ar["odd"] and ar["rounds"] > len(ar["odd"]):
             w(f"  The other {ar['rounds'] - len(ar['odd'])} were as usual.")
     else:

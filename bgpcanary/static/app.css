@@ -163,6 +163,12 @@ a.card:hover { text-decoration: none; border-color: var(--accent); transform: tr
 .rp-timebox .rp-slider { margin: 6px 0 2px; }
 .rp-timeends { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--muted); }
 .rp-tipline { text-align: center; flex: 1; }
+/* under the slider: what the tree's timeline holds at the moment shown (replay.js) */
+.rp-note { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--border); font-size: 13px; min-height: 19px; }
+.rp-note div { overflow-wrap: anywhere; }
+.rp-note.rp-note-pins { min-height: 2.9em; }   /* (room for a two-line note, so the tree doesn't jump while scrubbing) */
+.rp-pin { display: inline-block; margin-right: 6px; font-size: 11px; color: var(--muted); }
+.rp-pin-critical { color: var(--crit); } .rp-pin-warning { color: var(--warn); } .rp-pin-routes { color: var(--accent); }
 @media (max-width: 640px) { .rp-tipline { display: none; } }
 /* BGP data page: tabs, paths by the way in, changes in bursts */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0 0 16px; flex-wrap: wrap; }

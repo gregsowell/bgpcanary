@@ -63,11 +63,20 @@
     };
   }
 
+  // A mark on an event page's timeline (the replay's "marks": what else went on around the event): its name, its
+  // colour, and whether it's a stretch of time or a moment (an info event counts as the moment it began: some
+  // stay open for days).
+  const MARKS = { routes: "Routes", ping: "RIPE Atlas", event: "Event", unheard: "Not heard live" };
+  const markColor = (m, th) => (m.kind === "routes" ? th.accent : m.kind === "unheard" ? th.muted
+    : m.level === "critical" ? th.crit : m.level === "warning" ? th.warn : th.muted);
+  const markSpan = m => m.end != null && m.end > m.t && (m.kind !== "event" || m.level !== "info");
+
   class Replay {
     constructor(data, baseMode) {
       this.D = data;
       this.ev = data.event || null;
       this.events = data.events || (data.event ? [data.event] : []);
+      this.marks = data.marks || [];   // (an event's page: what else went on around it, see markColor)
       this.paths = data.paths.map(s => s.split(" ").map(Number));
       // origin first. Peers (data.exchanges: peer -> exchange) hang off one "Exchanges" branch, split per exchange:
       // origin > "x" > "x:<n>" > peer > ... (two virtual hops; transit branches are unchanged)
@@ -341,6 +350,18 @@
       });
       return { at, lines: line + 1 };
     }
+    // What the timeline holds at moment t, for the tooltip over it and the line under the slider: the marks within
+    // `tol` seconds of it (a stretch counts all along), and the shaded events that aren't marks themselves.
+    at(t, tol) {
+      const marked = new Set(this.marks.filter(m => m.id != null).map(m => m.id));
+      const out = this.marks.filter(m => t >= m.t - tol && t <= (markSpan(m) ? m.end : m.t) + tol)
+        .map(m => ({ t: m.t, level: m.kind === "routes" ? "routes" : m.kind === "unheard" ? "quiet" : m.level, label: MARKS[m.kind] || "Event", text: m.text }));
+      for (const e of this.events) {
+        if (marked.has(e.id) || t < e.start - tol || t > (e.end || this.D.end) + tol) continue;
+        out.push({ t: e.start, level: e.severity, label: this.ev && e.id === this.ev.id ? "This event" : "Event", text: e.title, own: !!this.ev && e.id === this.ev.id });
+      }
+      return out.sort((a, b) => a.t - b.t);
+    }
     phase() {
       const ev = this.ev;
       if (ev) {
@@ -570,11 +591,33 @@
           const x = X(s), w = Math.max(2, X(en) - x), short = w < 6;
           ctx.fillStyle = crit ? `rgba(200,38,43,${short ? .6 : .18})` : `rgba(199,119,0,${short ? .6 : .18})`;
           ctx.fillRect(x, ty, w, th2);
-          if (short) {
+          if (short && !this.ev) {   // (on an event's page every event has a pin: see below)
             ctx.fillStyle = crit ? th.crit : th.warn;
-            ctx.beginPath(); ctx.moveTo(x + w / 2 - 5, ty - 6); ctx.lineTo(x + w / 2 + 5, ty - 6); ctx.lineTo(x + w / 2, ty + 2); ctx.closePath(); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(x + w / 2 - 6, ty - 8); ctx.lineTo(x + w / 2 + 6, ty - 8); ctx.lineTo(x + w / 2, ty + 2); ctx.closePath(); ctx.fill();
           }
         }
+      }
+      // An event's page: a pin where the event began and one at each thing that went on around it (its "around
+      // this event"), coloured by what it is, one row up where two would sit on each other; a stretch (route
+      // changes, a gap in what was heard) gets a faint band as well.
+      const rows = [-1e9, -1e9, -1e9];
+      const pins = this.ev ? [{ t: this.ev.start, end: null, kind: "event", level: this.ev.severity }, ...this.marks] : this.marks;
+      for (const m of pins.slice().sort((a, b) => a.t - b.t)) {
+        if (m.t > this.D.end || (markSpan(m) ? m.end : m.t) < this.D.start) continue;
+        const col = markColor(m, th), x = X(Math.max(m.t, this.D.start));
+        if (markSpan(m) && m.kind !== "event") {   // (an event's stretch is shaded above already)
+          const w = X(Math.min(m.end, this.D.end)) - x;
+          if (w >= 3) { ctx.globalAlpha = .14; ctx.fillStyle = col; ctx.fillRect(x, ty, w, th2); ctx.globalAlpha = 1; }
+        }
+        let row = rows.findIndex(v => x - v >= 13);
+        if (row < 0) row = rows.length - 1;
+        rows[row] = x;
+        const py = ty - 8 - row * 9;
+        ctx.globalAlpha = .6; ctx.strokeStyle = col; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x, py + 9); ctx.lineTo(x, ty + th2); ctx.stroke();
+        ctx.globalAlpha = 1; ctx.fillStyle = col;
+        ctx.beginPath(); ctx.moveTo(x - 6, py); ctx.lineTo(x + 6, py); ctx.lineTo(x, py + 10); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = th.bg; ctx.lineWidth = 1; ctx.stroke();   // (a hairline, so pins that touch stay apart)
       }
       if (this.gifRange && !opts.footer) {
         // selected GIF / playback range
@@ -715,6 +758,28 @@
       // slider labels: selected moment, and the window's start/end under the track
       const ro = q("slider-time");
       if (ro) ro.textContent = `${rp.when(rp.t)} · ${rp.phase()}`;
+      // ...and, under the slider, what the timeline holds at that moment: the pins and shaded events within a few
+      // pixels of it (not the page's own event: the readout above says "during event")
+      const note = q("note");
+      if (note) {
+        const here = rp.at(rp.t, Math.max(10, (data.end - data.start) / 250)).filter(a => !a.own);
+        note.hidden = !(here.length || rp.marks.length || rp.events.length);
+        note.classList.toggle("rp-note-pins", rp.marks.length > 0);
+        note.replaceChildren(...here.slice(0, 4).map(a => {
+          const row = document.createElement("div"), pin = document.createElement("span");
+          pin.className = `rp-pin rp-pin-${a.level}`; pin.textContent = "▼";
+          row.append(pin, `${a.label}: ${a.text}`); row.title = `${rp.when(a.t)}  ${a.text}`;
+          return row;
+        }));
+        if (!here.length && !note.hidden) {
+          const hint = document.createElement("div");
+          hint.className = "muted";
+          hint.textContent = rp.marks.length
+            ? "▼ on the strip under the tree: what else went on around this event. Point at one, click it, or drag the slider onto it."
+            : "Shaded stretches and ▼ on the strip under the tree are events. Point at one, click it, or drag the slider onto it.";
+          note.append(hint);
+        }
+      }
       const dt = ts => { const d = new Date(rp.real(ts) * 1000); return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
       if (q("slider-start")) q("slider-start").textContent = dt(data.start);
       if (q("slider-end")) q("slider-end").textContent = dt(data.end) + (opts.followNow ? " (now)" : "");
@@ -764,7 +829,13 @@
     canvas.addEventListener("click", e => {
       if (!rp) return;
       const b = canvas.getBoundingClientRect(), x = (e.clientX - b.left) / k, y = (e.clientY - b.top) / k, tl = rp.timeline;
-      if (tl && y >= tl.ty - 6 && y <= tl.ty + tl.th2 + 6) { stop(); setT(data.start + (x - tl.tx0) / (tl.tx1 - tl.tx0) * (data.end - data.start)); }
+      if (tl && y >= tl.ty - (rp.marks.length ? 28 : 8) && y <= tl.ty + tl.th2 + 6) {   // (pins stand above the strip)
+        const per = (data.end - data.start) / (tl.tx1 - tl.tx0), t = data.start + (x - tl.tx0) * per;
+        // a click on a pin or on an event's mark, or a few pixels off it, goes to that moment exactly
+        const pin = [...rp.marks, ...rp.events.map(e => ({ t: e.start }))].filter(m => Math.abs(m.t - t) <= 5 * per)
+          .sort((p, r) => Math.abs(p.t - t) - Math.abs(r.t - t))[0];
+        stop(); setT(pin ? pin.t : t);
+      }
     });
     canvas.addEventListener("mousemove", e => {
       if (!rp) return;
@@ -779,12 +850,13 @@
         tip.style.top = (y * k + 12 + tht > wrap.clientHeight ? Math.max(0, y * k - tht - 12) : y * k + 12) + "px";
       };
       const tl = rp.timeline;
-      if (!h && tl && y >= tl.ty - 8 && y <= tl.ty + tl.th2 + 4 && x >= tl.tx0 && x <= tl.tx1) {
-        // over the strip: which events are shaded there (a short one is a few pixels wide, so 4 px either side count)
+      if (!h && tl && y >= tl.ty - (rp.marks.length ? 28 : 10) && y <= tl.ty + tl.th2 + 4 && x >= tl.tx0 - 6 && x <= tl.tx1 + 6) {
+        // over the strip or a pin on it: what is there (a pin or a short event is a few pixels wide, so 5 px either
+        // side count)
         const per = (data.end - data.start) / (tl.tx1 - tl.tx0), t = data.start + (x - tl.tx0) * per;
-        const at = rp.events.filter(e => t >= e.start - 4 * per && t <= (e.end || data.end) + 4 * per);
+        const at = rp.at(t, 5 * per);
         if (at.length) {
-          showTip(at.slice(0, 6).map(e => `${rp.when(e.start)}  ${e.title}`).join("\n") + (at.length > 6 ? `\n+${at.length - 6} more` : ""));
+          showTip(at.slice(0, 6).map(a => `${rp.when(a.t)}  ${a.label}: ${a.text}`).join("\n") + (at.length > 6 ? `\n+${at.length - 6} more` : ""));
           return;
         }
       }

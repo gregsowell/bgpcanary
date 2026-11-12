@@ -6,6 +6,10 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+- **The same past event listed several times, each marked "(backfill)".** When RIS Live drops, bgpcanary notes the gap and fills it from RIPE's archive later. The gap was taken to begin at the last message's own timestamp, and RIS Live now and then passes on updates stamped days or weeks ago: when one of those was the last message before a drop, the "gap" reached back all those weeks, they were replayed, and every event in them was recorded again, once for each such drop. A gap now begins at the newest update the connection delivered (at most 15 minutes before its last message arrived), and a gap fill no longer records an event the Events list already holds, whatever stretch it replays. Repeats recorded by earlier versions stay in the list.
+- **"Last message" is when RIS Live's last message arrived**, on the dashboard, in the data sources panel and in the API's `last_message`, as documented. It was the message's own timestamp, so it could briefly read weeks ago; for the same reason the data sources panel could report RIS Live as "disconnected for" far longer than it had been.
+
 ## [1.7.2] - 2026-11-04
 
 ### Added

@@ -29,7 +29,8 @@ CONTROL_ADAPT_S = 6 * 3600         # a control prefix low for this long is taken
 # (UPD_WINDOW: how far back "before" is looked for); only one that typically carries at least UPD_MIN (and a tenth of
 # everyone) is judged; it's back once it carries UPD_BACK of that again, for UPD_HOLD (so one that flaps is one event)
 UPD_WINDOW, UPD_TYPICAL, UPD_MIN, UPD_BACK, UPD_HOLD = 1800, 6 * 3600, 20, 0.5, 600
-
+# One-time notices: over as soon as they're recorded, and told apart by their title (which chain, which neighbour)
+NOTICE_KINDS = ("chain_change", "new_peer", "new_upstream")
 
 
 @dataclass
@@ -133,6 +134,7 @@ class Engine:
         # a gap filler (for_gap): entries with "id" None are known from the live engine or the gap's starting state;
         # they get no event, and nothing is closed when they end
         self.gap_fill = False
+        self.own = set()   # a gap filler: the events it recorded itself (see _recorded)
         self.B = cfg.bucket_seconds
         self.last_bucket = None
         self.historical = False
@@ -357,8 +359,45 @@ class Engine:
             except Exception:
                 log.exception("listener failed")
 
+    def _recorded(self, kind, prefix, start_ts, end_ts, title, detail):
+        """A gap filler asks before recording an event: the id of one the database already holds for the same thing
+        at that time, else None. A gap can take in time that was watched live after all (a quiet stretch before the
+        stream dropped), or that an earlier fill has been through (a gap recorded twice, or filled again because a
+        restart came before the list of gaps was saved). Without this check everything found there was recorded
+        again: the same event several times over.
+        The same thing: this kind and prefix with the same anomaly key or, for the one-time notices, the same title;
+        an outage or dip is the prefix's only one at a time. At that time: the stored event had begun and hadn't
+        ended when this one begins (for one that's over when it's recorded, a dip or a notice: the two overlap).
+        A start replayed from BGPlay comes out a little earlier than the one seen live (whole seconds; fewer buckets
+        behind it), and nothing begins again within the sustain time of having begun, so a stored event that begins
+        up to that much later is this one too.
+        What this filler recorded itself doesn't count: two of its own dips can end and begin in the same second."""
+        over = end_ts is not None
+        until = (end_ts + 1) if over else start_ts + self.cfg.sustain_seconds
+        for r in self.conn.execute(
+                "SELECT id, title, detail FROM events WHERE kind=? AND prefix IS ? AND start_ts<=? AND "
+                "(end_ts IS NULL OR end_ts>=?) ORDER BY id", (kind, prefix, until, start_ts)).fetchall():
+            if r["id"] in self.own:
+                continue
+            if "key" in detail:
+                try:
+                    same = json.loads(r["detail"] or "{}").get("key") == detail["key"]
+                except ValueError:
+                    same = False
+            else:
+                same = kind not in NOTICE_KINDS or r["title"] == title
+            if same:
+                return r["id"]
+        return None
+
     def _new_event(self, kind, severity, prefix, start_ts, title, detail=None, end_ts=None,
                    min_visible=None, baseline=None):
+        if self.gap_fill:
+            known = self._recorded(kind, prefix, start_ts, end_ts, title, detail or {})
+            if known is not None:
+                log.info("gap fill: %s at %s is event %s already, not recorded again (%s)", kind,
+                         time.strftime("%m-%d %H:%M:%S", time.gmtime(start_ts)), known, title)
+                return None   # like what the live engine has open: no event of this engine's to update or close
         cur = self.conn.execute(
             "INSERT INTO events(kind,severity,prefix,start_ts,end_ts,title,detail,min_visible,baseline,historical)"
             " VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -366,6 +405,8 @@ class Engine:
              1 if self.historical else 0))
         eid = cur.lastrowid
         self.conn.commit()
+        if self.gap_fill:
+            self.own.add(eid)
         log.info("event %s [%s] %s: %s", eid, severity, kind, title)
         self._emit(eid, "open")
         return eid
@@ -1167,7 +1208,8 @@ def for_gap(cfg, conn, peering, live, start):
     as of `start`, and knowing everything `live` has open (its anomalies without their events, an outage without its
     event) plus whatever the gap's starting state shows (know_anomalies), so it reports only what begins inside the
     gap. Before 1.6.1 every gap fill reported what was already open all over again, as a short "(backfill)" event
-    per RIS Live reconnect."""
+    per RIS Live reconnect. What the live engine has closed since, or an earlier fill recorded, it finds in the
+    database instead (Engine._recorded)."""
     f = Engine(cfg, conn, restore=False, peering=peering)
     f.historical = f.gap_fill = True
     f.seed_baseline(start)

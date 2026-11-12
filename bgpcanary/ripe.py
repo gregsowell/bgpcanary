@@ -14,6 +14,11 @@ log = logging.getLogger("bgpcanary.ripe")
 
 STAT = "https://stat.ripe.net/data"
 UA = {"User-Agent": "bgpcanary (open-source BGP visibility monitor; RIPEstat/RIS consumer)"}
+# RIS Live normally delivers an update within seconds of a collector hearing it (a few arrive minutes late), but now
+# and then it passes on updates stamped days or weeks ago. So a message's own timestamp doesn't say when the stream
+# last worked: this is how far behind the stream is taken to run at most, when working out what a drop may have
+# missed (RisLive.down_since)
+LAG_MAX = 900
 
 
 async def stat(call, sourceapp, **params):
@@ -50,6 +55,21 @@ class RisLive:
         self.on_disconnect = on_disconnect
         self.recent_ids = OrderedDict()
         self.client = f"bgpcanary-as{engine.asn}"
+        # the current connection: when it came up, when its last message arrived, and the newest time any carried
+        self.up = self.heard = self.newest = None
+
+    def down_since(self):
+        """From when updates may be missing, asked when the stream drops: the start of the gap the service fills from
+        BGPlay later. It's the newest update time this connection delivered, though never more than LAG_MAX before
+        its last message arrived (that message shows the stream worked then) and never before the connection came
+        up (the drop before it has a gap of its own).
+        It used to be the last message's own timestamp. When that message was one of RIS Live's old ones, the "gap"
+        began weeks back, all of it was replayed, and every event in it was recorded again."""
+        if self.heard is None:   # no connection since the last drop (a failed attempt to reconnect)
+            return time.time()
+        if self.newest is None:  # nothing arrived on it
+            return self.heard
+        return min(self.heard, max(self.newest, self.heard - LAG_MAX, self.up or 0))
 
     def _subscriptions(self):
         subs = []
@@ -70,7 +90,8 @@ class RisLive:
                     for s in self._subscriptions():
                         await ws.send(json.dumps({"type": "ris_subscribe", "data": s}))
                     self.engine.status["ws_connected"] = True
-                    self.engine.status["ws_since"] = time.time()
+                    self.engine.status["ws_since"] = self.up = self.heard = time.time()
+                    self.newest = None
                     log.info("RIS Live connected")
                     backoff = 2
                     asyncio.create_task(self.on_connect())
@@ -85,13 +106,17 @@ class RisLive:
             except Exception as e:
                 log.warning("RIS Live disconnected: %s", e)
             if self.on_disconnect:
-                self.on_disconnect(self.engine.status.get("last_msg") or time.time())
+                self.on_disconnect(self.down_since())
+            self.up = self.heard = self.newest = None
             self.engine.status["ws_connected"] = False
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 120)
 
     def handle(self, d):
         eng = self.engine
+        now = time.time()
+        ts = float(d.get("timestamp") or now)
+        self.heard, self.newest = now, max(self.newest or 0, ts)   # (a duplicate shows the stream working too)
         mid = d.get("id")
         if mid:
             if mid in self.recent_ids:
@@ -100,8 +125,7 @@ class RisLive:
             if len(self.recent_ids) > 5000:
                 self.recent_ids.popitem(last=False)
         eng.status["msgs"] += 1
-        eng.status["last_msg"] = d.get("timestamp")
-        ts = float(d.get("timestamp", time.time()))
+        eng.status["last_msg"] = now   # when it arrived: the message's own time can be weeks old (see LAG_MAX)
         coll = paths.collector_name(d.get("host", "rrc?"))
         peer = d.get("peer")
         peer_asn = int(d["peer_asn"]) if d.get("peer_asn") else None

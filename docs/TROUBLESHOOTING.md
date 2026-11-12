@@ -154,7 +154,7 @@ RIPEstat), including the ones that carry none of your paths *through that upstre
   curl -sI https://ris-live.ripe.net/v1/stream/ | head -1
   ```
 
-- Short disconnects are normal. bgpcanary reconnects on its own and fills the gap from RIPE's archive a few hours later. Events found that way are marked "(backfill)" and don't send alerts; a gap fill reports only what began during the gap, not what was already open.
+- Short disconnects are normal. bgpcanary reconnects on its own and fills the gap from RIPE's archive a few hours later. Events found that way are marked "(backfill)" and don't send alerts; a gap fill reports only what began during the gap, not what was already open or is already in the Events list.
 
 ## An outage that isn't real
 

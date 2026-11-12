@@ -122,6 +122,10 @@ class Engine:
         self.xhist = {}   # (prefix, exchange) -> peer counts over the baseline window, for "exchange peers lost"
         self.lhist = {}   # (prefix, peer asn) -> its usual reach, for "peer leak"
         self.asn = cfg.asn
+        # The live engine (restore), or one made beside it to replay a stretch of history: a gap filler, a new
+        # prefix's history. Those are made afresh for every replay, so what an engine says once (the tracking-limit
+        # notice in relevant()) is the live engine's to say. It's the live one while it loads history itself, too.
+        self.live = restore
         self.nets = {p: ipaddress.ip_network(p) for p in cfg.prefixes}
         self.owned = [ipaddress.ip_network(p, strict=False) for p in cfg.owned_space]
         self.mons = {p: PrefixMon(p) for p in cfg.prefixes}
@@ -222,11 +226,12 @@ class Engine:
         if prefix in self.rib:
             return True
         # Anything else our ASN originates or appears in is tracked, up to a cap, so a large network that
-        # only lists some of its prefixes can't flood the RIB/DB. Hitting the cap posts one FYI notice.
+        # only lists some of its prefixes can't flood the RIB/DB. Hitting the cap posts one FYI notice: from the
+        # live engine only, or each gap fill would post it again.
         unmonitored = sum(1 for p in self.rib
                           if self._parent(p) is None and p not in self.mons and p not in self.controls)
         if unmonitored >= self.cfg.max_unmonitored:
-            if not self.status.get("unmonitored_capped"):
+            if self.live and not self.status.get("unmonitored_capped"):
                 self.status["unmonitored_capped"] = True
                 self._new_event(
                     "tracking_limit", "info", self.cfg.prefixes[0] if self.cfg.prefixes else None, time.time(),

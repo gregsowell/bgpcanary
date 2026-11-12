@@ -443,6 +443,25 @@ class Service:
         log.info("recorded data gap %s -> %s UTC", time.strftime("%m-%d %H:%M:%S", time.gmtime(s)),
                  time.strftime("%m-%d %H:%M:%S", time.gmtime(e)))
 
+    def _gap_filled(self, s, e):
+        """Take [s, e] out of the stored list of gaps: it has been filled. Out of the list as it is now, not as the
+        filler read it when its pass began: RIS Live may have dropped again since and _add_gap noted that gap, or made
+        one gap of it and the one just filled. Whatever lies outside [s, e] stays, for a later pass. An entry with
+        nothing in it (it ends before it begins: the clock was set back meanwhile) is dropped on the way."""
+        left = []
+        for a, b in db.kv_get(self.aconn, "gaps", []):
+            if b <= a:
+                continue
+            if e <= s or b <= s or a >= e:   # nothing was filled, or nothing of this one
+                left.append([a, b])
+                continue
+            if a < s:
+                left.append([a, s])
+            if b > e:
+                left.append([e, b])
+        db.kv_set(self.aconn, "gaps", left)
+        self.aconn.commit()
+
     async def _transit_loop(self):
         await self.first_sync.wait()
         await asyncio.sleep(180)   # let the RIB settle after startup
@@ -473,28 +492,35 @@ class Service:
             await asyncio.sleep(1800)
 
     async def _fill_gaps(self):
-        """Rebuild buckets/events for recorded gaps once RIPE's BGPlay data covers them (lags a few hours)."""
-        gaps = db.kv_get(self.aconn, "gaps", [])
-        if not gaps:
-            return
-        remaining = []
-        for s, e in gaps:
+        """Rebuild buckets/events for recorded gaps once RIPE's BGPlay data covers them (lags a few hours).
+        The list is read once, and it changes while this works: every await below lets a RIS Live reconnect note a
+        new gap (_add_gap). So nothing is written back from the copy read here. A gap is taken out of the stored list
+        the moment it has been filled, as far as it has been filled (_gap_filled); one that isn't covered yet is just
+        left there. The copy used to be saved once, after the last gap: a gap noted during the pass was overwritten
+        and never filled, and a pass that was cut short (the service stopping, an error) had saved nothing, so the
+        next one replayed the gaps it had filled again."""
+        when = lambda t: time.strftime("%m-%d %H:%M:%S", time.gmtime(t))
+        for s, e in db.kv_get(self.aconn, "gaps", []):
             probe = await self._bgplay_merged(e - 60, e)
             # BGPlay reports whole seconds; gap ends carry fractions, so compare at second resolution
             # (comparing raw values kept every gap "not covered yet" forever)
             if not probe or ripe_ts(probe["query_endtime"]) < int(e):
-                remaining.append([s, e])
                 continue
             # The filler writes through the service's single writer connection: a second connection on
             # this thread can deadlock against the live engine's open transaction ("database is locked").
             # It knows what the live engine has open, so it reports only what began inside the gap.
             f = for_gap(self.cfg, self.aconn, self.peering, self.engine, s)
-            await self._replay(f, s, e, label="gap fill")
-            close_open(f, e)
-            log.info("gap %s -> %s filled from BGPlay", time.strftime("%m-%d %H:%M:%S", time.gmtime(s)),
-                     time.strftime("%H:%M:%S", time.gmtime(e)))
-        db.kv_set(self.aconn, "gaps", remaining)
-        self.aconn.commit()
+            avail = await self._replay(f, s, e, label="gap fill")
+            # How far BGPlay's answers went (whole seconds again): to the gap's end, or short of it when a request
+            # failed. That much is filled; the rest stays in the list and is tried again at the next pass.
+            upto = e if avail >= int(e) else max(avail, s)
+            close_open(f, upto)
+            self._gap_filled(s, upto)
+            if upto < e:
+                log.warning("gap %s -> %s: BGPlay's answer %s; what's left is tried again in half an hour", when(s),
+                            when(e), f"ended at {when(upto)}" if upto > s else "didn't arrive")
+            else:
+                log.info("gap %s -> %s filled from BGPlay", when(s), time.strftime("%H:%M:%S", time.gmtime(e)))
 
     # ------------------------------------------------------------------ live loops
     async def _resync_all(self):

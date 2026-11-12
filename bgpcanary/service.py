@@ -269,7 +269,7 @@ class Service:
             if d:
                 await asyncio.to_thread(eng.load_bgplay, d, True, False)
                 self._restore_route_ages()
-                self._reconcile_history(ripe_ts(d["query_starttime"]), d["answered"])
+                self._reconcile_history(d)
             gap_start = last + B if last is not None else None
         if gap_start is not None and now - gap_start > B:
             self._add_gap(gap_start, now)
@@ -301,22 +301,31 @@ class Service:
         limit here: when a prefix is withdrawn everywhere while RIS Live is down, the live RIB keeps every route,
         the looking glass may not withdraw that many, and this check is what does. Should a snapshot be wrong, the
         outage it makes is checked against Route Views before it's alerted, like any other (_confirm_outage)."""
-        eng, ts, n = self.engine, ripe_ts(d["query_starttime"]), 0
-        snap = {(s["target_prefix"], paths.collector_name(s["source_id"].split("-", 1)[0]), s["source_id"].split("-", 1)[1])
-                for s in d.get("initial_state", [])}
+        eng, ts, snap, dropped = self.engine, ripe_ts(d["query_starttime"]), self._snapshot_routes(d), set()
         for prefix in self.cfg.prefixes:
             if prefix not in d["answered"]:
                 continue
             for (coll, peer), e in list(eng.rib.get(prefix, {}).items()):
                 if e.path and e.ts < ts and (prefix, coll, peer) not in snap:
-                    if eng.apply(e.ts + 1, coll, peer, e.peer_asn, prefix, "W", None, source="stale"):
-                        n += 1
+                    # Withdrawn from the live RIB, and not stored from here. The RIB's last update for a route can be
+                    # older than the history's: a start stores the routes it seeds, then sets their ages back, and a
+                    # gap fill stores what RIS Live missed. Stored with the RIB's date, this withdrawal lay before
+                    # those rows: the route was gone for days in which it was held, or withdrawn long before the
+                    # withdrawal the gap fill had recorded. _reconcile_history records it instead, after the newest
+                    # update the history has, where that still shows the route.
+                    if eng.apply(e.ts + 1, coll, peer, e.peer_asn, prefix, "W", None, source="stale", store=False):
+                        dropped.add((prefix, coll, peer))
                         log.info("RIB: %s via %s/%s not in RIS snapshot (last update %s) - withdrawn", prefix, coll,
                                  peer, time.strftime("%Y-%m-%d", time.gmtime(e.ts)))
         self.conn.commit()
-        self._reconcile_history(ts, d["answered"])
-        if n:
-            log.info("snapshot reconcile: %d stale routes withdrawn from the live RIB", n)
+        self._reconcile_history(d, dropped)
+        if dropped:
+            log.info("snapshot reconcile: %d stale routes withdrawn from the live RIB", len(dropped))
+
+    def _snapshot_routes(self, d):
+        """The routes RIS held at the start of a BGPlay answer, as (prefix, collector, peer)."""
+        ids = ((s["target_prefix"], *s["source_id"].split("-", 1)) for s in d.get("initial_state", []))
+        return {(prefix, paths.collector_name(coll), peer) for prefix, coll, peer in ids}
 
     async def _snapshot_reconcile_loop(self):
         """Once a day, re-align with RIS's snapshot so silently dropped routes don't linger for weeks."""
@@ -329,31 +338,50 @@ class Service:
             except Exception:
                 log.exception("daily snapshot reconcile failed")
 
-    def _reconcile_history(self, ts, answered):
-        """Record a withdrawal for every peer our stored history still thinks has a route at `ts` but RIS's
-        own snapshot (just seeded) doesn't. Peers sometimes drop routes without RIS logging a withdrawal
-        (session resets); without this, history-based views (trees, replays) would keep showing those
-        long-gone paths.
-        `answered`: the prefixes the snapshot is for. The history of one it isn't for is left alone: at a start
-        nothing was seeded for it, so none of its routes is in the RIB, and every route its history holds would
-        be recorded as withdrawn."""
-        eng, n = self.engine, 0
+    def _reconcile_history(self, d, dropped=frozenset()):
+        """Record a withdrawal for every route our stored history still shows at the time of RIS's snapshot `d`
+        that is gone by then. Peers sometimes drop routes without RIS logging a withdrawal (session resets);
+        without this, history-based views (trees, replays) would keep showing those long-gone paths.
+        Gone: the live engine holds the peer's route as withdrawn, since before the snapshot's time or by the
+        check against this snapshot just now (`dropped`, as (prefix, collector, peer): _reconcile_snapshot doesn't
+        store what it withdraws, this does), or it holds nothing on the peer and the snapshot doesn't list the
+        route. At a restart the engine holds the snapshot's routes, just seeded, and nothing else, so that's every
+        route the snapshot doesn't list. The daily check comes hours after the snapshot's time, to an engine that
+        holds what it has heard since it started, and "not held now" was taken for gone there too:
+        - a route withdrawn in those hours, its withdrawal on record with its own time, got a second one from
+          here, right after its last announcement (days or weeks back), and the history showed it as gone all that
+          time. What the engine has heard about a peer since the snapshot's time is left alone, as in
+          _reconcile_snapshot.
+        - a route the engine never held, which the snapshot lists, was recorded as withdrawn: after a start that
+          got no snapshot for a prefix, that's every route of it the looking glass hasn't brought.
+        A route the engine holds as withdrawn is recorded even when the snapshot lists it: the looking-glass resync
+        drops a stale route RIS still holds, and dates that before the row a start stored for the route.
+        The history of a prefix the snapshot isn't for (d["answered"]) is left alone: at a start nothing was seeded
+        for it, so none of its routes is in the RIB, and every route its history holds would be recorded as
+        withdrawn."""
+        eng, ts, snap, n = self.engine, ripe_ts(d["query_starttime"]), self._snapshot_routes(d), 0
         for prefix in self.cfg.prefixes:
-            if prefix not in answered:
+            if prefix not in d["answered"]:
                 continue
-            live = {k for k, e in eng.rib.get(prefix, {}).items() if e.path}
+            rib = eng.rib.get(prefix, {})
             for r in db.state_at(self.conn, prefix, ts):
                 key = (r["collector"], r["peer"])
-                if r["kind"] == "A" and r["path"] and key not in live:
+                e, listed = rib.get(key), (prefix, *key) in snap
+                if e is None:
+                    gone = not listed                     # nothing held on this peer: the snapshot says
+                else:                                     # withdrawn, and not by something heard since
+                    gone = not e.path and (e.ts < ts or (prefix, *key) in dropped)
+                if r["kind"] == "A" and r["path"] and gone:
                     self.conn.execute("INSERT INTO updates(ts,source,collector,peer,peer_asn,prefix,kind,path,"
                                       "communities) VALUES(?,?,?,?,?,?,?,?,?)",
                                       # dated just after the last real update: nothing shows it existed later
                                       (r["ts"] + 1, "stale", r["collector"], r["peer"], r["peer_asn"], prefix, "W",
                                        None, None))
                     n += 1
-                    log.info("history: %s via %s/%s not in RIS snapshot (last seen %s: %s) - recorded withdrawal",
-                             prefix, r["collector"], r["peer"], time.strftime("%Y-%m-%d", time.gmtime(r["ts"])),
-                             r["path"])
+                    log.info("history: %s via %s/%s %s (last seen %s: %s) - recorded withdrawal", prefix,
+                             r["collector"], r["peer"],
+                             "withdrawn here, though RIS's snapshot lists it" if listed else "not in RIS snapshot",
+                             time.strftime("%Y-%m-%d", time.gmtime(r["ts"])), r["path"])
         self.conn.commit()
         if n:
             log.info("history reconciled: %d stale routes withdrawn", n)

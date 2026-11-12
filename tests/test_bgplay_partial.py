@@ -103,7 +103,8 @@ def scratch(tmp_path, monkeypatch):
 @pytest.fixture
 def one_day(monkeypatch):
     """The service's pauses pass at once, and it stops when it begins to wait for a second day: one round of what it
-    does daily."""
+    does daily. (Not together with no_waiting: asked for after this one, it passes a day's wait on as no wait at
+    all, and the rounds never end.)"""
     sleep, days = asyncio.sleep, []
 
     async def passing(delay, result=None):

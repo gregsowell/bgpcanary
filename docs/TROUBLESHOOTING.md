@@ -30,6 +30,9 @@ Events found in that history are marked "(backfill)" and don't send alerts.
 
 If the banner stops moving on:
 - the log lists each week as it loads (`backfill chunk 3/13: … events`) and any failed requests (`bgplay … failed`);
+- when RIPE's archive has no answer for a week (after three tries, for any one of your prefixes), the load ends there
+  (`backfill chunk 3/13: no answer from BGPlay`) and live monitoring starts with the history loaded so far. The rest
+  is noted as a gap and loaded in the background a few hours later, like a gap a RIS Live disconnect leaves;
 - the server needs outbound HTTPS to `stat.ripe.net` for the history.
 
 If **"Connecting to RIS Live"** lasts more than a couple of minutes, the connection to `ris-live.ripe.net` isn't
@@ -154,7 +157,7 @@ RIPEstat), including the ones that carry none of your paths *through that upstre
   curl -sI https://ris-live.ripe.net/v1/stream/ | head -1
   ```
 
-- Short disconnects are normal. bgpcanary reconnects on its own and fills the gap from RIPE's archive a few hours later. Events found that way are marked "(backfill)" and don't send alerts; a gap fill reports only what began during the gap, not what was already open or is already in the Events list.
+- Short disconnects are normal. bgpcanary reconnects on its own and fills the gap from RIPE's archive a few hours later. Events found that way are marked "(backfill)" and don't send alerts; a gap fill reports only what began during the gap, not what was already open or is already in the Events list. A gap the archive has no answer for (for any one of your prefixes) stays on the list and is tried again every half hour; the log says so (`gap … BGPlay's answer didn't arrive`).
 
 ## An outage that isn't real
 

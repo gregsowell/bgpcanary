@@ -125,7 +125,8 @@ class Service:
                                            label=f"history for {p}", prefixes=[p], show=p)
                 close_open(f, avail)
                 if self.live_since and self.live_since - avail > B:
-                    self._add_gap(avail, self.live_since)   # BGPlay lags a few hours; the gap filler finishes it
+                    # BGPlay lags a few hours (or had no answer for a week of it); the gap filler finishes it
+                    self._add_gap(avail, self.live_since)
             except Exception:
                 log.exception("history load for %s failed", p)
             finally:
@@ -159,30 +160,50 @@ class Service:
             self.ws_down_since = ts
 
     # ------------------------------------------------------------------ history / gaps
-    async def _bgplay_merged(self, s, e, prefixes=None):
-        merged = None
-        for p in prefixes or self.cfg.prefixes:
+    async def _bgplay_merged(self, s, e, prefixes=None, partial=False):
+        """RIPEstat BGPlay's answers for [s, e), asked for one prefix at a time (the monitored ones unless `prefixes`
+        names them) and made into one. A request that fails is made three times.
+        The answer is for every prefix, or there's none (None): what came for the others isn't the whole picture, and
+        read as the whole picture it shows the prefix that's missing as one no RIS peer has a route to. That's how a
+        gap fill came to draw zeroes on a chart and record an outage that never was, and how the daily check against
+        RIS's snapshot withdrew every route a prefix had.
+        `partial`: for a caller that uses each prefix's part by itself and leaves a prefix without one alone (a
+        snapshot of the routes, to seed them or check them): the answers that did come, None when none did.
+        "answered" in the result lists the prefixes it's for, either way."""
+        want, when = list(prefixes or self.cfg.prefixes), time.strftime("%m-%d %H:%M", time.gmtime(s))
+        merged, answered = None, []
+        for p in want:
             d = None
             for attempt in range(3):
                 try:
                     d = await ripe.bgplay(p, s, e, self.sourceapp)
                     break
                 except Exception as ex:
-                    log.warning("bgplay %s %s attempt %d failed: %s", p,
-                                time.strftime("%m-%d %H:%M", time.gmtime(s)), attempt, ex)
+                    log.warning("bgplay %s %s attempt %d failed: %s", p, when, attempt, ex)
                     await asyncio.sleep(10)
             if d is None:
-                continue
+                log.warning("bgplay %s %s: no answer%s", p, when, ", so this prefix is left as it is" if partial else
+                            ", and the other prefixes' aren't used without it" if len(want) > 1 else "")
+                if partial:
+                    continue
+                return None
+            answered.append(p)
             if merged is None:
                 merged = d
             else:
                 merged["initial_state"] += d.get("initial_state", [])
                 merged["events"] += d.get("events", [])
                 merged["sources"] += d.get("sources", [])
+        if merged is not None:
+            merged["answered"] = answered
         return merged
 
     async def _replay(self, eng, start, end, label="backfill", prefixes=None, show=None):
-        """Replay BGPlay history [start, end) into `eng` in 7-day chunks. Returns the end of available data.
+        """Replay BGPlay history [start, end) into `eng` in 7-day chunks. Returns how far it got: the end of BGPlay's
+        data (it runs a few hours behind), or the start of a chunk there was no answer for. It ends there: the chunks
+        after it would be replayed on the routes as they were before it (on none at all, when it's the first), their
+        buckets drawn from those, and the stretch would count as loaded. Whoever asks for a replay notes what's left
+        as a gap, and the gap filler comes back for it.
         `show`: report progress in status["history"] for the web pages: "all" for the first start's history load,
         or the prefix whose history loads in the background."""
         spans, s = [], start
@@ -206,7 +227,9 @@ class Service:
                     eng.status["phase"] = f"loading history {i + 1}/{len(spans)}"
                 d = await self._bgplay_merged(s, e, prefixes)
                 if not d:
-                    continue
+                    log.warning("%s chunk %d/%d: no answer from BGPlay; stopped at %s", label, i + 1, len(spans),
+                                time.strftime("%Y-%m-%d %H:%M", time.gmtime(avail)))
+                    break
                 await asyncio.to_thread(eng.load_bgplay, d, i == 0)
                 avail = ripe_ts(d["query_endtime"])
                 log.info("%s chunk %d/%d: %d events", label, i + 1, len(spans), len(d.get("events", [])))
@@ -226,11 +249,11 @@ class Service:
             gap_start = await self._replay(eng, now - self.cfg.backfill_days * 86400, now, show="all")
             eng.status["phase"] = "finishing the history load"
             # first install: drop routes the replay still holds but RIS no longer has (silent drops)
-            d = await self._bgplay_merged(now - 60, now)
+            d = await self._bgplay_merged(now - 60, now, partial=True)
             if d:
                 self._reconcile_snapshot(d)
             if eng.controls:   # the control prefixes have no history: just their current routes
-                d = await self._bgplay_merged(now - 60, now, list(eng.controls))
+                d = await self._bgplay_merged(now - 60, now, list(eng.controls), partial=True)
                 if d:
                     await asyncio.to_thread(eng.load_bgplay, d, True, False)
         else:
@@ -240,12 +263,13 @@ class Service:
                 if self.pending_backfill:
                     log.info("new prefixes without history: %s (loading in the background)", self.pending_backfill)
             # Seed the RIB from BGPlay's newest snapshot (a few hours old, but it includes peers the
-            # looking glass omits). The looking-glass resync then brings it up to date.
-            d = await self._bgplay_merged(now - 60, now, list(self.cfg.prefixes) + list(eng.controls))
+            # looking glass omits). The looking-glass resync then brings it up to date; it's all there is for a
+            # prefix the snapshot didn't arrive for, whose stored history is left as it is.
+            d = await self._bgplay_merged(now - 60, now, list(self.cfg.prefixes) + list(eng.controls), partial=True)
             if d:
                 await asyncio.to_thread(eng.load_bgplay, d, True, False)
                 self._restore_route_ages()
-                self._reconcile_history(ripe_ts(d["query_starttime"]))
+                self._reconcile_history(ripe_ts(d["query_starttime"]), d["answered"])
             gap_start = last + B if last is not None else None
         if gap_start is not None and now - gap_start > B:
             self._add_gap(gap_start, now)
@@ -270,11 +294,19 @@ class Service:
     def _reconcile_snapshot(self, d):
         """Align the live RIB and the stored history with a RIS (BGPlay) snapshot: any peer route we hold
         that RIS's snapshot doesn't is withdrawn (recorded as source 'stale'). Routes we heard about after
-        the snapshot time are left alone."""
+        the snapshot time are left alone. So is a prefix the snapshot isn't for (d["answered"]: its request
+        failed): no answer about it doesn't say it has no routes.
+        A snapshot that did arrive is believed, however many routes it's missing. A looking-glass answer isn't
+        (Engine.resync_lg withdraws at most LG_MAX_WITHDRAW of a prefix's routes), and that's why there's no such
+        limit here: when a prefix is withdrawn everywhere while RIS Live is down, the live RIB keeps every route,
+        the looking glass may not withdraw that many, and this check is what does. Should a snapshot be wrong, the
+        outage it makes is checked against Route Views before it's alerted, like any other (_confirm_outage)."""
         eng, ts, n = self.engine, ripe_ts(d["query_starttime"]), 0
         snap = {(s["target_prefix"], paths.collector_name(s["source_id"].split("-", 1)[0]), s["source_id"].split("-", 1)[1])
                 for s in d.get("initial_state", [])}
         for prefix in self.cfg.prefixes:
+            if prefix not in d["answered"]:
+                continue
             for (coll, peer), e in list(eng.rib.get(prefix, {}).items()):
                 if e.path and e.ts < ts and (prefix, coll, peer) not in snap:
                     if eng.apply(e.ts + 1, coll, peer, e.peer_asn, prefix, "W", None, source="stale"):
@@ -282,7 +314,7 @@ class Service:
                         log.info("RIB: %s via %s/%s not in RIS snapshot (last update %s) - withdrawn", prefix, coll,
                                  peer, time.strftime("%Y-%m-%d", time.gmtime(e.ts)))
         self.conn.commit()
-        self._reconcile_history(ts)
+        self._reconcile_history(ts, d["answered"])
         if n:
             log.info("snapshot reconcile: %d stale routes withdrawn from the live RIB", n)
 
@@ -291,19 +323,24 @@ class Service:
         while True:
             await asyncio.sleep(24 * 3600)
             try:
-                d = await self._bgplay_merged(time.time() - 60, time.time())
+                d = await self._bgplay_merged(time.time() - 60, time.time(), partial=True)
                 if d:
                     self._reconcile_snapshot(d)
             except Exception:
                 log.exception("daily snapshot reconcile failed")
 
-    def _reconcile_history(self, ts):
+    def _reconcile_history(self, ts, answered):
         """Record a withdrawal for every peer our stored history still thinks has a route at `ts` but RIS's
         own snapshot (just seeded) doesn't. Peers sometimes drop routes without RIS logging a withdrawal
         (session resets); without this, history-based views (trees, replays) would keep showing those
-        long-gone paths."""
+        long-gone paths.
+        `answered`: the prefixes the snapshot is for. The history of one it isn't for is left alone: at a start
+        nothing was seeded for it, so none of its routes is in the RIB, and every route its history holds would
+        be recorded as withdrawn."""
         eng, n = self.engine, 0
         for prefix in self.cfg.prefixes:
+            if prefix not in answered:
+                continue
             live = {k for k, e in eng.rib.get(prefix, {}).items() if e.path}
             for r in db.state_at(self.conn, prefix, ts):
                 key = (r["collector"], r["peer"])

@@ -160,8 +160,9 @@ One event, as above, plus:
 ### `GET /api/v1/events/{id}/report`
 
 The event's evidence as plain text (`text/plain`), the same report the event page offers to attach to a ticket
-with a provider: the timeline, the upstream mix before and during, the raw AS paths, Route Views output and
-RIPE Atlas results.
+with a provider: what else went on around the event (the route changes, the ping rounds that stood out, the other
+events), the timeline, the upstream mix before and during, the raw AS paths, Route Views output and RIPE Atlas
+results.
 
 ### `GET /api/v1/neighbours/{asn}`
 

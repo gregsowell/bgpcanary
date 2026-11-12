@@ -1,0 +1,70 @@
+{# What else went on around the event, whether or not it raised an event of its own (evidence.collect: "around",
+   "related", "already_open"): what the routes to the page's prefix did, the RIPE Atlas ping rounds that stood out,
+   every other event of the window, and what bgpcanary didn't hear live. #}
+{% set ar = evd.around %}
+{% macro net(a) %}{% if a %}<a href="https://bgp.tools/as/{{ a }}" target="_blank" rel="noopener">AS{{ a }}</a>{% if evd.names.get(a) %} <span class="muted">{{ evd.names.get(a).split(' ')[0] }}</span>{% endif %}{% else %}<span class="muted">unknown</span>{% endif %}{% endmacro %}
+{% macro began(sec) %}{% if sec|abs < 60 %}began at the same time{% elif sec < 0 %}began {{ (-sec)|dur }} before{% else %}began {{ sec|dur }} after{% endif %}{% endmacro %}
+<div class="panel" id="around">
+  <h2>Around this event</h2>
+  <p class="muted" style="margin-top:0;font-size:13px">What else bgpcanary saw from <time data-ts="{{ evd.window[0] }}"></time> to <time data-ts="{{ evd.window[1] }}"></time>, 30 minutes either side of the event, whether or not it raised an event of its own.</p>
+  <dl class="kv">
+    {% for sp in ar.routes %}
+    <dt>Routes{% if sp.label %}<br><span style="font-size:12px">{{ sp.label }}</span>{% endif %}</dt>
+    <dd>
+      {# a long event's two stretches are days apart: their times get the date; within one half hour the time of day will do #}
+      {% set tm = '' if sp.label else ' data-time="1"' %}
+      {% if loop.first and evd.prefix_how == 'busiest' %}<div class="muted" style="font-size:13px">This event names none of your prefixes. These are the routes to <span class="mono">{{ evd.prefix }}</span>{% if cfg.prefixes|length > 1 %}, the one of yours whose routes changed most here{% endif %}.</div>{% endif %}
+      {% for b in sp.bursts %}
+      <div><time data-ts="{{ b.start }}" data-sec="1"></time>{% if b.end - b.start >= 1 %} to <time data-ts="{{ b.end }}" data-sec="1" data-time="1"></time>{% endif %}:
+        <strong>{{ b.peers }} of {{ sp.peers }} RIS peers changed path</strong>{% if b.back %} <span class="muted">({{ b.back }} ended where they began)</span>{% endif %}
+        {% if b.parts %}<ul style="margin:2px 0 6px;padding-left:20px">{% for p in b.parts %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}</div>
+      {% endfor %}
+      {% if not sp.bursts and not sp.small %}
+      <div>No RIS peer changed its path{% if evd.prefix_how != 'busiest' %} to <span class="mono">{{ evd.prefix }}</span>{% endif %}.</div>
+      {% else %}
+      {% if sp.more_bursts or sp.small %}<div class="muted">{{ 'Also ' if sp.bursts }}{% if sp.more_bursts %}{{ sp.more_bursts }} more burst{{ 's' if sp.more_bursts != 1 }} of that size{% endif %}{{ '; ' if sp.more_bursts and sp.small }}{% if sp.small %}{{ sp.small }} smaller change{{ 's' if sp.small != 1 }}, a peer or two at a time{% endif %}.</div>{% endif %}
+      <div>{% if sp.settled %}At <time data-ts="{{ sp.end }}"{{ tm|safe }}></time> your upstreams and the networks behind them carried you as at <time data-ts="{{ sp.start }}"{{ tm|safe }}></time>.
+        {%- elif sp.changed %}At <time data-ts="{{ sp.end }}"{{ tm|safe }}></time>, compared with <time data-ts="{{ sp.start }}"{{ tm|safe }}></time>:
+        {% for u in sp.changed %}{{ net(u) }} {{ sp.before.get(u, 0) }} → {{ sp.after.get(u, 0) }} peers{{ ', ' if not loop.last }}{% endfor %}.{% if sp.who and not sp.bursts %} {{ sp.who[:1]|upper }}{{ sp.who[1:] }}.{% endif %}
+        {%- else %}At <time data-ts="{{ sp.end }}"{{ tm|safe }}></time> each upstream had as many peers as at <time data-ts="{{ sp.start }}"{{ tm|safe }}></time>, but not by the same ways in.{% if sp.who %} {{ sp.who[:1]|upper }}{{ sp.who[1:] }}.{% endif %}{% endif %}</div>
+      {% endif %}
+      {% if sp.lowest is not none %}<div>Fewest peers with a route: <strong>{{ sp.lowest }} of {{ sp.peers }}</strong>, at <time data-ts="{{ sp.lowest_ts }}" data-sec="1"{{ tm|safe }}></time>.</div>{% endif %}
+    </dd>
+    {% else %}
+    <dt>Routes</dt>
+    <dd class="muted">{% if evd.prefix %}Nothing is stored for <span class="mono">{{ evd.prefix }}</span> in this stretch.{% else %}This event isn't about a prefix bgpcanary monitors.{% endif %}</dd>
+    {% endfor %}
+
+    <dt>Reachability</dt>
+    <dd>
+      {% for r in ar.odd %}
+      <div><time data-ts="{{ r.ts }}" data-sec="1"></time>: <span class="mono">{{ r.target }}</span>{% if r.label %} <span class="muted">{{ r.label }}</span>{% endif %},
+        {% if r.odd == 'loss' %}<strong style="color:var(--crit)">{{ r.probes - r.no_reply }} of {{ r.probes }} probes got a reply</strong> <span class="muted">(usually {{ r.probes - r.usual_no_reply }})</span>
+        {%- else %}<strong style="color:var(--warn)">median round trip {{ '%.0f'|format(r.median_rtt) }} ms</strong> <span class="muted">(usually {{ '%.0f'|format(r.usual_rtt) }})</span>{% endif %}.</div>
+      {% endfor %}
+      {% if not ar.rounds %}<span class="muted">No RIPE Atlas ping rounds in this window.{% if not atlas_target %} They run once RIPE Atlas is set up under Settings › RIPE Atlas.{% endif %}</span>
+      {% elif not ar.odd %}{% if ar.rounds == 1 %}The one RIPE Atlas ping round to your addresses was as usual.{% else %}All {{ ar.rounds }} RIPE Atlas ping rounds to your address{{ 'es' if ar.targets != 1 }} were as usual.{% endif %}
+      {% elif ar.rounds > ar.odd|length %}<div class="muted">The other {{ ar.rounds - ar.odd|length }} ping round{{ 's were' if ar.rounds - ar.odd|length != 1 else ' was' }} as usual.</div>{% endif %}
+    </dd>
+
+    <dt>Other events</dt>
+    <dd>
+      {% for r in evd.related[:12] %}
+      <div><span class="badge b-{{ r.severity }}">{{ kind_names.get(r.kind, r.kind.replace('_', ' ')) }}</span> <a href="/events/{{ r.id }}">{{ r.title }}</a>
+        <span class="muted">· {{ began(r.after) }}{% if r.historical %} · found during backfill{% endif %}{% if r.copies > 1 %} · recorded {{ r.copies }} times{% endif %}</span></div>
+      {% else %}<span class="muted">None began in this window.</span>
+      {% endfor %}
+      {% if evd.related|length > 12 %}<div class="muted">And {{ evd.related|length - 12 }} more.</div>{% endif %}
+      {% if evd.already_open %}<div class="muted" style="font-size:13px;margin-top:4px">Already open when this one began: {% for r in evd.already_open[:8] %}<a href="/events/{{ r.id }}">{{ r.title[:70] }}</a>{{ ' · ' if not loop.last }}{% endfor %}{% if evd.already_open|length > 8 %} · and {{ evd.already_open|length - 8 }} more{% endif %}</div>{% endif %}
+    </dd>
+
+    {% if ar.unheard.open or ar.unheard.filled %}
+    <dt>Not heard live</dt>
+    <dd>
+      {% for a, b in ar.unheard.open %}<div>RIS Live wasn't being received from <time data-ts="{{ a }}" data-sec="1"></time> to <time data-ts="{{ b }}" data-sec="1" data-time="1"></time>, and RIPE's archive hasn't filled that stretch in yet: routes may have changed then without showing here.</div>{% endfor %}
+      {% if ar.unheard.filled %}<div class="muted">{{ ar.unheard.filled.n }} of the route updates here (<time data-ts="{{ ar.unheard.filled.start }}" data-sec="1"></time> to <time data-ts="{{ ar.unheard.filled.end }}" data-sec="1" data-time="1"></time>) were filled in afterwards from RIPE's archive: bgpcanary wasn't hearing RIS Live then, or wasn't running yet.</div>{% endif %}
+    </dd>
+    {% endif %}
+  </dl>
+  {% if shown_prefix %}<p class="muted" style="margin:10px 0 0;font-size:13px">The <a href="#replay">path tree below</a> replays these minutes{% if chart_prefix %}, and <a href="/data?tab=changes&prefix={{ chart_prefix|urlencode }}&start={{ evd.window[0]|int }}&end={{ evd.window[1]|int }}">BGP data</a> lists every path change in them{% endif %}.</p>{% endif %}
+</div>

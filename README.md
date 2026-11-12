@@ -44,6 +44,7 @@ networks.
   - latency and loss per carrier, radial traceroute maps;
   - several targets compared side by side (for example, each border router's peering address);
   - one-off tests to any address.
+- **The whole picture around an event:** every event page opens with what else went on in the half hour around it, whether or not that raised an alert of its own: which RIS peers changed path and where they went, the ping rounds that stood out, every other event, and what wasn't heard live. An alert about an address outside your prefixes shows your prefix's tree too.
 - **Evidence for providers:** every event page collects the timeline, upstream mix, raw AS paths, Route Views output and Atlas results. One click turns it into a plain-text report to attach to a ticket.
 - **Events replayed together:** tick several events and watch them one after another in the connectivity tree, with the quiet time between them cut out.
 - **A JSON API** for your own scripts and dashboards, with per-user tokens: the monitor's status, the events, and what a neighbouring network is to you ([docs/API.md](docs/API.md)).

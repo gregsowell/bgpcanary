@@ -58,10 +58,12 @@
   </div>
 </div>
 
-{% if ev.prefix %}
+{% include "_around.html" %}
+
+{% if shown_prefix %}
 <div class="panel" id="replay">
   <div class="toolbar">
-    <h2 style="margin:0;flex:1">Path tree replay</h2>
+    <h2 style="margin:0;flex:1">Path tree replay{% if not ev.prefix %} <span class="muted" style="font-weight:400;font-size:13px">· routes to <span class="mono">{{ shown_prefix }}</span></span>{% endif %}</h2>
     {% include "_tree_controls.html" %}
   </div>
   <div class="toolbar">
@@ -80,9 +82,9 @@
 
 {% include "_evidence.html" %}
 
-{% if ev.prefix in cfg.prefixes %}
+{% if chart_prefix %}
 <div class="panel">
-  <h2>Visibility around the event</h2>
+  <h2>Visibility around the event{% if not ev.prefix %} <span class="muted mono" style="font-weight:400;font-size:13px">{{ chart_prefix }}</span>{% endif %}</h2>
   <div class="chart"><canvas id="vis"></canvas></div>
 </div>
 <div class="grid g2">
@@ -90,12 +92,12 @@
   <div class="panel"><h2>Update churn</h2><div class="chart small"><canvas id="churn"></canvas></div></div>
 </div>
 <script>
-document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ ev.prefix|tojson }}, start: {{ win_start }}, end: {{ win_end }}, visId: "vis", chainId: "chain", churnId: "churn" }));
+document.addEventListener("DOMContentLoaded", () => renderCharts({ prefix: {{ chart_prefix|tojson }}, start: {{ win_start }}, end: {{ win_end }}, visId: "vis", chainId: "chain", churnId: "churn" }));
 </script>
 {% endif %}
 
 <details class="panel">
-  <summary><h2 style="display:inline;margin:0">Raw BGP updates around the start</h2> <span class="muted" style="font-size:13px">({{ ups|length }}{% if ups|length >= 3000 %}+{% endif %} rows · click to expand){% if ev.prefix in cfg.prefixes %} · <a href="/data?tab=changes&prefix={{ ev.prefix|urlencode }}&start={{ (ev.start_ts - 1800)|int }}&end={{ ((ev.end_ts or now) + 1800)|int }}">what changed, as bursts</a>{% endif %}</span></summary>
+  <summary><h2 style="display:inline;margin:0">Raw BGP updates around the start</h2> <span class="muted" style="font-size:13px">({{ ups|length }}{% if ups|length >= 3000 %}+{% endif %} rows{% if not ev.prefix and shown_prefix %} for <span class="mono">{{ shown_prefix }}</span>{% endif %} · click to expand){% if chart_prefix %} · <a href="/data?tab=changes&prefix={{ chart_prefix|urlencode }}&start={{ (ev.start_ts - 1800)|int }}&end={{ ((ev.end_ts or now) + 1800)|int }}">what changed, as bursts</a>{% endif %}</span></summary>
   <div class="scroll" style="max-height:600px;overflow-y:auto;margin-top:10px"><table class="mono">
     <tr><th>Time</th><th>Collector</th><th>Peer</th><th></th><th>AS path</th><th>Source</th></tr>
     {% for u in ups %}

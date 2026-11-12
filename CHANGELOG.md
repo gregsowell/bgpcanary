@@ -6,6 +6,26 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-11-12
+
+### Added
+- **Around this event.** Every event page now opens with what else went on in the half hour either side of the event, whether or not it raised an event of its own:
+  - what the routes did: how many RIS peers changed their path, when, and where they went ("56 moved from AS64510 → AS64496 to AS64512 → AS64496"), and the peers per upstream at both ends of the window. A transit dropping out behind one of your upstreams shows here even when too few peers changed upstream for an upstream-shift alert;
+  - the RIPE Atlas ping rounds that stood out, each held against what's usual for that address (some probes never answer; that's allowed for), with a round whose replies took twice as long as usual marked too;
+  - every other event of that window, whatever its kind, the info ones and the ones found during a backfill included;
+  - the stretches bgpcanary didn't hear live, so a quiet line isn't taken for a quiet network.
+
+  A long event gets the half hours around its start and around its end. The same lines open the text report, so they reach the API's and the MCP server's report too.
+- **A tree on every event page.** An event that names none of your prefixes (a reachability loss on a carrier's link address, a Path finder watch) now shows the path tree replay, the charts, the "who carried" table and the raw updates of your prefix (with several, the one whose routes changed most around the event). That's usually where the cause of such an event shows: until now its page had no BGP on it at all.
+
+### Changed
+- **The strip under the tree shades every warning and critical event**, not only outages, and the ones that name no prefix on every prefix's tree. Events that overlap share one shade. An event too short to see as a band (seconds, on a day's strip) gets a mark on top of the strip, and pointing at the strip says which events are there.
+- **Event pages load faster.** The routes at the moments a page shows are read from the stored history once, where they were read once per moment: on a history of 240,000 updates an ordinary event's page took about half as long.
+- The event page's "Related events" line is now the "Other events" part of *Around this event*.
+
+### Fixed
+- **Event page: the AS paths listed for the moment the upstream mix changed most were half a minute old.** They were those of that bucket's start, while the numbers in the table above them are those of its end, so a sharp change showed the old paths under the new counts.
+
 ## [1.7.3] - 2026-11-11
 
 ### Fixed
@@ -410,7 +430,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.3...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.4...HEAD
+[1.7.4]: https://github.com/gregsowell/bgpcanary/compare/v1.7.3...v1.7.4
 [1.7.3]: https://github.com/gregsowell/bgpcanary/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/gregsowell/bgpcanary/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/gregsowell/bgpcanary/compare/v1.7.0...v1.7.1

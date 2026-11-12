@@ -18,8 +18,6 @@
       <td>{{ text }}</td></tr>
     {% else %}<tr><td class="muted">Nothing recorded in this window.</td></tr>{% endfor %}
   </table></div>
-  {% if evd.already_open %}<p class="muted" style="font-size:13px;margin:6px 0 0">Already open when this started: {% for r in evd.already_open %}<a href="/events/{{ r.id }}">{{ r.title[:70] }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
-  {% if evd.related %}<p style="font-size:13px;margin:6px 0 0">Related events: {% for r in evd.related %}<a href="/events/{{ r.id }}"><span class="badge b-{{ r.severity }}">{{ r.kind }}</span> {{ r.title[:70] }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
 </div>
 
 {% if evd.mix %}

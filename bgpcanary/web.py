@@ -23,6 +23,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import (REPO, __version__, alerts, atlas, auth, config, db, evidence, pathfinder, paths, peering, registry, ripe,
                tracer, transit, tree, updates, watch)
+from .changes import burst_text, bursts_of, chain_key, path_changes
 from .service import Service
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -873,8 +874,13 @@ async def event_page(request: Request, eid: int, msg: str = ""):
         raise HTTPException(404)
     end = ev["end_ts"] or time.time()
     pad = max(900, min(3 * 3600, (end - ev["start_ts"]) * 0.5))
+    ev_data = await _evidence(conn, ev)
+    # An event that names none of your prefixes (a reachability loss on a carrier's link address, a Path finder watch)
+    # still shows the tree, the charts and the updates of one: the monitored prefix its evidence is drawn from.
+    shown = ev["prefix"] or ev_data["prefix"]
+    charted = ev["prefix"] if ev["prefix"] in cfg.prefixes else None if ev["prefix"] else ev_data["prefix"]
     ups = conn.execute("SELECT * FROM updates WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts LIMIT 3000",
-                       (ev["prefix"], ev["start_ts"] - 300, min(end, ev["start_ts"] + 1800))).fetchall()
+                       (shown, ev["start_ts"] - 300, min(end, ev["start_ts"] + 1800))).fetchall()
     probes = conn.execute("SELECT * FROM probes WHERE event_id=? OR (ts>=? AND ts<=?) ORDER BY ts",
                           (eid, ev["start_ts"] - 3600, end + 600)).fetchall()
     snaps = conn.execute("SELECT * FROM rv_snapshots WHERE event_id=? OR (ts>=? AND ts<=?) ORDER BY ts",
@@ -885,14 +891,14 @@ async def event_page(request: Request, eid: int, msg: str = ""):
                               "FROM atlas_msm m WHERE m.event_id=? ORDER BY m.created", (eid,)).fetchall()
     base = conn.execute("SELECT target FROM atlas_msm WHERE purpose='baseline' AND created<=? "
                         "AND (stopped IS NULL OR stopped>=?) ORDER BY created DESC LIMIT 1", (end, ev["start_ts"])).fetchone()
-    ev_data = await _evidence(conn, ev)
     nb = event_neighbour(ev)
     nb_info = neighbour_info(conn, nb) if nb else None
     conn.close()
     return render(request, "event.html", ev=ev, ups=ups, probes=probes, snaps=snaps, alerts=alerts_sent,
                   win_start=ev["start_ts"] - pad, win_end=end + pad, atlas_msms=atlas_msms,
                   atlas_target=base["target"] if base else None, evd=ev_data, compare_all=",".join(svc.atlas.targets()),
-                  nb=nb_info, back=f"/events/{eid}", msg=msg)
+                  nb=nb_info, back=f"/events/{eid}", msg=msg, shown_prefix=shown, chart_prefix=charted,
+                  kind_names=KIND_NAMES)
 
 
 def neighbour_info(conn, asn):
@@ -1007,10 +1013,13 @@ def replay_payload(conn, prefix, s, e):
     asns = set()
     for p in plist:
         asns.update(int(x) for x in p.split())
+    # The strip under the tree shades these: every warning or critical event of this prefix or of none (a reachability
+    # loss on a carrier's link address), so a night's trouble shows whatever kind it was. Not the info ones: they
+    # come by the dozen and some stay open for days.
     events = [{"id": r["id"], "start": r["start_ts"], "end": r["end_ts"], "severity": r["severity"],
                "kind": r["kind"], "title": r["title"]} for r in conn.execute(
-        "SELECT * FROM events WHERE prefix=? AND kind='outage' AND start_ts<=? AND COALESCE(end_ts, ?)>=? "
-        "ORDER BY start_ts", (prefix, e, time.time(), s))]
+        "SELECT * FROM events WHERE (prefix=? OR prefix IS NULL) AND (severity!='info' OR kind='outage') "
+        "AND start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts", (prefix, e, time.time(), s))]
     return {"asn": cfg.asn, "prefix": prefix, "start": s, "end": e, "peers": peers, "paths": plist,
             "init": [init.get(i, -1) for i in range(len(peers))], "updates": updates, "events": events,
             "names": {str(k): v for k, v in names(conn, asns).items()}}
@@ -1177,17 +1186,22 @@ async def api_event_replay(request: Request, eid: int):
     conn = rconn()
     try:
         ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
-        if not ev or not ev["prefix"]:
+        if not ev:
+            raise HTTPException(404)
+        # (an event that names no prefix replays the monitored prefix its page is about: see event_page)
+        prefix = ev["prefix"] or evidence.focus_prefix(conn, cfg, ev, *evidence.window(ev))[0]
+        if not prefix:
             raise HTTPException(404)
         end = ev["end_ts"] or time.time()
         pad = min(1800, max(600, (end - ev["start_ts"]) * 0.08))
         s, e = ev["start_ts"] - pad, min(end + pad, time.time())
-        out = await asyncio.to_thread(replay_payload, conn, ev["prefix"], s, e)
+        out = await asyncio.to_thread(replay_payload, conn, prefix, s, e)
     finally:
         conn.close()
     out["event"] = {"id": ev["id"], "title": ev["title"], "severity": ev["severity"], "kind": ev["kind"],
                     "start": ev["start_ts"], "end": ev["end_ts"], "prefix": ev["prefix"]}
-    out["events"] = [out["event"]]
+    # (the strip shades the event and whatever else was open around it)
+    out["events"] = [out["event"]] + [x for x in out["events"] if x["id"] != ev["id"]]
     return await upstream_neighbors(out)
 
 
@@ -1284,50 +1298,7 @@ async def api_compare_replay(request: Request, prefixes: str, start: float = Non
 
 # ------------------------------------------------------------------------------------------------ BGP data page
 DATA_TABS = ("paths", "changes", "raw", "routeviews")
-LIVE_SOURCES = ("ris-live", "bgplay")   # updates that are news; every other source only corrects the stored state
 CHANGES_MAX_DAYS = 31
-
-
-def chain_key(p):
-    """The way in of a path toward you: (transit, upstream); (None, upstream) when the RIS peer is your upstream
-    itself; None for a path without one."""
-    if len(p) >= 3:
-        return (p[-3], p[-2])
-    return (None, p[-2]) if len(p) == 2 else None
-
-
-def chain_text(c, nm):
-    """'AS64510 TRANSIT → AS64501 UPSTREAM' for a chain_key, with the first word of each name."""
-    if not c:
-        return "no route"
-    lbl = lambda a: f"AS{a}" + (f" {nm[a].split(' ')[0]}" if nm.get(a) else "")   # noqa: E731
-    return (f"{lbl(c[0])} → " if c[0] else "") + lbl(c[1])
-
-
-def path_changes(conn, prefix, start, end, bookkeeping=False):
-    """Every change of a RIS peer's path toward `prefix` between `start` and `end`, oldest first, judged against the
-    stored state at `start`: [{"ts", "collector", "peer", "peer_asn", "old", "new", "source", "live"}], old / new the
-    paths as ints (None: no route). A re-announcement of the same path is no change. `bookkeeping`: also the rows
-    that only correct the stored state (the looking glass's resync, seed rows after a restart, stale withdrawals);
-    they count toward the state either way."""
-    last = {}
-    for r in db.state_at(conn, prefix, start):
-        last[(r["collector"], r["peer"])] = (paths.parse_str(r["path"]) if r["kind"] == "A" and r["path"] else None,
-                                             r["peer_asn"])
-    out = []
-    for r in conn.execute("SELECT ts, collector, peer, peer_asn, kind, path, source FROM updates WHERE prefix=? AND ts>? "
-                          "AND ts<=? ORDER BY ts, id", (prefix, start, end)):
-        k = (r["collector"], r["peer"])
-        new = paths.parse_str(r["path"]) if r["kind"] == "A" and r["path"] else None
-        old, pa = last.get(k, (None, None))
-        last[k] = (new, r["peer_asn"] or pa)
-        if old == new:
-            continue
-        live = r["source"] in LIVE_SOURCES
-        if live or bookkeeping:
-            out.append({"ts": r["ts"], "collector": r["collector"], "peer": r["peer"], "peer_asn": r["peer_asn"] or pa,
-                        "old": old, "new": new, "source": r["source"], "live": live})
-    return out
 
 
 def mark_diff(c):
@@ -1342,43 +1313,6 @@ def mark_diff(c):
     c["old_marks"] = [(a, i <= n < len(old) - j) for n, a in enumerate(old)]
     c["new_marks"] = [(a, i <= n < len(new) - j) for n, a in enumerate(new)]
     return c
-
-
-def bursts_of(changes, gap=120):
-    """Changes grouped into bursts (changes within `gap` seconds of each other), newest first: [{"start", "end",
-    "peers", "changes", "moves": [((old chain, new chain), n)], biggest first}]."""
-    out, cur = [], None
-    for c in changes:
-        if cur is None or c["ts"] - cur["end"] > gap:
-            cur = {"start": c["ts"], "end": c["ts"], "changes": []}
-            out.append(cur)
-        cur["end"] = c["ts"]
-        cur["changes"].append(c)
-    for b in out:
-        b["peers"] = len({(c["collector"], c["peer"]) for c in b["changes"]})
-        moves = {}
-        for c in b["changes"]:
-            k = (chain_key(c["old"]) if c["old"] else None, chain_key(c["new"]) if c["new"] else None)
-            moves[k] = moves.get(k, 0) + 1
-        b["moves"] = sorted(moves.items(), key=lambda x: -x[1])
-    out.reverse()
-    return out
-
-
-def burst_text(b, nm):
-    """'152 moved from AS64510 A → AS64501 B to AS64520 C → AS64502 D; 34 withdrawn (were ...)'."""
-    parts = []
-    for (oc, nc), n in b["moves"][:3]:
-        if oc == nc:
-            parts.append(f"{n} changed further out (same way in)")
-        elif nc is None:
-            parts.append(f"{n} withdrawn (were {chain_text(oc, nm)})")
-        elif oc is None:
-            parts.append(f"{n} announced via {chain_text(nc, nm)}")
-        else:
-            parts.append(f"{n} moved from {chain_text(oc, nm)} to {chain_text(nc, nm)}")
-    rest = sum(n for _, n in b["moves"][3:])
-    return "; ".join(parts) + (f"; {rest} more" if rest else "")
 
 
 def rv_latest(conn, prefix):

@@ -11,7 +11,8 @@
     (root || document).querySelectorAll("time[data-ts]").forEach(el => {
       const ts = parseFloat(el.dataset.ts);
       if (!ts) return;
-      el.textContent = fmtTs(ts, el.dataset.sec === "1");
+      const s = fmtTs(ts, el.dataset.sec === "1");
+      el.textContent = el.dataset.time === "1" ? s.slice(11) : s;   // data-time: the time of day alone, after a full one
       el.title = new Date(ts * 1000).toISOString().replace("T", " ").replace(/\.\d+Z/, " UTC");
     });
   }

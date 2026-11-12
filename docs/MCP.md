@@ -83,7 +83,7 @@ insist on OAuth (claude.ai's remote connectors, for one) can't connect yet: bgpc
 |---|---|
 | `bgpcanary_status` | The dashboard's table: each prefix's state, visibility against its baseline, the neighbours its paths come in through, missing upstreams, and how many events are open. |
 | `bgpcanary_events` | The events, with the Events page's filters: open or closed, kind, severity, prefix, the last N hours or a since/until window. |
-| `bgpcanary_event` | One event with the alerts sent for it, and on request the plain-text evidence report for a provider ticket. |
+| `bgpcanary_event` | One event with the alerts sent for it, and on request the plain-text evidence report for a provider ticket, which opens with what else went on around the event. |
 | `bgpcanary_neighbour` | What a network is to you: transit, peer, exchange peer, or unfiled; the paths through it now; the events about it. |
 | `bgpcanary_whoami` | Which bgpcanary it talks to and as whom. Ask for it when something doesn't work. |
 

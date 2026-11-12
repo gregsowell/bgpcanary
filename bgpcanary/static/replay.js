@@ -556,11 +556,25 @@
       const ty = H - 70, th2 = 44, tx0 = 16, tx1 = W - 16, span = this.D.end - this.D.start;
       const X = t => tx0 + (t - this.D.start) / span * (tx1 - tx0);
       ctx.fillStyle = th.codebg; ctx.fillRect(tx0, ty, tx1 - tx0, th2);
-      for (const e of this.events) {
-        const s = Math.max(e.start, this.D.start), en = Math.min(e.end || this.D.end, this.D.end);
-        if (en < this.D.start || s > this.D.end) continue;
-        ctx.fillStyle = e.severity === "critical" ? "rgba(200,38,43,.18)" : "rgba(199,119,0,.18)";
-        ctx.fillRect(X(s), ty, Math.max(2, X(en) - X(s)), th2);
+      // The events open in the window: one shade per stretch of time and severity, however many overlap there
+      // (critical over the rest), and a mark on top of one too short to see as a band (seconds, on a strip of hours).
+      for (const crit of [false, true]) {
+        const merged = [];
+        for (const e of this.events.filter(e => (e.severity === "critical") === crit).sort((a, b) => a.start - b.start)) {
+          const s = Math.max(e.start, this.D.start), en = Math.min(e.end || this.D.end, this.D.end);
+          if (en < this.D.start || s > this.D.end) continue;
+          const last = merged[merged.length - 1];
+          if (last && s <= last[1]) last[1] = Math.max(last[1], en); else merged.push([s, en]);
+        }
+        for (const [s, en] of merged) {
+          const x = X(s), w = Math.max(2, X(en) - x), short = w < 6;
+          ctx.fillStyle = crit ? `rgba(200,38,43,${short ? .6 : .18})` : `rgba(199,119,0,${short ? .6 : .18})`;
+          ctx.fillRect(x, ty, w, th2);
+          if (short) {
+            ctx.fillStyle = crit ? th.crit : th.warn;
+            ctx.beginPath(); ctx.moveTo(x + w / 2 - 5, ty - 6); ctx.lineTo(x + w / 2 + 5, ty - 6); ctx.lineTo(x + w / 2, ty + 2); ctx.closePath(); ctx.fill();
+          }
+        }
       }
       if (this.gifRange && !opts.footer) {
         // selected GIF / playback range
@@ -756,7 +770,6 @@
       if (!rp) return;
       const b = canvas.getBoundingClientRect(), x = (e.clientX - b.left) / k, y = (e.clientY - b.top) / k;
       const h = (rp.hit || []).find(h => (h.x - x) ** 2 + (h.y - y) ** 2 <= (h.r + 3 / k) ** 2);
-      if (!h) { tip.style.display = "none"; return; }
       // the tooltip stays inside the tree's panel (which clips it): to the left of the cursor near the right edge,
       // above it near the bottom
       const showTip = text => {
@@ -765,6 +778,17 @@
         tip.style.left = Math.max(0, Math.min(x * k + 12, wrap.clientWidth - tw - 8)) + "px";
         tip.style.top = (y * k + 12 + tht > wrap.clientHeight ? Math.max(0, y * k - tht - 12) : y * k + 12) + "px";
       };
+      const tl = rp.timeline;
+      if (!h && tl && y >= tl.ty - 8 && y <= tl.ty + tl.th2 + 4 && x >= tl.tx0 && x <= tl.tx1) {
+        // over the strip: which events are shaded there (a short one is a few pixels wide, so 4 px either side count)
+        const per = (data.end - data.start) / (tl.tx1 - tl.tx0), t = data.start + (x - tl.tx0) * per;
+        const at = rp.events.filter(e => t >= e.start - 4 * per && t <= (e.end || data.end) + 4 * per);
+        if (at.length) {
+          showTip(at.slice(0, 6).map(e => `${rp.when(e.start)}  ${e.title}`).join("\n") + (at.length > 6 ? `\n+${at.length - 6} more` : ""));
+          return;
+        }
+      }
+      if (!h) { tip.style.display = "none"; return; }
       if (h.n.folded) {   // an upstream's neighbours that reach you another way: who, and how
         const of = h.n.parent.split(">").pop(), fo = h.n.folded;
         showTip(`${fo.length} neighbour${fo.length === 1 ? "" : "s"} of AS${of} that don't carry you through it because they have a path to you they prefer. No problem: a network uses its best route.\n`

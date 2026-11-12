@@ -6,6 +6,8 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-11-11
+
 ### Fixed
 - **The same past event listed several times, each marked "(backfill)".** When RIS Live drops, bgpcanary notes the gap and fills it from RIPE's archive later. The gap was taken to begin at the last message's own timestamp, and RIS Live now and then passes on updates stamped days or weeks ago: when one of those was the last message before a drop, the "gap" reached back all those weeks, they were replayed, and every event in them was recorded again, once for each such drop. A gap now begins at the newest update the connection delivered (at most 15 minutes before its last message arrived), and a gap fill no longer records an event the Events list already holds, whatever stretch it replays. Repeats recorded by earlier versions stay in the list.
 - **"Last message" is when RIS Live's last message arrived**, on the dashboard, in the data sources panel and in the API's `last_message`, as documented. It was the message's own timestamp, so it could briefly read weeks ago; for the same reason the data sources panel could report RIS Live as "disconnected for" far longer than it had been.
@@ -15,6 +17,9 @@ anything, and major releases may need you to read the notes before upgrading.
 - **A route shown as withdrawn days before it was, in the tree and the replays of past moments.** Once a day bgpcanary checks the routes it holds against RIS's snapshot and records a withdrawal for a route that went without one, dated right after the route's last update. The snapshot is about three hours old, and the check took every route not held at that moment for such a route: one withdrawn in those three hours, with a proper withdrawal, got a second one dated back to its last announcement, days or weeks earlier. The same happened to a route whose withdrawal RIS Live had missed and a gap fill had since recorded, and to one that went quietly after a restart had found it still there: the date used was the last update bgpcanary had heard itself, which can be older than what the history holds. After a start that got no snapshot for a prefix, the routes the looking glass hadn't brought back were recorded as withdrawn although RIS still had them. The check now leaves alone what was heard after the snapshot's time, asks the snapshot about a route bgpcanary doesn't hold, and dates a withdrawal it records after the newest update the history has for the route. Withdrawals dated back by earlier versions stay in the history.
 - **Routes withdrawn while bgpcanary was stopped were shown as withdrawn long before the stop.** A restart checks the stored history against RIS's snapshot, which is about three hours old. After a longer stop the history ends before the snapshot's time, and every route withdrawn in between was recorded as withdrawn right after its last update, days or weeks earlier; the gap fill then stored the real withdrawal behind it. The daily check could do the same while a stretch RIS Live had missed was still waiting to be filled from RIPE's archive, and so could a first start whose history load had stopped early. A route that may have been withdrawn in a stretch still to be loaded is now left alone until it is loaded, and the next daily check records what is still unexplained then. On a day when RIS Live drops often, that can put off the history's clean-up of quietly dropped routes by a day; the routes bgpcanary counts and alerts on are checked as before.
 - **Three stretches that bgpcanary didn't hear were never filled in.** What RIS Live misses is noted as a gap and filled from RIPE's archive a few hours later. Three kinds of stretch never made the list, so their part of the chart stayed as it was drawn while nothing was heard, and nothing that happened in them reached the Events list: the time between a RIS Live drop and a stop of bgpcanary that came before RIS Live was back; the time between a start and RIS Live's first sync, which on a new install includes the whole history load and otherwise lasts as long as RIS Live can't be reached; and, when RIS Live dropped again within seconds of reconnecting, the time from there to the next reconnect. All three are noted now and filled like any other gap.
+
+### Changed
+- **Container image:** the base image (`python:3.13-alpine3.24`) refreshed to its current build for the latest Alpine and Python fixes.
 
 ## [1.7.2] - 2026-11-04
 
@@ -405,7 +410,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.2...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.3...HEAD
+[1.7.3]: https://github.com/gregsowell/bgpcanary/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/gregsowell/bgpcanary/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/gregsowell/bgpcanary/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/gregsowell/bgpcanary/compare/v1.6.3...v1.7.0

@@ -1,7 +1,7 @@
 # bgpcanary container image: Alpine Linux with Python and bgpcanary, running as an unprivileged user.
 # How to run it: docs/DOCKER.md.   Build it yourself:  docker build -t bgpcanary .
 # The base image is pinned by digest. Refresh the digest before each release (docs/RELEASING.md).
-ARG BASE=python:3.13-alpine3.24@sha256:7984cf56ceaddebe4fefeb75d64000b9f45d8b77b11a09b24524da6cdc3af0c8
+ARG BASE=python:3.13-alpine3.24@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
 
 FROM ${BASE} AS build
 WORKDIR /opt/bgpcanary

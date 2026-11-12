@@ -19,6 +19,7 @@ BURST_KINDS = ("outage", "upstream_missing", "origin_hijack", "more_specific", "
                "upstream_down", "peer_leak")
 # events about routes going missing: what RIPE's data going missing looks like too
 ABSENCE_KINDS = ("blip", "upstream_missing", "upstream_shift", "upstream_down", "exchange_loss")
+UNHEARD_KV = "ris_unheard_since"   # Service.unheard_since, for the start after a stop that came while RIS Live was down
 
 
 class Service:
@@ -55,6 +56,12 @@ class Service:
         routeviews.on_usage = self._rv_bytes
         tree.HISTORY = self.aconn    # upstream neighbour history ("no longer peered"), written through this connection
         self.live_since = None
+        # From when the live engine may be missing updates: a start (nothing is heard until RIS Live's first sync) or
+        # a drop of RIS Live's. None while it's in sync. The sync that follows notes the stretch as a gap, for the gap
+        # filler (_on_ws_connect); _unheard keeps it for a stop that comes first.
+        self.unheard_since = None
+        self.ris_drops = 0           # RIS Live's drops and failed attempts so far (a sync sees if one came during it)
+        self.ws_down_since = None    # since when RIS Live has been down, once it had synced (the data sources panel)
 
     # ------------------------------------------------------------------ lifecycle
     async def start(self):
@@ -145,10 +152,19 @@ class Service:
         return fn()
 
     async def _on_ws_connect(self):
+        """RIS Live is connected (again): bring the routes up to date from the looking glass, and note what wasn't
+        heard as a gap: from the drop to here, or from the start to this first sync. A start's own gap ends where the
+        start began (_startup_history); the time from there to the first sync was on no list, and it's as long as
+        the history load of a new install, or as RIS Live can't be reached."""
+        drops = self.ris_drops
         await self._resync_all()
-        if self.ws_down_since:
-            self._add_gap(self.ws_down_since, time.time())
-            self.ws_down_since = None
+        self.ws_down_since = None
+        if self.unheard_since is not None:
+            until = time.time()
+            self._add_gap(self.unheard_since, until)
+            # A drop while the looking glass was being asked (a connection that comes and goes within seconds):
+            # nothing is heard from here on either, until the next sync. The gap used to end here all the same.
+            self._unheard(None if self.ris_drops == drops else until)
         if not self.first_sync.is_set():
             self.first_sync.set()
             self.engine.status["phase"] = "live"
@@ -156,8 +172,20 @@ class Service:
 
     def _on_ws_disconnect(self, ts):
         self.health.ris_disconnected()
+        self.ris_drops += 1
+        if self.unheard_since is None:
+            self._unheard(ts)
         if self.ws_down_since is None and self.first_sync.is_set():
             self.ws_down_since = ts
+
+    def _unheard(self, since):
+        """Keep from when the live engine may be missing updates (None: it isn't), in the database too. Buckets go on
+        being stored while RIS Live is down, so after a stop the last bucket says when the service stopped, not when
+        it stopped hearing: a stop that came before RIS Live was back used to lose the stretch from the drop to the
+        stop, which was never filled. The next start reads it (_startup_history)."""
+        self.unheard_since = since
+        db.kv_set(self.aconn, UNHEARD_KV, since)
+        self.aconn.commit()
 
     # ------------------------------------------------------------------ history / gaps
     async def _bgplay_merged(self, s, e, prefixes=None, partial=False):
@@ -242,6 +270,8 @@ class Service:
     async def _startup_history(self):
         eng, B = self.engine, self.cfg.bucket_seconds
         now = time.time()
+        was_unheard = db.kv_get(self.aconn, UNHEARD_KV)   # RIS Live was down when the service last stopped: since when
+        self.unheard_since = now   # from here to RIS Live's first sync nothing is heard: _on_ws_connect notes that gap
         eng.seed_baseline(now)
         last = eng.last_bucket_ts()
         eng.historical = True
@@ -264,12 +294,17 @@ class Service:
                     "SELECT 1 FROM buckets WHERE prefix=? LIMIT 1", (p,)).fetchone()]
                 if self.pending_backfill:
                     log.info("new prefixes without history: %s (loading in the background)", self.pending_backfill)
-            # From the last bucket stored to now is a gap, for the gap filler. It's noted before the stored history
-            # is checked against RIS's snapshot, because that check goes by it: after a stop longer than BGPlay runs
-            # behind, the history ends before the snapshot's time, and a route withdrawn meanwhile isn't one that
-            # went without a withdrawal (_reconcile_history).
-            if last is not None and now - (last + B) > B:
-                self._add_gap(last + B, now)
+            # From the last bucket stored to now is a gap, for the gap filler: from before that when RIS Live was down
+            # at the stop, because the buckets went on (_unheard). It's noted before the stored history is checked
+            # against RIS's snapshot, because that check goes by it: after a stop longer than BGPlay runs behind,
+            # the history ends before the snapshot's time, and a route withdrawn meanwhile isn't one that went
+            # without a withdrawal (_reconcile_history).
+            since = min((t for t in (None if last is None else last + B, was_unheard) if t is not None), default=None)
+            if since is not None and now - since > B:
+                self._add_gap(since, now)
+            if was_unheard is not None:   # (dealt with; kept until here in case the start didn't get this far)
+                db.kv_set(self.aconn, UNHEARD_KV, None)
+                self.aconn.commit()
             # Seed the RIB from BGPlay's newest snapshot (a few hours old, but it includes peers the
             # looking glass omits). The looking-glass resync then brings it up to date; it's all there is for a
             # prefix the snapshot didn't arrive for, whose stored history is left as it is.
@@ -410,10 +445,10 @@ class Service:
 
     def _unfilled(self):
         """The stretches the stored history doesn't hold yet, as (start, end): the gaps on the list, still to be
-        filled from BGPlay, and the one in the making while RIS Live is down."""
+        filled from BGPlay, and the one in the making while nothing is heard (RIS Live is down, or hasn't synced
+        since the start)."""
         gaps = [(a, b) for a, b in db.kv_get(self.aconn, "gaps", [])]
-        down = getattr(self, "ws_down_since", None)   # (there once the service is live)
-        return gaps + [(down, time.time())] if down else gaps
+        return gaps if self.unheard_since is None else gaps + [(self.unheard_since, time.time())]
 
     async def _ensure_init_rows(self):
         """One-time migration: store the RIB snapshot at the start of recorded history so event replays

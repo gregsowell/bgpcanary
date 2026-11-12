@@ -39,6 +39,7 @@ from test_gap_fill import PEERS, ROUTES, STRAY, iso
 from test_gap_list import WEEK, gaps, one_pass
 from test_bgplay_partial import DAY, HOUR, SIDE, Archive, answer, hold, recent, stale
 from test_bgplay_partial import archive, one_day, scratch   # noqa: F401  (fixtures)
+from test_unheard_stretches import sync   # noqa: F401  (a fixture: sync(svc) is RIS Live in sync with the service)
 
 LATER = {p: ROUTES[p] for p in PEERS[5:]}   # the routes left once five of the peers have withdrawn theirs
 
@@ -205,7 +206,8 @@ def test_a_route_dropped_without_a_withdrawal_isnt_dated_before_a_start_that_fou
 
 # ------------------------------------------------------------------------------------------------ a history with a gap
 @pytest.mark.parametrize("starts", [1, 2])
-def test_a_restart_after_a_long_stop_leaves_what_went_meanwhile_to_the_gap_filler(scratch, timeline, one_day, starts):
+def test_a_restart_after_a_long_stop_leaves_what_went_meanwhile_to_the_gap_filler(scratch, timeline, one_day, sync,
+                                                                                  starts):
     """The service was stopped for six hours. An hour into that, five peers withdrew their routes and RIS logged it;
     later RIS dropped a sixth route without a withdrawal. The restart seeds the 15 routes of RIS's snapshot and finds
     six in its history that aren't among them. It recorded each as withdrawn right after its last update, two hours
@@ -223,13 +225,15 @@ def test_a_restart_after_a_long_stop_leaves_what_went_meanwhile_to_the_gap_fille
     timeline.silent[P2] = [(stop + 1.5 * HOUR, STRAY)]
     svc = restarted(scratch, since, stop, heard=since)
     asyncio.run(svc._startup_history())
+    sync(svc)                                              # RIS Live is in sync: it's live
     if starts == 2:
-        svc.engine.last_bucket = edge - 60                 # live for a minute, then it starts again
+        svc.engine.last_bucket = edge - 60                 # ...for a minute, then it starts again
         svc.engine.tick(edge)
         svc.conn.commit()
         svc.conn.close()
         svc = scratch("restart")
         asyncio.run(svc._startup_history())
+        sync(svc)
     assert svc.engine.visible(P2) == 15 and stale(svc) == []
     assert shown(svc, P2, stop - HOUR) == 21
     timeline.upto = float("inf")                           # hours later the archive covers the stop
@@ -261,7 +265,29 @@ def test_the_daily_check_waits_for_a_gap_that_is_still_to_be_filled(scratch, tim
     assert [shown(svc, P2, at) for at in (down - 60, gone_at - 60, back)] == [20, 20, 19]
 
 
-def test_a_first_start_that_stopped_early_leaves_the_rest_to_the_gap_filler(scratch, timeline, one_day):
+def test_the_daily_check_waits_while_ris_live_is_down(scratch, timeline, one_day, sync):
+    """The gap that's still in the making counts too. RIS Live has been down for four hours, and half an hour into
+    that a peer withdrew its route. The daily check takes the route out of the live engine and leaves the history
+    alone: nothing was heard since the drop. When RIS Live is back the four hours are noted and filled, and the next
+    day's check has nothing to add."""
+    svc, (now, since) = scratch(), recent()
+    down, gone_at = now - 4 * HOUR, now - 3.5 * HOUR
+    hold(svc, since, now - 60)
+    sync(svc)                                              # it's live...
+    svc._on_ws_disconnect(down)                            # ...and RIS Live dropped four hours ago
+    timeline.upto, timeline.changes[P2] = now - 3 * HOUR, [(gone_at, PEERS[0], None)]
+    daily(svc)
+    assert svc.engine.visible(P2) == 19 and stale(svc) == []
+    sync(svc)                                              # it's back
+    timeline.upto = float("inf")
+    one_pass(svc)
+    one_day.clear()
+    daily(svc)                                             # the next day
+    assert gaps(svc) == [] and stale(svc) == []
+    assert [shown(svc, P2, at) for at in (down - 60, gone_at - 60, now - 3 * HOUR)] == [20, 20, 19]
+
+
+def test_a_first_start_that_stopped_early_leaves_the_rest_to_the_gap_filler(scratch, timeline, one_day, sync):
     """A new install loads eight days of history, and what comes after the first week doesn't arrive: the load ends
     there and the rest is a gap. The routes it holds are then checked against RIS's snapshot. One that was withdrawn
     in the stretch still to be loaded is taken out of the live engine, and it was recorded as withdrawn right after
@@ -271,6 +297,7 @@ def test_a_first_start_that_stopped_early_leaves_the_rest_to_the_gap_filler(scra
     timeline.upto, timeline.changes[P1] = before - 3 * HOUR, [(begins + 7.5 * DAY, PEERS[0], None)]
     timeline.broken = lambda prefix, start, end: abs(start - (begins + WEEK)) < 60 and end - start > 60
     asyncio.run(svc._startup_history())
+    sync(svc)
     assert svc.engine.visible(P1) == 19 and stale(svc) == []
     timeline.upto, timeline.broken = float("inf"), None    # the archive answers, and has caught up
     one_pass(svc)

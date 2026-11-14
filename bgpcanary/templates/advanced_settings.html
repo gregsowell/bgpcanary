@@ -43,14 +43,16 @@
 // Show what a % threshold means in RIS peers for each prefix, using its current normal (24 h baseline).
 (function () {
   const baselines = {{ baselines|tojson }};
-  const words = { outage_threshold_pct: "outage when fewer than", recover_threshold_pct: "recovered at" };
+  const words = { outage_threshold_pct: ["outage when fewer than", ""], recover_threshold_pct: ["recovered at", ""],
+                  shift_pct: ["a shift when", " move"], transit_lost_min_pct: ["a transit that carries at least", ""] };
   document.querySelectorAll(".pct-example").forEach(el => {
     const input = document.querySelector(`input[name="${el.dataset.attr}"]`);
+    const [before, after] = words[el.dataset.attr] || ["", ""];
     const draw = () => {
       const pct = parseFloat(input.value);
       if (!(pct > 0)) { el.textContent = ""; return; }
       el.textContent = Object.entries(baselines).map(([p, b]) =>
-        `${p}: ${words[el.dataset.attr]} ${Math.round(b * pct / 100)} of ~${Math.round(b)} peers` +
+        `${p}: ${before} ${Math.round(b * pct / 100)} of ~${Math.round(b)} peers${after}` +
         (el.dataset.attr === "outage_threshold_pct" ? ` (a ${Math.round(100 - pct)}% drop)` : "")).join(" · ");
     };
     input.addEventListener("input", draw);

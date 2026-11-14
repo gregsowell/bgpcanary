@@ -6,6 +6,28 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-11-13
+
+### Added
+- **Transit lost behind an upstream.** A new event for a network behind one of your upstreams that stops carrying you on from it while the upstream itself stays up, for example when your upstream loses its session with one of its own providers. The RIS peers that came in that way usually find another way in at once, so visibility holds and too few of them change upstream for an upstream-shift alert. Until now nothing was recorded. The event says:
+  - how many RIS peers that network usually carries you on to, and how many now;
+  - where those peers went, and whether visibility held;
+  - whether that network still carries you another way, for instance behind another of your upstreams. Then it may simply prefer that way in now.
+
+  It starts as informational and turns into a warning once it lasts (5 minutes by default), so a minute-long flap is recorded without alerting anyone. While it's informational it shows under *Recent events* on the dashboard, as a blue shade on the strip under the tree, and on the Events page with informational events shown. It ends once that network has carried at least half of its usual peers again for 10 minutes, so one that flaps is one event. One still gone after a day is closed as the new normal.
+
+  An upstream that loses almost all of its paths is still an upstream-down event, which names the networks behind it that stopped carrying you. Its alert carries the tree picture like the other routing alerts, and says so when RIPE's data looked unreliable at the time.
+- **The transit-lost event is on by default and has its own settings**, under *Settings › Alert channels › What to alert on* and under *Detection & data sources*:
+  - a tick box switches it off, for a network with so many upstreams or peers that it would be noisy;
+  - how big a share of a prefix's RIS peers a network must usually carry to be watched (10% by default);
+  - how far its peers must drop to count (to a quarter of its usual peers by default);
+  - how long it must last to become a warning (0 makes it a warning at once).
+
+  Setting its *Notify* choice to Off keeps the events and stops their alerts.
+
+### Fixed
+- **Settings › Detection & data sources: the line under *Warn when this share of peers moves between upstreams* read "undefined 83 of ~330 peers".** It now says what the share means for each prefix: "a shift when 83 of ~330 peers move".
+
 ## [1.7.6] - 2026-11-12
 
 ### Fixed
@@ -454,7 +476,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.6...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.7...HEAD
+[1.7.7]: https://github.com/gregsowell/bgpcanary/compare/v1.7.6...v1.7.7
 [1.7.6]: https://github.com/gregsowell/bgpcanary/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/gregsowell/bgpcanary/compare/v1.7.4...v1.7.5
 [1.7.4]: https://github.com/gregsowell/bgpcanary/compare/v1.7.3...v1.7.4

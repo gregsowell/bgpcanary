@@ -29,6 +29,16 @@ CONTROL_ADAPT_S = 6 * 3600         # a control prefix low for this long is taken
 # (UPD_WINDOW: how far back "before" is looked for); only one that typically carries at least UPD_MIN (and a tenth of
 # everyone) is judged; it's back once it carries UPD_BACK of that again, for UPD_HOLD (so one that flaps is one event)
 UPD_WINDOW, UPD_TYPICAL, UPD_MIN, UPD_BACK, UPD_HOLD = 1800, 6 * 3600, 20, 0.5, 600
+# Transit lost: a transit behind one of your upstreams that stops carrying you on from it while the upstream itself
+# stays up. Its usual reach is the time-weighted median of the RIS peers it carried a prefix on to over TL_TYPICAL
+# (TL_WINDOW: how far back its recent peak is looked for); only one that usually carries at least TL_MIN (and
+# cfg.transit_lost_min_pct of everyone) is judged; it's back once it carries TL_BACK of that again, for TL_HOLD (so one
+# that flaps is one event); one still gone after TL_ADAPT is taken as the new normal (an upstream that dropped a
+# provider for good would otherwise keep an event open for ever). One whose upstream lost most of its paths too waits
+# TL_SETTLE for an upstream-down event to tell it instead, or as long as the upstream stays down if it carried TL_SOLE
+# of the upstream's paths (its only way out: the upstream's own events tell what it lost)
+TL_WINDOW, TL_TYPICAL, TL_MIN, TL_BACK, TL_HOLD, TL_ADAPT = 1800, 6 * 3600, 10, 0.5, 600, 86400
+TL_SETTLE, TL_SOLE = 300, 0.9
 # One-time notices: over as soon as they're recorded, and told apart by their title (which chain, which neighbour)
 NOTICE_KINDS = ("chain_change", "new_peer", "new_upstream")
 
@@ -60,6 +70,10 @@ class PrefixMon:
         self.upd_hist = deque()    # (ts, {upstream: peers}, {upstream: {network in front of it: peers}}), UPD_WINDOW
         self.upd_hits = {}         # upstream -> consecutive buckets carrying almost none of the prefix
         self.upd_long = deque()    # (ts, {upstream: peers}) over UPD_TYPICAL, for each upstream's typical reach
+        self.tl_hist = deque()     # (ts, {upstream: {transit behind it: peers}}) each time that changes, over TL_TYPICAL
+        self.tl_seen = None        # ...the last one recorded (Engine._rib_summary hands out the same dict until a change)
+        self.tl_hits = {}          # (upstream, transit) -> consecutive buckets carrying almost none of its usual peers
+        self.tl_held = {}          # (upstream, transit) -> (its peak, since): dropped during an outage or upstream down
         self.bucket_min = None
         self.bucket_updates = 0
         self.bucket_withdrawals = 0
@@ -193,7 +207,8 @@ class Engine:
                 self.anomalies[detail["key"]] = {"id": r["id"], "zero_since": None, "sev": r["severity"],
                                                  # exchange peers lost / peer leak: what they're judged against
                                                  "ref": detail.get("baseline"), "thr": detail.get("threshold"),
-                                                 "peak": detail.get("reach", 0), "low": detail.get("carrying")}
+                                                 "peak": detail.get("reach", 0), "low": detail.get("carrying"),
+                                                 "start": r["start_ts"]}   # (transit lost: when it turns a warning)
 
     def seed_baseline(self, at=None):
         at = at or time.time()
@@ -688,7 +703,7 @@ class Engine:
             eid = self._new_event(kind, sev, prefix, first, title, detail)
             self.anomalies[key] = {"id": eid, "zero_since": None, "sev": sev}
         for key, a in list(self.anomalies.items()):
-            if key in counts or key.startswith(("tf|", "reg|", "shift|", "xl|", "pl|", "ud|")):   # managed elsewhere
+            if key in counts or key.startswith(("tf|", "reg|", "shift|", "xl|", "pl|", "ud|", "tl|")):   # managed elsewhere
                 continue
             if a["zero_since"] is None:
                 a["zero_since"] = now
@@ -805,6 +820,173 @@ class Engine:
             return 0
         typ = self._typical(m, u)
         return typ if typ >= floor and n <= typ * pct / 100 else 0
+
+    def _tl_typical(self, m, u, t, now):
+        """How many RIS peers transit `t` usually carries a prefix on to from upstream `u`: the time-weighted median
+        over TL_TYPICAL (0 until there are 20 minutes of it). Not the peak: a transit that carried more while another
+        was out isn't losing anything when it goes back to its usual share."""
+        pts, start, vals, covered = list(m.tl_hist), now - TL_TYPICAL, [], 0
+        for i, (ts, fr) in enumerate(pts):
+            a, b = max(ts, start), (pts[i + 1][0] if i + 1 < len(pts) else now)
+            if b > a:
+                vals.append((fr.get(u, {}).get(t, 0), b - a))
+                covered += b - a
+        if covered < 1200:
+            return 0
+        acc = 0
+        for n, w in sorted(vals):
+            acc += w
+            if acc >= covered / 2:
+                return n
+        return 0
+
+    def _detect_transit_lost(self, p, m, now, v, ups, fronts):
+        """Transit lost: a transit behind one of your upstreams that stops carrying a prefix on from it (at most
+        transit_lost_pct of its usual reach, two buckets in a row) while the upstream itself stays up. The
+        upstream lost its session with that transit, or the transit stopped passing your prefix on. Nothing else sees
+        that when its RIS peers find another way in at once, through another of the upstream's transits or another
+        upstream of yours: visibility holds, and too few move between your upstreams for an upstream shift. Info; a
+        warning once it lasts transit_lost_warn_minutes. `ups`: {upstream: RIS peers} (not exchange peers);
+        `fronts`: {upstream: {the network behind it: RIS peers}} (see _rib_summary)."""
+        cfg, hist = self.cfg, m.tl_hist
+        changed = fronts is not m.tl_seen   # (a new dict only when the prefix's paths changed: see _rib_summary)
+        if changed:   # the history keeps each change only, so a quiet week is a handful of entries
+            hist.append((now, fronts))
+            m.tl_seen = fronts
+            while len(hist) > 1 and hist[1][0] <= now - TL_TYPICAL:
+                hist.popleft()
+        mine = [k for k in self.anomalies if k.startswith(f"tl|{p}|")]
+        if not cfg.transit_lost_check:   # turned off: what's open ends here
+            for key in mine:
+                self._close_event(self.anomalies.pop(key)["id"], now)
+            m.tl_hits.clear()
+            m.tl_held.clear()
+            return
+        if not (changed or mine or m.tl_hits or m.tl_held):
+            return   # nothing changed since the last bucket, and nothing waits for another look
+        for key in mine:
+            a = self.anomalies[key]
+            u, t = (int(x) for x in key.split("|")[-2:])
+            n, ref = fronts.get(u, {}).get(t, 0), a.get("ref") or 1
+            a["low"] = n if a.get("low") is None else min(a["low"], n)
+            back = n >= ref * TL_BACK
+            a["since"] = (a.get("since") or now) if back else None
+            if back and now - a["since"] >= TL_HOLD:
+                gone = a["since"] - (a.get("start") or a["since"])
+                self._close_event(a["id"], a["since"],
+                                  title=f"{p}: {self._label(t)}, behind your upstream {self._label(u)}, stopped carrying "
+                                        f"you for {_span(gone)} ({ref:.0f} → {a['low']} RIS peers) and is back ({n})")
+                del self.anomalies[key]
+            elif not back and now - (a.get("start") or now) >= TL_ADAPT:
+                self._close_event(a["id"], now,
+                                  title=f"{p}: {self._label(t)}, behind your upstream {self._label(u)}, stopped carrying "
+                                        f"you ({ref:.0f} → {n} RIS peers) and hasn't come back in a day: taken as the "
+                                        f"new normal")
+                del self.anomalies[key]
+            elif not back and a.get("sev") == "info" and \
+                    now - (a.get("start") or now) >= cfg.transit_lost_warn_minutes * 60:
+                a["sev"] = "warning"   # it's lasting: not a flap any more
+                if a["id"] is not None:
+                    self.conn.execute("UPDATE events SET severity='warning' WHERE id=?", (a["id"],))
+                    self.conn.commit()
+                    self._emit(a["id"], "escalate")
+        base = m.baseline() or v
+        pct, floor = cfg.transit_lost_pct, max(TL_MIN, (base or 0) * cfg.transit_lost_min_pct / 100)
+        recent = {}   # (upstream, transit) -> the most RIS peers it carried you on to in the last TL_WINDOW
+        for ts, fr in reversed(hist):
+            for u, tr in fr.items():
+                for t, k in tr.items():
+                    if k >= floor and k > recent.get((u, t), 0):
+                        recent[(u, t)] = k
+            if ts <= now - TL_WINDOW:
+                break
+        # ...and the ones held back while something bigger was going on (see below), however long ago they dropped
+        for pair, (top, since) in list(m.tl_held.items()):
+            if now - since > TL_TYPICAL:
+                del m.tl_held[pair]
+            elif top > recent.get(pair, 0):
+                recent[pair] = top
+        outage = m.state != "ok" or not base or v < base * cfg.outage_threshold_pct / 100
+        hits = {}
+        for (u, t), top in recent.items():
+            n, key = fronts.get(u, {}).get(t, 0), f"tl|{p}|{u}|{t}"
+            if key in self.anomalies or n > top * pct / 100 or self.peer_group(u):
+                m.tl_held.pop((u, t), None)
+                continue
+            # The prefix is down, or the upstream itself lost almost all of its paths: the outage or upstream-down event
+            # tells that (it names the networks behind the upstream that stopped carrying you), not this one. One that
+            # lost most of them may be on its way there (the paths go a few at a time), so it's given TL_SETTLE to get
+            # there first; one left with a third of its paths for longer is no upstream-down event, and this transit
+            # is why. Unless this was all but its only way out: then the upstream lost what it had, which the
+            # upstream-down or upstream-shift event tells, for as long as it lasts. It's held, not forgotten: if the
+            # upstream comes back without it, nothing may change in the paths at that moment, and the drop is soon
+            # older than TL_WINDOW.
+            usual, held = max((h[1].get(u, 0) for h in m.upd_hist), default=0), m.tl_held.get((u, t))
+            if outage or f"ud|{p}|{u}" in self.anomalies or ups.get(u, 0) < usual * UPD_BACK and (
+                    top >= usual * TL_SOLE or now - (held[1] if held else now) < TL_SETTLE):
+                m.tl_held.setdefault((u, t), (top, now))
+                continue
+            typ = self._tl_typical(m, u, t, now)
+            if typ < floor or n > typ * pct / 100:
+                m.tl_held.pop((u, t), None)
+                continue
+            hits[(u, t)] = m.tl_hits.get((u, t), 0) + 1
+            if hits[(u, t)] < 2:   # two buckets in a row, so a single resync or odd snapshot doesn't count
+                continue
+            del hits[(u, t)]
+            m.tl_held.pop((u, t), None)
+            self._open_transit_lost(p, m, now, v, base, u, t, typ, n, fronts, key)
+        m.tl_hits = hits
+
+    def _open_transit_lost(self, p, m, now, v, base, u, t, typ, n, fronts, key):
+        """Record a transit lost (see _detect_transit_lost): since when, and where its RIS peers went."""
+        cfg, hist = self.cfg, list(m.tl_hist)
+        # the last change at which it wasn't lost: where everyone came in then; the drop began in the bucket of the
+        # change after it (not the last time it carried its usual peers: after one that came back halfway, a new drop
+        # would be dated back to the first)
+        i = next((i for i in range(len(hist) - 1, -1, -1)
+                  if hist[i][1].get(u, {}).get(t, 0) > typ * cfg.transit_lost_pct / 100), None)
+        before = hist[i][1] if i is not None else {}
+        start = hist[i + 1][0] - self.B if i is not None and i + 1 < len(hist) else now - 2 * self.B
+        gains = sorted(((uu, tt, k - before.get(uu, {}).get(tt, 0)) for uu, tr in fronts.items() for tt, k in tr.items()
+                        if (uu, tt) != (u, t) and k > before.get(uu, {}).get(tt, 0)), key=lambda x: -x[2])[:3]
+        T, U = self._label(t), self._label(u)
+        note = [f"{T}, one of the networks behind your upstream {U}, usually carries {p} on from it to about {typ} RIS "
+                f"peers; now it carries it to {n}."]
+        if gains:
+            note.append("They reach you through " + ", ".join(
+                f"{self._label(tt)}" + (f" behind {U}" if uu == u else f" behind your upstream {self._label(uu)}")
+                + f" (+{g})" for uu, tt, g in gains) + " instead.")
+        note.append(f"Visibility held: {v} of {base:.0f} RIS peers still see the prefix." if v >= base * 0.95 else
+                    f"{v} of {base:.0f} RIS peers still see the prefix.")
+        # Does the transit still carry you, another way? (Through another network in front of your upstream, or behind
+        # another upstream of yours.) Then it may not have lost anything: it may prefer that way in now, such as when
+        # another upstream of yours comes back with a shorter path.
+        still = {}   # (the network after it toward you, your upstream) -> RIS peers
+        for e in self.rib.get(p, {}).values():
+            if e.path and e.path[-1] == self.asn and t in e.path[:-2]:
+                hop = (e.path[e.path.index(t) + 1], e.path[-2])
+                if hop != (u, u):
+                    still[hop] = still.get(hop, 0) + 1
+        via = sorted(still.items(), key=lambda x: -x[1])
+        if sum(still.values()) >= typ * TL_BACK:
+            (x, ux), k = via[0]
+            way = f"through your upstream {self._label(ux)}" if x == ux else \
+                f"through {self._label(x)} behind your upstream {self._label(ux)}"
+            note.append(f"{T} still carries you, now mostly {way} ({k} RIS peers): either {U} lost its session with "
+                        f"{T}, or {T} now prefers that way in.")
+        else:
+            note.append(f"Usually {U} lost its session with {T}, or {T} stopped passing your prefix on.")
+        # (one that waited for its upstream to settle may have lasted long enough to be a warning already)
+        sev = "warning" if now - start >= cfg.transit_lost_warn_minutes * 60 else "info"
+        eid = self._new_event(
+            "transit_lost", sev, p, start, f"{p}: {T}, behind your upstream {U}, stopped carrying you "
+                                           f"({typ} → {n} RIS peers)",
+            {"key": key, "upstream": u, "transit": t, "baseline": typ, "carrying": n, "threshold": cfg.transit_lost_pct,
+             "moved_to": [[uu, tt, g] for uu, tt, g in gains], "still_via": [[x, ux, k] for (x, ux), k in via[:3]],
+             "note": " ".join(note)})
+        self.anomalies[key] = {"id": eid, "zero_since": None, "sev": sev, "ref": typ, "low": n, "since": None,
+                               "start": start}
 
     def _detect_shift(self, p, m, now, v, ups, chains=None):
         """Upstream shift: many RIS peers moving between your upstreams within a few minutes while visibility
@@ -1061,6 +1243,7 @@ class Engine:
                 # peers coming and going isn't an upstream shift; they have checks of their own
                 ups_t = {u: n for u, n in nb.items() if not self.peer_group(u)}
                 self._detect_upstream_down(p, m, t + self.B, v, ups_t, fronts)
+                self._detect_transit_lost(p, m, t + self.B, v, ups_t, fronts)
                 self._detect_shift(p, m, t + self.B, v, ups_t, chaind)
                 self._detect_peering(p, m, t + self.B, v, nb)
             self._tick_controls(t + self.B)
@@ -1194,6 +1377,16 @@ class Engine:
                              time.strftime("%Y-%m-%d", time.gmtime(e.ts)), " ".join(map(str, e.path)))
         self.conn.commit()
         return changes
+
+
+def _span(sec):
+    """A length of time in words: '45 s', '12 min', '2 h 05 min'."""
+    sec = int(max(0, sec))
+    if sec < 90:
+        return f"{sec} s"
+    if sec < 5400:
+        return f"{round(sec / 60)} min"
+    return f"{sec // 3600} h {sec % 3600 // 60:02d} min"
 
 
 def close_open(engine, ts, note="data gap ended"):

@@ -578,10 +578,12 @@
       const X = t => tx0 + (t - this.D.start) / span * (tx1 - tx0);
       ctx.fillStyle = th.codebg; ctx.fillRect(tx0, ty, tx1 - tx0, th2);
       // The events open in the window: one shade per stretch of time and severity, however many overlap there
-      // (critical over the rest), and a mark on top of one too short to see as a band (seconds, on a strip of hours).
-      for (const crit of [false, true]) {
+      // (critical over warning over info: blue, as a brief dip on the charts), and a mark on top of one too short to
+      // see as a band (seconds, on a strip of hours).
+      const SHADE = { info: ["36,99,235", th.accent], warning: ["199,119,0", th.warn], critical: ["200,38,43", th.crit] };
+      for (const sev of ["info", "warning", "critical"]) {
         const merged = [];
-        for (const e of this.events.filter(e => (e.severity === "critical") === crit).sort((a, b) => a.start - b.start)) {
+        for (const e of this.events.filter(e => (SHADE[e.severity] ? e.severity : "warning") === sev).sort((a, b) => a.start - b.start)) {
           const s = Math.max(e.start, this.D.start), en = Math.min(e.end || this.D.end, this.D.end);
           if (en < this.D.start || s > this.D.end) continue;
           const last = merged[merged.length - 1];
@@ -589,10 +591,10 @@
         }
         for (const [s, en] of merged) {
           const x = X(s), w = Math.max(2, X(en) - x), short = w < 6;
-          ctx.fillStyle = crit ? `rgba(200,38,43,${short ? .6 : .18})` : `rgba(199,119,0,${short ? .6 : .18})`;
+          ctx.fillStyle = `rgba(${SHADE[sev][0]},${short ? .6 : .18})`;
           ctx.fillRect(x, ty, w, th2);
           if (short && !this.ev) {   // (on an event's page every event has a pin: see below)
-            ctx.fillStyle = crit ? th.crit : th.warn;
+            ctx.fillStyle = SHADE[sev][1];
             ctx.beginPath(); ctx.moveTo(x + w / 2 - 6, ty - 8); ctx.lineTo(x + w / 2 + 6, ty - 8); ctx.lineTo(x + w / 2, ty + 2); ctx.closePath(); ctx.fill();
           }
         }

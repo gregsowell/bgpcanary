@@ -51,6 +51,10 @@ class Config:
     shift_window_seconds: int
     shift_quiet_seconds: int
     upstream_down_pct: float
+    transit_lost_check: bool        # watch the transits behind your upstreams (Engine._detect_transit_lost)
+    transit_lost_min_pct: float     # ...that usually carry at least this share of a prefix's RIS peers
+    transit_lost_pct: float         # ...for one carrying at most this share of its usual peers
+    transit_lost_warn_minutes: int  # ...which turns from info to a warning once it lasts this long
     loss_alert_pct: float
     exchange_loss_pct: float
     peer_leak_pct: float
@@ -173,6 +177,27 @@ TUNING = [
                                             "the prefix stays visible through your other upstreams (otherwise it's an "
                                             "outage). The alert says what changed behind that upstream, and replaces "
                                             "the upstream-shift alert for it. 0 = off."}),
+    ("transit_lost_check", "Transit lost detection", "Watch the networks behind your upstreams", "bool",
+     {"help": "Reports a transit behind one of your upstreams that stops carrying you on from it, such as your upstream "
+              "losing one of its own providers, while the upstream itself stays up. The RIS peers usually find another "
+              "way in at once, so neither an outage nor an upstream shift shows it. (An upstream that loses almost all "
+              "of its paths is an upstream-down event instead.) With many upstreams or peers this can be noisy: switch "
+              "it off here, or keep the events and stop the alerts under Alert channels › What to alert on."}),
+    ("transit_lost_min_pct", "Transit lost detection",
+     "Watch a transit that usually carries at least this share of a prefix's RIS peers (%)", "float",
+     {"min": 1, "max": 100, "help": "Smaller ones aren't judged (and never one under 10 peers). Its usual share is the "
+                                    "middle value over the last 6 hours, not its peak, so one that carried more while "
+                                    "another was out isn't reported when it goes back to normal.",
+      "pct_of_baseline": True}),
+    ("transit_lost_pct", "Transit lost detection", "Report it once it carries this little of its usual peers (%)",
+     "float", {"min": 1, "max": 90, "help": "25 means a drop of three quarters or more, for two buckets in a row. It's "
+                                            "back once it carries half of its usual peers again, for 10 minutes, so "
+                                            "one that flaps is one event. One still gone after a day is taken as the "
+                                            "new normal and closed."}),
+    ("transit_lost_warn_minutes", "Transit lost detection", "Raise it to a warning once it lasts (minutes)", "int",
+     {"min": 0, "max": 1440, "help": "Shorter losses stay informational: they're listed under Recent events on the "
+                                     "dashboard and marked on the path tree, and by default they don't send alerts. "
+                                     "0 = a warning at once."}),
     ("loss_alert_pct", "Upstream shift detection", "Critical alert when RIPE Atlas probes can't reach you (% of probes)",
      "float", {"min": 0, "max": 100, "help": "If at least this share of the probes in one round of Atlas pings to your "
                                              "own addresses (baseline targets, shift checks) gets no reply at all, a "
@@ -325,6 +350,11 @@ ALERT_TYPES = [
              "others. The alert says what changed behind it: which of its own upstreams stopped carrying you, which "
              "of its transits don't carry your prefix, and whether its own network is still reachable (RIPEstat). "
              "Triggers Route Views and Atlas checks.", "tuning": ["upstream_down_pct"]},
+    {"kind": "transit_lost", "group": "Upstreams", "name": "Transit lost behind an upstream", "sev": ("info", "warning"),
+     "desc": "A transit behind one of your upstreams stops carrying you on from it (your upstream lost one of its own "
+             "providers, say) while the upstream itself stays up. Says where its peers went. Informational at first, a "
+             "warning once it lasts.",
+     "tuning": ["transit_lost_check", "transit_lost_min_pct", "transit_lost_pct", "transit_lost_warn_minutes"]},
     {"kind": "upstream_shift", "group": "Upstreams", "name": "Upstream shift", "sev": ("warning",),
      "desc": "A large share of the internet switches which of your upstreams it uses within minutes while "
              "visibility holds (a session flap or re-route). Triggers Route Views and Atlas checks.",
@@ -525,6 +555,10 @@ def _load(path):
         shift_window_seconds=int(det.get("shift_window_seconds", 300)),
         shift_quiet_seconds=int(det.get("shift_quiet_seconds", 300)),
         upstream_down_pct=float(det.get("upstream_down_pct", 10)),
+        transit_lost_check=bool(det.get("transit_lost_check", True)),
+        transit_lost_min_pct=float(det.get("transit_lost_min_pct", 10)),
+        transit_lost_pct=float(det.get("transit_lost_pct", 25)),
+        transit_lost_warn_minutes=int(det.get("transit_lost_warn_minutes", 5)),
         loss_alert_pct=float(det.get("loss_alert_pct", 50)),
         exchange_loss_pct=float(det.get("exchange_loss_pct", 50)),
         peer_leak_pct=float(det.get("peer_leak_pct", 10)),

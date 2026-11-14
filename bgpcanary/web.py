@@ -612,7 +612,8 @@ async def dashboard(request: Request):
     where = "" if every else f"(prefix IN ({','.join('?' * len(sel))}) OR prefix IS NULL) AND "
     args = [] if every else sel
     events = conn.execute(f"SELECT * FROM events WHERE {where}(severity!='info' OR kind IN ('transit_filter',"
-                          "'upstream_missing','filter_sim','irr_change','asset_change')) ORDER BY start_ts DESC LIMIT 10",
+                          "'upstream_missing','filter_sim','irr_change','asset_change','transit_lost')) "
+                          "ORDER BY start_ts DESC LIMIT 10",
                           args).fetchall()
     blips = conn.execute(f"SELECT * FROM events WHERE {where}kind='blip' ORDER BY start_ts DESC LIMIT 5", args).fetchall()
     probe = db.annotate_probes(conn, conn.execute("SELECT * FROM probes ORDER BY ts DESC LIMIT 4").fetchall())
@@ -1015,11 +1016,12 @@ def replay_payload(conn, prefix, s, e, base=None):
     for p in plist:
         asns.update(int(x) for x in p.split())
     # The strip under the tree shades these: every warning or critical event of this prefix or of none (a reachability
-    # loss on a carrier's link address), so a night's trouble shows whatever kind it was. Not the info ones: they
-    # come by the dozen and some stay open for days.
+    # loss on a carrier's link address), so a night's trouble shows whatever kind it was, and a transit lost while
+    # it's still informational. Not the other info ones: they come by the dozen and some stay open for days.
     events = [{"id": r["id"], "start": r["start_ts"], "end": r["end_ts"], "severity": r["severity"],
                "kind": r["kind"], "title": r["title"]} for r in conn.execute(
-        "SELECT * FROM events WHERE (prefix=? OR prefix IS NULL) AND (severity!='info' OR kind='outage') "
+        "SELECT * FROM events WHERE (prefix=? OR prefix IS NULL) AND (severity!='info' OR kind IN ('outage', "
+        "'transit_lost')) "
         "AND start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts", (prefix, e, time.time(), s))]
     return {"asn": cfg.asn, "prefix": prefix, "start": s, "end": e, "peers": peers, "paths": plist,
             "init": [init.get(i, -1) for i in range(len(peers))], "updates": updates, "events": events,

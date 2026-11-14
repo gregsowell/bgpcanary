@@ -18,7 +18,7 @@ log = logging.getLogger("bgpcanary.service")
 BURST_KINDS = ("outage", "upstream_missing", "origin_hijack", "more_specific", "covering_prefix", "upstream_shift",
                "upstream_down", "peer_leak")
 # events about routes going missing: what RIPE's data going missing looks like too
-ABSENCE_KINDS = ("blip", "upstream_missing", "upstream_shift", "upstream_down", "exchange_loss")
+ABSENCE_KINDS = ("blip", "upstream_missing", "upstream_shift", "upstream_down", "exchange_loss", "transit_lost")
 UNHEARD_KV = "ris_unheard_since"   # Service.unheard_since, for the start after a stop that came while RIS Live was down
 
 

@@ -43,6 +43,12 @@ baseline_hours = 24
 reconcile_minutes = 5        # re-check state against the RIPEstat looking glass when quiet
 stale_days = 14              # drop routes not refreshed for this long and not confirmed by the looking glass
 backfill_days = 90           # history loaded from RIPEstat BGPlay on first start
+# Transit lost: a transit behind one of your upstreams stops carrying you on from it while the upstream itself
+# stays up (it lost one of its own providers, say). Informational at first, a warning once it lasts.
+transit_lost_check = true
+transit_lost_min_pct = 10        # only transits that usually carry at least 10% of a prefix's RIS peers
+transit_lost_pct = 25            # ...reported once one carries 25% or less of its usual peers
+transit_lost_warn_minutes = 5    # ...and a warning once that lasts this long (0 = a warning at once)
 # Transit filter check (informational): flags a transit provider that carries an upstream's own
 # prefixes but none of yours via that upstream. Can also be switched on/off on the Settings page.
 transit_filter_check = true

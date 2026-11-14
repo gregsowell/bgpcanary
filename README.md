@@ -33,6 +33,7 @@ networks.
   - origin hijacks, more-specific and covering announcements, your ASN in someone else's path;
   - missing or unexpected upstreams;
   - **an upstream going down**: one of your upstreams losing almost all of its paths while you stay up through the others, with what changed behind it (which of its own upstreams stopped carrying you, which of its transits don't carry your prefix, whether its own network is still reachable);
+  - **a transit lost behind an upstream**: a network behind one of your upstreams that stops carrying you on from it, such as your upstream losing one of its own providers, even when the internet finds another way in at once and nothing else shows it (on by default, and can be switched off);
   - **upstream shifts**: a large share of the internet switching providers within minutes, such as a session flap, naming the network behind your upstreams whose way to you changed;
   - **reachability loss**: RIPE Atlas probes can't reach your addresses, even when BGP looks fine.
 - **Background checks:**

@@ -6,6 +6,11 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.10] - 2026-11-24
+
+### Fixed
+- **Alert emails could go out without their tree pictures.** Since 1.5.6, drawing them failed when one of your upstreams had carried none of your routes before the event. That covers an upstream that had been down for hours, one in your settings that wasn't live yet, and one that turned up during the event, which is what an *unexpected upstream* alert is about. The email went out without pictures, and the log said "tree images for event N failed; sending without them". Such an upstream is now drawn as the trees on the dashboard and event pages draw it: a red dotted line, "not carrying you".
+
 ## [1.7.9] - 2026-11-24
 
 ### Added
@@ -498,7 +503,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.9...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.10...HEAD
+[1.7.10]: https://github.com/gregsowell/bgpcanary/compare/v1.7.9...v1.7.10
 [1.7.9]: https://github.com/gregsowell/bgpcanary/compare/v1.7.8...v1.7.9
 [1.7.8]: https://github.com/gregsowell/bgpcanary/compare/v1.7.7...v1.7.8
 [1.7.7]: https://github.com/gregsowell/bgpcanary/compare/v1.7.6...v1.7.7

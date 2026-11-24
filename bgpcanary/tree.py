@@ -467,8 +467,10 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         has_kids = bool(n["children"])
         T((lx, y - (13 if has_kids else 7)), label, (12, n["level"] <= 1 or (len(k) > 1 and is_x(k))),
           C["muted"] if st == "lost" or st == "idle" or st in SOFT else C["text"])
+        of = tree.pinned.get(k, {}).get("of")   # (none for an upstream of yours: plain "not carrying you", as in replay.js)
         cnt = ("" if n["level"] == 0 or n["folded"]
-               else f"not carrying you via AS{tree.pinned[k]['of']}" if st == "never"
+               else f"not carrying you via AS{of}" if st == "never" and of
+               else "not carrying you" if st == "never"
                else "reaches you directly" if st == "direct" else "reaches you another way" if st == "elsewhere"
                else f"moved to via AS{moved_to(k)[-2]}" if st == "moved"
                else "no longer peered" if st == "gone" else f"0 (was {b})" if st == "lost"

@@ -79,6 +79,7 @@ Settings › Monitored network shows which exchanges PeeringDB lists for you, wi
 | Transit not carrying you | info | An upstream's transit carries the upstream's routes straight from it but yours not at all, or only the long way round (through that upstream, but not straight from it): usually a prefix filter. One that reaches you another way, your own neighbour or a network behind another upstream of yours, is using its best route and isn't reported. A neighbour with an open "unexpected upstream" warning isn't judged until it's filed as a transit |
 | Registry problem / filter simulation / IRR / as-set change | info–critical | From the registry watch |
 | Watched path changed | info | A network on the [Path finder](#path-finder)'s watch list: the path to it (or back from it) changed in two checks in a row |
+| Route Views collector stopped working | info / warning | A Route Views collector stopped working for everyone and was replaced by the one that sees the most paths to your prefixes, or dropped if none sees five ([Collectors that stop working](#collectors-that-stop-working)). A warning instead when one hasn't answered your server for days but Route Views still gets data from it, or when none of them has |
 
 ## Detection & data sources (Settings › Detection & data sources)
 
@@ -89,6 +90,31 @@ updates are kept. Each setting is explained on the page.
 **Route Views limits.** Route Views allows about 100 telnet connections per collector per day from one IP
 address. bgpcanary keeps scheduled work under half of that, saves the rest for events, and pauses a collector
 for 24 h if it ever gets rate-limited. Keep the defaults unless you know you need more.
+
+### Collectors that stop working
+
+Route Views retires a collector now and then, or one dies, and nothing tells the networks that ask it. bgpcanary
+notices one that has failed every try for 3 days (*...once it has failed every try for (days)*) while the other
+collectors answer. Tries that Route Views' daily limit turned away don't count, and an answer with no paths is an
+answer. Then it looks the collector up in Route Views' archive (archive.routeviews.org), where each collector's data
+lands every 15 minutes:
+
+- **Nothing from it there for a day either:** it's down for everyone. bgpcanary asks each of the other collectors
+  the archive lists once (one of each one's ~100 daily connections), and puts the one that sees the most paths to
+  your prefixes in its place, or drops it if none sees at least five. The first collector also runs ping and
+  traceroute, so its replacement must answer ping, if one of the best three does. You get an FYI alert saying what
+  was asked and what each collector saw, and the new collector's answer is kept as its first snapshot.
+- **Its data is still there:** the collector works, and something between your server and it is blocking telnet
+  (port 23), or Route Views stopped offering telnet on it. Nothing is replaced: an open warning says so, and closes
+  when it answers again.
+- **Every collector failing at once** is your server's side (a firewall, a proxy, routing): one warning, and nothing
+  is replaced.
+
+Your list isn't changed. The swap is stored separately and applied on top of it, and holds while the dead collector
+is on the list, in Settings or in config.toml. The settings page lists each swap with an **Undo** button; a collector
+put back that way isn't replaced again until it has answered once more. To keep a swap for good, put the replacement
+in the dead one's place on your list. *Replace a Route Views collector that stops working for everyone* turns all of
+this off.
 
 ### Checking RIPE's data
 

@@ -21,9 +21,11 @@
     {% else %}
     <tr><td><span class="dot"></span> Control prefixes</td><td class="muted">off (Settings › Detection &amp; data sources)</td></tr>
     {% endfor %}
-    <tr><td><span class="dot {{ 'ok' if rv_ok else 'warn' }}"></span> Route Views <span class="muted">· independent collectors</span></td>
+    <tr><td><span class="dot {{ 'ok' if rv_ok and not h.route_views.failing else 'warn' }}"></span> Route Views <span class="muted">· independent collectors</span></td>
       <td>{% if not h.route_views.configured %}none configured, so outages can't be checked against them{% else %}{{ rv_ok|length }} of {{ h.route_views.configured }} collector{{ 's' if h.route_views.configured != 1 }} answered in the last day{% if h.route_views.blocked %} · daily limit used up: {{ h.route_views.blocked|join(', ') }}{% endif %}
-        · {{ 'outages are checked against them' if h.confirm_outages else 'outage check off' }}{% endif %}</td></tr>
+        · {{ 'outages are checked against them' if h.confirm_outages else 'outage check off' }}{% endif %}
+        {% for f in h.route_views.failing %} · <a href="/events/{{ f.event }}">{% if f.host == '*' %}none has answered this server for days{% else %}{{ f.host }} hasn't answered this server for days{% endif %}</a>{% endfor %}
+        {% if h.route_views.replaced %} · replaced automatically: {% for w in h.route_views.replaced %}{{ w.dead }} → {{ w.by or 'dropped' }}{{ ', ' if not loop.last }}{% endfor %} (<a href="/settings/advanced#rv-replaced">Settings</a>){% endif %}</td></tr>
   </table></div>
   {% if rvb %}
   <details style="margin-top:8px"><summary class="muted" style="font-size:13px">Route Views' daily limits: today's use from this server</summary>

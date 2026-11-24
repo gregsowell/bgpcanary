@@ -6,8 +6,19 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.9] - 2026-11-24
+
+### Added
+- **A Route Views collector that stops working for everyone is replaced by itself.** Route Views retires a collector now and then, or one dies, and nothing tells the networks that ask it: Singapore failed 36 tries over 18 days before anyone noticed. Now one that has failed every try for 3 days while the other collectors answer is looked up in Route Views' archive. If the archive has had nothing from it for a day either, it's down for everyone: bgpcanary asks each of the other collectors the archive lists once, and puts the one that sees the most paths to your prefixes in its place, or drops it if none sees at least five. The first collector also runs ping and traceroute, so its replacement must answer ping, if one of the best three does. You get an FYI alert saying how long it had failed, what the archive showed and what each collector asked saw, and the new collector's answer is kept as its first snapshot. Tries that Route Views' daily limit turned away don't count, and an answer with no paths is an answer.
+  - **Your list stays yours.** The swap is stored on its own and applied on top of the list in Settings or config.toml, which isn't changed: it holds while the dead collector is on that list. *Settings › Detection & data sources* lists each swap with an **Undo** button, and the *Data sources* panel mentions it. A collector put back by hand isn't replaced again until it has answered once more.
+  - **A collector Route Views still gets data from is never replaced.** Something between your server and it is blocking telnet, or Route Views stopped offering telnet on it, and a swap would hide that. An open warning says so instead, and closes when it answers again. So does one for every collector failing at once, which is your server's side (a firewall, a proxy, routing).
+  - On by default. *Replace a Route Views collector that stops working for everyone* switches it off, and the number of days is a setting next to it (also under *Alert channels › What to alert on*). In config.toml: `[routeviews] replace_dead` and `replace_days`.
+
 ### Changed
 - **New installs no longer ask Route Views' Singapore collector**, which stopped answering on 2026-11-07. Route Views' archive has had no data from it since, and every request to it timed out. AMS-IX (`amsix.ams.routeviews.org`) takes its place in the default list. Existing installs keep their own list: if `route-views.sg.routeviews.org` is in yours, remove it under *Settings › Detection & data sources*, or from `[routeviews] servers` in config.toml.
+
+### Fixed
+- **A collector taken off the list still counted on the pages.** Its last answer, however old, was still added into the Route Views paths on the dashboard, BGP data's *Paths* and *Route Views* tabs, the *Data sources* panel and the Path finder's "also ask Route Views", so a list of 9 could read "10 collectors". Only the collectors asked now count.
 
 ## [1.7.8] - 2026-11-24
 
@@ -487,7 +498,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.8...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.9...HEAD
+[1.7.9]: https://github.com/gregsowell/bgpcanary/compare/v1.7.8...v1.7.9
 [1.7.8]: https://github.com/gregsowell/bgpcanary/compare/v1.7.7...v1.7.8
 [1.7.7]: https://github.com/gregsowell/bgpcanary/compare/v1.7.6...v1.7.7
 [1.7.6]: https://github.com/gregsowell/bgpcanary/compare/v1.7.5...v1.7.6

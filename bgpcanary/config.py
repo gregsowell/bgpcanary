@@ -71,18 +71,31 @@ class Config:
     covering_min_length: int
     control_prefixes: list   # well-known prefixes of other networks: RIS losing them too = a RIPE data problem
     raw_retention_days: int
-    rv_servers: list
+    rv_configured: list      # the Route Views collectors as configured (the file, or Settings): read rv_servers
     rv_poll_minutes: int
     probe_targets: list
     probe_minutes: int
     probe_on_event: bool
     rv_followup_change_pct: float
     confirm_outages: bool    # check an outage against Route Views (and Atlas) before alerting it as critical
+    rv_replace_dead: bool    # replace a collector that stopped working for everyone (collectors.py)
+    rv_replace_days: int     # ...once it has failed every try for this many days
     alert_min_severity: str
     alert_kinds: dict   # alert type -> ALERT_MODES choice (saved in the UI; missing = from alert_min_severity)
     base_url: str
     email: EmailCfg
     webhooks: list
+    rv_swaps: dict = field(default_factory=dict)   # dead collector -> what replaced it (None: dropped); collectors.py
+
+    @property
+    def rv_servers(self):
+        """The Route Views collectors to ask: the configured ones, with any that stopped working for everyone replaced
+        (collectors.py). Setting it sets the configured list."""
+        return swapped(self.rv_configured, self.rv_swaps)
+
+    @rv_servers.setter
+    def rv_servers(self, value):
+        self.rv_configured = list(value)
 
     def prefix_nets(self):
         return [ipaddress.ip_network(p) for p in self.prefixes]
@@ -91,6 +104,22 @@ class Config:
     def configured(self):
         """False until an ASN and at least one prefix are set (fresh install -> first-run setup page)."""
         return bool(self.asn) and bool(self.prefixes)
+
+
+def swapped(servers, swaps):
+    """`servers` with each collector in `swaps` replaced, in its place, by what replaced it (and that by what replaced
+    it, if it went too), or left out when nothing did. A collector is listed once."""
+    out = []
+    for s in servers:
+        seen = set()
+        while s in swaps and s not in seen:
+            seen.add(s)
+            s = swaps[s]
+            if not s:
+                break
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 def plain_prefix(p, strict=False):
@@ -244,6 +273,18 @@ TUNING = [
     ("rv_servers", "Data sources", "Route Views collectors", "hosts",
      {"help": "One per line. The first one is also used for ping and traceroute (route-views.routeviews.org "
               "allows both)."}),
+    ("rv_replace_dead", "Data sources", "Replace a Route Views collector that stops working for everyone", "bool",
+     {"help": "Once a collector has failed every try for the days below while the others answer, and Route Views' own "
+              "archive has had nothing from it for a day either, bgpcanary asks Route Views' other collectors once each "
+              "and puts the one that sees the most paths to your prefixes (at least 5) in its place, or drops it if "
+              "none does. You get an FYI alert, and Settings › Detection & data sources lists the swap with an undo. "
+              "Your own list isn't changed: "
+              "the swap holds while the dead one is on it. A collector Route Views still gets data from is never "
+              "replaced: something between this server and it is blocking the connection, so you're told instead."}),
+    ("rv_replace_days", "Data sources", "...once it has failed every try for (days)", "int",
+     {"min": 1, "max": 60, "help": "At the default 12-hour snapshots, 3 days is six failed tries in a row. Route Views' "
+                                   "daily limit turning a try away doesn't count, and an answer with no paths is an "
+                                   "answer."}),
     ("rv_poll_minutes", "Data sources", "\"show ip bgp\" snapshots every (minutes)", "int",
      {"min": 0, "max": 1440, "help": "0 turns scheduled snapshots off (they still run on outages). Route Views "
                                      "rate-limits each IP to 100 connections and 500 KB per collector per day, "
@@ -395,6 +436,12 @@ ALERT_TYPES = [
              "all, or only the long way round: usually a prefix filter or IRR issue. One that reaches you another "
              "way (your own neighbour, or through another upstream of yours) is using its best route and isn't "
              "reported.", "tuning": ["transit_filter_min_peers", "transit_filter_minutes"]},
+    {"kind": "rv_collector", "group": "Background checks", "name": "Route Views collector stopped working (FYI)",
+     "sev": ("info", "warning"),
+     "desc": "A Route Views collector stopped working for everyone and was replaced by the one that sees your prefixes "
+             "best (or dropped, if none sees enough). A warning instead when one hasn't answered this server for days "
+             "but Route Views still gets data from it, or none of them has: something is blocking the connection.",
+     "tuning": ["rv_replace_dead", "rv_replace_days"]},
     {"kind": "registry", "group": "Background checks", "name": "Registry problem", "sev": ("info", "warning", "critical"),
      "check": "registry", "desc": "IRR route objects or RPKI problems for your space (missing, conflicting, invalid).",
      "tuning": ["registry_minutes"]},
@@ -410,7 +457,7 @@ ALERT_TYPES = [
              "watched targets set to alert.", "tuning": []},
 ]
 ALERT_MODES = ("on", "warning", "critical", "off")   # on = every severity; warning / critical = that and above
-FYI_ALERT_KINDS = ("transit_filter", "filter_sim", "irr_change", "asset_change", "path_change")
+FYI_ALERT_KINDS = ("transit_filter", "filter_sim", "irr_change", "asset_change", "path_change", "rv_collector")
 _SEV = {"info": 0, "warning": 1, "critical": 2}
 
 
@@ -575,13 +622,15 @@ def _load(path):
         covering_min_length=int(det.get("covering_min_length", 8)),
         control_prefixes=[normalize_prefix(x) for x in det.get("control_prefixes", CONTROL_DEFAULT)],
         raw_retention_days=int(raw.get("storage", {}).get("raw_retention_days", 365)),
-        rv_servers=list(rv.get("servers", ["route-views.routeviews.org"])),
+        rv_configured=list(rv.get("servers", ["route-views.routeviews.org"])),
         rv_poll_minutes=int(rv.get("poll_minutes", 720)),
         probe_targets=list(rv.get("probe_targets", [])),
         probe_minutes=int(rv.get("probe_minutes", 360)),
         probe_on_event=bool(rv.get("probe_on_event", True)),
         rv_followup_change_pct=float(rv.get("followup_change_pct", 10)),
         confirm_outages=bool(rv.get("confirm_outages", True)),
+        rv_replace_dead=bool(rv.get("replace_dead", True)),
+        rv_replace_days=int(rv.get("replace_days", 3)),
         alert_min_severity=al.get("min_severity", "warning"),
         alert_kinds=dict(al.get("kinds", {})),
         email=EmailCfg(

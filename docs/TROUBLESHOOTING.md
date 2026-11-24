@@ -183,10 +183,12 @@ read a few percent low for hours, after a `looking-glass resync: 24 changes` or 
 
 - Port 23 (telnet) outbound to `*.routeviews.org` must be allowed.
 - If a collector is rate-limited, bgpcanary pauses it for 24 h by itself. Don't lower the polling intervals below the defaults.
-- A collector that times out every time may have been shut down. Route Views' archive (https://archive.routeviews.org/)
-  shows the latest data from each one. If a collector has none for days, take it off the list under
-  *Settings › Detection & data sources*. Route Views' Singapore collector went quiet that way on 2026-11-07, and
-  releases after 1.7.8 list AMS-IX instead.
+- A collector that times out every time may have been shut down. Since 1.7.9 bgpcanary replaces one by itself
+  once it has failed for 3 days and Route Views' archive (https://archive.routeviews.org/) has had nothing from it
+  for a day either ([Collectors that stop working](CONFIGURATION.md#collectors-that-stop-working)). If the archive
+  still has its data, you get a warning instead: the trouble is between your server and that collector. To take one
+  off by hand, remove it under *Settings › Detection & data sources*. Route Views' Singapore collector went quiet on
+  2026-11-07, and releases from 1.7.9 list AMS-IX instead.
 - A traceroute that ends early with "target answers ping" is fine: routers near your network just don't answer traceroute.
 
 ## Path finder: the traceroute shows nothing, or stops early

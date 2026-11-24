@@ -26,6 +26,16 @@
         {% endif %}
         <span style="font-size:12px">{{ s.opts.help }}{% if s.changed %} Config-file default: <code>{{ s.default|join(', ') if s.kind in ('prefixes', 'hosts') else s.default }}</code>.{% endif %}</span>
       </label>
+      {% if s.attr == 'rv_servers' and rv_swaps %}
+      <div class="span2" id="rv-replaced" style="font-size:13px">
+        <span class="muted" style="font-size:12px">Replaced automatically, as they stopped working for everyone. The list above isn't changed: each swap holds while the dead one is on it (or in the config file).</span>
+        {% for w in rv_swaps %}
+        <div style="margin-top:4px">{{ w.dead }} → {% if w.by %}<strong>{{ w.by }}</strong>{% if w.paths %} <span class="muted">({{ w.paths }} paths to your prefixes)</span>{% endif %}{% else %}<em>dropped</em>{% endif %}
+          <span class="muted">· <time data-ts="{{ w.at }}"></time>{% if w.event %} · <a href="/events/{{ w.event }}">why</a>{% endif %}</span>
+          <button type="submit" form="undo-rv-{{ loop.index }}" style="font-size:12px;padding:1px 8px;margin-left:6px">Undo</button></div>
+        {% endfor %}
+      </div>
+      {% endif %}
       {% endfor %}
     </div>
   </div>
@@ -34,6 +44,9 @@
     <button class="primary" type="submit">Save and restart monitoring</button>
   </div>
 </form>
+{% for w in rv_swaps %}{# (the Undo buttons above belong to these: a form can't hold another) #}
+<form id="undo-rv-{{ loop.index }}" method="post" action="/settings/advanced/undo-replacement" data-confirm="Ask {{ w.dead }} again{% if w.by %} instead of {{ w.by }}{% endif %}? It won't be replaced again until it has answered once more." onsubmit="return confirm(this.dataset.confirm)"><input type="hidden" name="host" value="{{ w.dead }}"></form>
+{% endfor %}
 {% if from_db %}
 <form method="post" action="/settings/advanced/reset" onsubmit="return confirm('Reset every setting on this page to the config-file defaults and restart?')">
   <button type="submit">Reset this page to config-file defaults</button>

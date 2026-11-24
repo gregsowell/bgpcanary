@@ -82,6 +82,9 @@ followup_change_pct = 10                    # ...and re-query during it only on 
                                             # moving >= this % of normal, or an upstream path appearing/vanishing
 confirm_outages = true                      # check a RIS outage against Route Views (and Atlas)
                                             # before alerting it as critical
+replace_dead = true                         # a collector that has failed every try for replace_days while the others
+replace_days = 3                            # answer, and that Route Views' archive has nothing from either, is
+                                            # replaced by the one that sees your prefixes best (this list isn't changed)
 
 [alerts]
 min_severity = "warning"     # info | warning | critical

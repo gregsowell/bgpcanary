@@ -612,14 +612,15 @@ async def dashboard(request: Request):
     where = "" if every else f"(prefix IN ({','.join('?' * len(sel))}) OR prefix IS NULL) AND "
     args = [] if every else sel
     events = conn.execute(f"SELECT * FROM events WHERE {where}(severity!='info' OR kind IN ('transit_filter',"
-                          "'upstream_missing','filter_sim','irr_change','asset_change','transit_lost')) "
+                          "'upstream_missing','filter_sim','irr_change','asset_change','transit_lost','rv_collector')) "
                           "ORDER BY start_ts DESC LIMIT 10",
                           args).fetchall()
     blips = conn.execute(f"SELECT * FROM events WHERE {where}kind='blip' ORDER BY start_ts DESC LIMIT 5", args).fetchall()
     probe = db.annotate_probes(conn, conn.execute("SELECT * FROM probes ORDER BY ts DESC LIMIT 4").fetchall())
+    asked = set(cfg.rv_servers)   # (not a collector removed or replaced since: its last answer is old news)
     rv_rows = [r for r in conn.execute("SELECT id,ts,server,prefix,n_paths,error FROM rv_snapshots WHERE id IN "
                                        "(SELECT MAX(id) FROM rv_snapshots GROUP BY server, prefix)").fetchall()
-               if r["prefix"] in sel]
+               if r["prefix"] in sel and r["server"] in asked]
     rv = None
     if rv_rows:
         rv = {"n_paths": sum(r["n_paths"] or 0 for r in rv_rows), "servers": len(rv_rows),
@@ -634,7 +635,8 @@ async def dashboard(request: Request):
                               (p, p)):
             if len(got) >= 4 or (len(got) >= 2 and sum(x["n_paths"] or 0 for x in got) >= 10):
                 break
-            got.append(r)
+            if r["server"] in asked:
+                got.append(r)
         rv_latest += got
     has_atlas = conn.execute("SELECT 1 FROM atlas_msm WHERE purpose='baseline' LIMIT 1").fetchone() is not None
     nm = names(conn, asns)
@@ -1329,11 +1331,14 @@ def mark_diff(c):
 
 
 def rv_latest(conn, prefix):
-    """The latest good "show ip bgp" per collector for `prefix`: {server: [paths as ints]} and when the oldest is from."""
-    out, oldest = {}, None
+    """The latest good "show ip bgp" per collector asked now for `prefix`: {server: [paths as ints]} and when the
+    oldest is from."""
+    out, oldest, asked = {}, None, set(cfg.rv_servers)
     for s in conn.execute("SELECT s.server, s.ts, s.paths FROM rv_snapshots s JOIN (SELECT server, MAX(ts) ts FROM "
                           "rv_snapshots WHERE prefix=? AND (error IS NULL OR error='') AND raw!='' GROUP BY server) l "
                           "ON l.server=s.server AND l.ts=s.ts WHERE s.prefix=?", (prefix, prefix)):
+        if s["server"] not in asked:   # (a collector removed or replaced since)
+            continue
         out[s["server"]] = [paths.parse_str(p) for p in json.loads(s["paths"] or "[]")]
         oldest = s["ts"] if oldest is None else min(oldest, s["ts"])
     return out, oldest
@@ -1380,7 +1385,7 @@ def rv_tab(conn):
                           "AND l.ts=s.ts").fetchall()
     order = {s: i for i, s in enumerate(cfg.rv_servers)}
     pfx = {p: i for i, p in enumerate(cfg.prefixes)}
-    latest = [dict(r) for r in sorted((r for r in latest if r["prefix"] in pfx),
+    latest = [dict(r) for r in sorted((r for r in latest if r["prefix"] in pfx and r["server"] in order),
                                       key=lambda r: (order.get(r["server"], 99), r["server"], pfx[r["prefix"]]))]
     for r in latest:   # a failed run: also show that collector's last good output
         if r["error"]:
@@ -2019,13 +2024,16 @@ async def advanced_settings_page(request: Request, msg: str = "", err: int = 0):
     file_cfg = config.load()   # what the config file alone says, to show defaults and what's overridden
     sections = {}
     for attr, sec, label, kind, opts in config.TUNING:
-        val, default = getattr(cfg, attr), getattr(file_cfg, attr)
+        # (the collectors as listed: any swaps are shown beside them, see collectors.py)
+        val = cfg.rv_configured if attr == "rv_servers" else getattr(cfg, attr)
+        default = getattr(file_cfg, attr)
         sections.setdefault(sec, []).append({"attr": attr, "label": label, "kind": kind, "opts": opts,
                                              "value": val, "default": default, "changed": val != default})
     # current "normal" (baseline) per prefix, so % thresholds can be shown as peer counts
     baselines = {p: m.baseline() for p, m in svc.engine.mons.items() if m.baseline()}
     return render(request, "advanced_settings.html", msg=msg, err=err, sections=sections,
-                  from_db=db.kv_get(svc.aconn, config.TUNING_KV) is not None, baselines=baselines)
+                  from_db=db.kv_get(svc.aconn, config.TUNING_KV) is not None, baselines=baselines,
+                  rv_swaps=svc.collectors.swaps())
 
 
 @app.post("/settings/advanced")
@@ -2066,6 +2074,21 @@ async def advanced_settings_save(request: Request):
     log.info("user %s changed detection/data-source settings: %s", who, data)
     _restart_soon()
     return RedirectResponse("/restarting?" + urlencode({"since": STARTED}), status_code=303)
+
+
+@app.post("/settings/advanced/undo-replacement")
+async def undo_replacement(request: Request, host: str = Form("")):
+    """Ask a Route Views collector that was replaced automatically (collectors.py) again. No restart needed."""
+    who = admin(request)
+    host = host.strip().lower()[:100]
+    sw = svc.collectors.undo(host)
+    if sw is None:
+        return RedirectResponse("/settings/advanced?err=1&msg=" + quote(f"{host} wasn't replaced: nothing to undo."),
+                                status_code=303)
+    log.info("user %s undid the automatic replacement of Route Views collector %s", who, host)
+    msg = (f"{host} is asked again" + (f" instead of {sw['by']}" if sw.get("by") else "") + ". It won't be replaced "
+           "again until it has answered at least once.")
+    return RedirectResponse("/settings/advanced?msg=" + quote(msg), status_code=303)
 
 
 @app.post("/settings/advanced/reset")

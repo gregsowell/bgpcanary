@@ -35,8 +35,9 @@ yet for the sustain time), down (an outage is open) or starting (bgpcanary isn't
 neighbours the prefix's paths come in through that aren't peers: the network's transit providers, plus any network
 it hasn't filed as anything, which the dashboard calls "unexpected". Events have a kind (outage, blip,
 upstream_down, upstream_shift, upstream_missing, unexpected_upstream, new_upstream, chain_change, origin_hijack,
-more_specific, covering_prefix, peer_leak, exchange_loss, transit_filter, registry, path_change, ...), a severity
-(info, warning, critical), and are open while `end_ts` is null. Times are unix seconds; the `*_iso` copies are UTC.
+more_specific, covering_prefix, peer_leak, exchange_loss, transit_filter, registry, path_change, rv_collector, ...),
+a severity (info, warning, critical), and are open while `end_ts` is null. Times are unix seconds; the `*_iso` copies
+are UTC.
 
 Start with bgpcanary_status for "is anything wrong now"; bgpcanary_events with state "open" for what's going on;
 bgpcanary_events with hours 24 for what happened; bgpcanary_event with with_report for the evidence to send a

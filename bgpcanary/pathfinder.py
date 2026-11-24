@@ -248,10 +248,12 @@ def my_paths(svc, family, routeviews_too=False):
     rv = []
     if routeviews_too and want:
         q = ",".join("?" * len(want))
+        asked = set(cfg.rv_servers)   # (not a collector removed or replaced since)
         for r in svc.aconn.execute(
-                f"SELECT paths FROM rv_snapshots WHERE id IN (SELECT MAX(id) FROM rv_snapshots WHERE prefix IN ({q}) "
-                "AND (error IS NULL OR error='') GROUP BY server, prefix)", want):
-            rv += [paths.parse_str(p) for p in json.loads(r["paths"] or "[]")]
+                f"SELECT server, paths FROM rv_snapshots WHERE id IN (SELECT MAX(id) FROM rv_snapshots WHERE prefix IN "
+                f"({q}) AND (error IS NULL OR error='') GROUP BY server, prefix)", want):
+            if r["server"] in asked:
+                rv += [paths.parse_str(p) for p in json.loads(r["paths"] or "[]")]
     return out + rv, want, len(rv)
 
 

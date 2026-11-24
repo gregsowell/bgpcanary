@@ -8,8 +8,8 @@ import os
 import shutil
 import time
 
-from . import (alerts, atlas, config, db, pathfinder, paths, registry, ripe, routeviews, sanity, transit, tree, updates,
-               watch)
+from . import (alerts, atlas, collectors, config, db, pathfinder, paths, registry, ripe, routeviews, sanity, transit,
+               tree, updates, watch)
 from .engine import Engine, _parse_ts as ripe_ts, close_open, for_gap
 from .peering import Peering
 
@@ -49,6 +49,7 @@ class Service:
         self.replays = 0             # history loads / gap fills running (they rewrite buckets; see _compact_buckets)
         self.last_burst = 0          # last event-triggered Route Views burst (merge simultaneous events)
         self.health = sanity.SourceHealth(self)   # how RIS, the looking glass, Route Views etc. look right now
+        self.collectors = collectors.Replacer(self)   # Route Views collectors that stopped working, and their swaps
         self.opening = {}            # outage id -> set once its "opened" alert is out (held while it's checked)
         # Route Views telnet budget per collector per UTC day (their rate limiter blocks an IP for the day
         # once it exceeds 100 connections / 500 KB down / 100 KB up per collector)
@@ -73,6 +74,7 @@ class Service:
         self.tasks.append(asyncio.create_task(self._main()))
         self.tasks.append(asyncio.create_task(self._rv_loop()))
         self.tasks.append(asyncio.create_task(self._probe_loop()))
+        self.tasks.append(asyncio.create_task(self.collectors.loop()))
         self.tasks.append(asyncio.create_task(self._names_loop()))
         self.tasks.append(asyncio.create_task(self._prune_loop()))
         self.tasks.append(asyncio.create_task(self.atlas.loop()))
@@ -1010,6 +1012,8 @@ class Service:
                                " VALUES(?,?,?,?,?,?,?,?)",
                                (ts, server, p, len(plist), json.dumps(plist), raw, event_id, err))
         self.aconn.commit()
+        if err is None:
+            self.collectors.answered(server, ts)
 
     async def snapshot(self, server, prefix, event_id=None, trigger="manual"):
         await self.snapshot_server(server, [prefix], trigger, event_id)

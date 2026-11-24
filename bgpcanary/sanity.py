@@ -204,19 +204,23 @@ class SourceHealth:
             reasons.append("RIS lost sight of the control prefixes too: "
                            + ", ".join(f"{c['prefix']} ({c['visible']} of ~{c['baseline']:.0f} peers)"
                                        for c in trouble))
-        # Route Views and Atlas: the latest answer from each collector in the last day
-        rv = []
+        # Route Views and Atlas: the latest answer from each collector asked in the last day
+        rv, asked = [], svc.cfg.rv_servers
         try:
             for r in svc.aconn.execute(
                     "SELECT s.server, s.ts, s.error FROM rv_snapshots s JOIN (SELECT server, MAX(ts) ts FROM "
                     "rv_snapshots WHERE ts>? GROUP BY server) l ON l.server=s.server AND l.ts=s.ts ORDER BY s.server",
                     (now - 86400,)):
-                rv.append({"server": r["server"], "ts": r["ts"], "ok": not r["error"], "error": (r["error"] or "")[:100]})
+                if r["server"] in asked:
+                    rv.append({"server": r["server"], "ts": r["ts"], "ok": not r["error"],
+                               "error": (r["error"] or "")[:100]})
         except sqlite3.OperationalError:
             pass
-        blocked = [s for s in svc.cfg.rv_servers if not svc.rv_allowed(s, "event")[0]]
+        blocked = [s for s in asked if not svc.rv_allowed(s, "event")[0]]
+        rep = getattr(svc, "collectors", None)   # (collectors.py: the ones replaced, and the ones that can't be)
         state = {"ok": not reasons, "reasons": reasons, "notes": notes, "ris_live": ris, "lg": lg, "controls": controls,
-                 "route_views": {"servers": rv, "configured": len(svc.cfg.rv_servers), "blocked": blocked},
+                 "route_views": {"servers": rv, "configured": len(asked), "blocked": blocked,
+                                 "replaced": rep.swaps() if rep else [], "failing": rep.told() if rep else []},
                  "confirm_outages": svc.cfg.confirm_outages, "at": now}
         self._cache = (now, state)
         return state

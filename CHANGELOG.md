@@ -6,6 +6,14 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-11-24
+
+### Fixed
+- **RIPE's looking glass coming back after an outage could take routes out of bgpcanary's view that RIS still had.** In November 2026 RIPEstat's looking glass stopped updating for over two days and listed none of a prefix's routes. bgpcanary ignored those answers, as it should. Then the looking glass refilled a little at a time over about a day. One answer that was still missing 24 of a prefix's 330 routes passed for complete, half an hour after the last that didn't. bgpcanary withdrew the 24, and the prefix's visibility read up to 8% low for the next twelve hours. Nothing was alerted, because that's above the outage threshold, but the charts and the history were wrong. Now:
+  - an answer missing more than 10 of a prefix's routes counts as incomplete, whatever the prefix's size. It used to be a tenth of them. RIS Live reports withdrawals as they happen, and the looking glass only has to catch the odd one RIS Live missed;
+  - after an answer that was incomplete, or more than 90 minutes behind, the looking glass withdraws nothing for 6 hours, instead of 30 minutes after an incomplete one. The *Data sources* panel says how much longer;
+  - a route that changed in the hour before the looking glass's data is left as RIS Live has it. The looking glass catches up with each peer's changes minutes after RIS Live reports them. In between, it showed a route RIS Live had just announced as missing, or one it had just seen withdrawn as still there. bgpcanary followed it, until RIS Live set the route right again a few minutes later.
+
 ## [1.7.7] - 2026-11-13
 
 ### Added
@@ -476,7 +484,8 @@ First public release.
 - Admin and viewer roles; all settings in the web UI.
 - Installer for Rocky / AlmaLinux / RHEL 9 and 10, `bgpcanary-update` with backups and rollback, `bgpcanary-uninstall`, and an in-app update notice.
 
-[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.7...HEAD
+[Unreleased]: https://github.com/gregsowell/bgpcanary/compare/v1.7.8...HEAD
+[1.7.8]: https://github.com/gregsowell/bgpcanary/compare/v1.7.7...v1.7.8
 [1.7.7]: https://github.com/gregsowell/bgpcanary/compare/v1.7.6...v1.7.7
 [1.7.6]: https://github.com/gregsowell/bgpcanary/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/gregsowell/bgpcanary/compare/v1.7.4...v1.7.5

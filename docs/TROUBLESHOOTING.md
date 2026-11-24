@@ -175,7 +175,9 @@ curl -s "https://stat.ripe.net/data/looking-glass/data.json?resource=192.0.2.0/2
 That counts the RIS peers that have a route to it right now. If it's far more than bgpcanary shows, its view
 has drifted from RIPE's. Restart it (`sudo systemctl restart bgpcanary`, or `docker restart bgpcanary`): at startup
 the routes are rebuilt from RIS's own data. Before 1.3.3, a looking glass that gave incomplete answers could cause
-this; the log then shows `looking-glass resync: 300 changes` or similar while nothing was wrong.
+this; the log then shows `looking-glass resync: 300 changes` or similar while nothing was wrong. Before 1.7.8, a
+looking glass coming back after an outage could still take out a couple of dozen routes that RIS had. Visibility then
+read a few percent low for hours, after a `looking-glass resync: 24 changes` or so.
 
 ## Route Views shows errors or "rate-limited"
 

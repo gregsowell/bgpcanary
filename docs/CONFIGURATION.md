@@ -115,7 +115,8 @@ gone while it's fine. So bgpcanary doesn't take RIS's word alone for an outage:
   RIPE's looking-glass answers are, the control prefixes, and which Route Views collectors answered. While
   something looks wrong, a banner says so on every page. Alerts about routes going missing (dips, missing
   upstreams, an upstream down, upstream shifts, exchange peers lost) say "while RIPE's data looked unreliable", and the looking
-  glass may not withdraw routes from bgpcanary's view.
+  glass may not withdraw routes from bgpcanary's view. Nor may it for 6 hours after one of its answers was incomplete
+  or more than 90 minutes behind: it fills in gradually after an outage. The panel says how much longer.
 
 ## RIPE Atlas
 

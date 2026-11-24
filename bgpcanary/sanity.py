@@ -13,11 +13,14 @@ import sqlite3
 import time
 from collections import deque
 
+from .engine import LG_BEHIND_S, _span
+
 RV_SEES, RV_LOST = 0.6, 0.4   # Route Views still has this share of its usual paths: not an outage / it lost them too
 RV_MIN_USUAL = 5              # with fewer paths than this normally, Route Views can't tell either way
 RV_USUAL_DAYS = 7             # a collector's "usual" view: its last good snapshot within this long before the outage
-LG_STALE_S = 90 * 60          # RIPE's looking glass this far behind: unreliable
-LG_DOUBT_S = 30 * 60          # after an incomplete looking-glass answer, it withdraws nothing for this long
+LG_STALE_S = LG_BEHIND_S      # RIPE's looking glass this far behind: unreliable
+LG_DOUBT_S = 30 * 60          # an incomplete looking-glass answer makes RIPE's data look unreliable for this long
+LG_HOLD_S = 6 * 3600          # after a looking-glass answer was incomplete or far behind, it withdraws nothing this long
 RIS_FLAPS = 6                 # RIS Live disconnects in an hour that count as unstable
 
 
@@ -145,11 +148,18 @@ class SourceHealth:
 
     def lg_trusted(self):
         """Whether the looking-glass resync may withdraw routes: not while RIS has lost the control prefixes, nor
-        for a while after the looking glass gave an incomplete answer."""
-        eng, now = self.svc.engine, time.time()
-        recent = any(s.get("last_incomplete") and now - s["last_incomplete"] < LG_DOUBT_S
-                     for s in eng.lg_stats.values())
-        return not recent and not eng.ris_trouble()
+        while it's on hold (lg_hold)."""
+        return self.lg_hold() is None and not self.svc.engine.ris_trouble()
+
+    def lg_hold(self):
+        """How much longer the looking glass may withdraw nothing (None: it may again): LG_HOLD_S after one of its
+        answers was incomplete or far behind. It doesn't come back all at once after an outage. On 2026-11-23 it went
+        from listing none of a prefix's routes to most of them over eight hours, then missed a few of them for twelve
+        hours more. An answer missing only those few passed for complete half an hour after the last that didn't,
+        and withdrew routes RIS still had."""
+        last = max((s.get("last_doubt") or 0 for s in self.svc.engine.lg_stats.values()), default=0)
+        left = last + LG_HOLD_S - time.time()
+        return left if last and left > 0 else None
 
     def state(self):
         now = time.time()
@@ -183,6 +193,10 @@ class SourceHealth:
         if bad:
             reasons.append("RIPE's looking glass gave incomplete answers (ignored) in the last "
                            f"{LG_DOUBT_S // 60} minutes")
+        hold = self.lg_hold()
+        if hold:
+            notes.append(f"RIPE's looking glass may not withdraw routes for another {_span(hold)}: it was behind or "
+                         f"incomplete in the last {LG_HOLD_S // 3600} hours, and it fills in gradually after an outage")
         # control prefixes
         controls = eng.control_status()
         trouble = eng.ris_trouble()

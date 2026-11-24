@@ -20,9 +20,12 @@ from .peering import Peering
 
 log = logging.getLogger("bgpcanary.engine")
 XL_HOLD = 900   # "exchange peers lost" closes once the peers have been back this long (s)
-# One looking-glass answer may withdraw at most this many of a prefix's routes, or this share of them if more: an
-# answer missing more than that is taken to be incomplete (see Engine.resync_lg)
-LG_MAX_WITHDRAW, LG_MAX_WITHDRAW_SHARE = 10, 0.1
+# RIPE's looking glass is a cross-check on RIS Live, which reports withdrawals as they happen; it's there to catch the
+# odd one RIS Live missed. One answer may withdraw at most this many of a prefix's routes, however many it has: an
+# answer missing more than that is taken to be incomplete (see Engine.resync_lg).
+LG_MAX_WITHDRAW = 10
+LG_FRESH_S = 3600        # a route that changed this close before the looking glass's data is left as RIS Live has it
+LG_BEHIND_S = 90 * 60    # the looking glass's data this far behind when it answers: it's unreliable (sanity.SourceHealth)
 CONTROL_KV = "control_baselines"   # the control prefixes' baselines, kept across restarts
 CONTROL_ADAPT_S = 6 * 3600         # a control prefix low for this long is taken to have a new normal level
 # Upstream down: an upstream's typical reach is the median of the RIS peers it carried a prefix to over UPD_TYPICAL
@@ -1308,14 +1311,23 @@ class Engine:
 
     def resync_lg(self, lg, source="resync", allow_withdraw=True):
         """Reconcile the RIB against a RIPEstat looking-glass snapshot. Returns number of changes.
-        The looking glass is a cross-check: RIS Live reports changes as they happen. Its answers can be wrong (on
+        The looking glass is a cross-check: RIS Live reports changes as they happen. Its answers can be wrong. On
         2026-10-20 it listed almost none of a prefix's routes for an hour, with current timestamps, then fell back
-        to older data), so it never withdraws routes wholesale (see LG_MAX_WITHDRAW), and a route it withdrew
-        comes back as soon as it lists the route again, even from data older than that withdrawal.
-        `allow_withdraw`: False while RIPE's data looks unreliable (sanity.SourceHealth): nothing is withdrawn then.
-        How each answer looked is kept in lg_stats, for the data-sources panel."""
+        to older data. From 2026-11-20 it was two days behind and listed none, then filled in again over a day, a
+        few routes short for the last twelve hours of that. And it catches up with each peer's changes minutes after
+        RIS Live reports them. So:
+        - it never withdraws routes wholesale: an answer missing more than LG_MAX_WITHDRAW is incomplete;
+        - a route that changed within LG_FRESH_S before its data is left as RIS Live has it (it showed such routes
+          as withdrawn, or as they were, and RIS Live put them right again minutes later);
+        - a route it withdrew comes back as soon as it lists the route again, even from data older than that
+          withdrawal.
+        `allow_withdraw`: False while RIPE's data looks unreliable, and for hours after an answer was incomplete or
+        far behind (sanity.SourceHealth.lg_trusted): nothing is withdrawn then. How each answer looked is kept in
+        lg_stats, for the data-sources panel and lg_trusted: `last_doubt` is when one last was incomplete, or more
+        than LG_BEHIND_S behind."""
         latest = _parse_ts(lg.get("latest_time") or lg.get("query_time"))
         asked = _parse_ts(lg["query_time"]) if lg.get("query_time") else time.time()
+        fresh = latest - LG_FRESH_S   # a route that changed after this is left as RIS Live has it
         prefix = lg["resource"] if "/" in str(lg.get("resource", "")) else None
         target = {}
         for rrc in lg.get("rrcs", []):
@@ -1331,7 +1343,7 @@ class Engine:
             norm = paths.parse_str(asp)
             e = self.rib.get(pref, {}).get((coll, peer))
             back = e is not None and not e.path and key in self.lg_withdrawn   # withdrawn by the looking glass itself
-            if e is None or (e.path != norm and (e.ts < latest or back)):
+            if e is None or back or (e.path != norm and e.ts < fresh):
                 peer_asn = norm[0] if norm else None
                 if self.apply(max(latest, e.ts) if back else latest, coll, peer, peer_asn, pref, "A", norm, comm,
                               source=source):
@@ -1343,7 +1355,7 @@ class Engine:
             table = self.rib.get(pref, {})
             gone, stale = [], []
             for (coll, peer), e in list(table.items()):
-                if not e.path or (pref, coll, peer) in target or e.ts >= latest:
+                if not e.path or (pref, coll, peer) in target or e.ts >= fresh:
                     continue
                 if (pref, coll, peer) in self.lg_peers_before:
                     gone.append((coll, peer, e))   # the looking glass used to show this route and no longer does
@@ -1351,11 +1363,14 @@ class Engine:
                     stale.append((coll, peer, e))   # not refreshed for weeks and never confirmed by it: see below
             held = sum(1 for e in table.values() if e.path)
             listed = sum(1 for k in target if k[0] == pref)
-            incomplete = len(gone) + len(stale) > max(LG_MAX_WITHDRAW, held * LG_MAX_WITHDRAW_SHARE)
+            incomplete = len(gone) + len(stale) > LG_MAX_WITHDRAW
             now = time.time()
-            before = self.lg_stats.get(pref, {}).get("last_incomplete")
+            before = self.lg_stats.get(pref, {})
+            doubt = incomplete or asked - latest > LG_BEHIND_S
             self.lg_stats[pref] = {"at": now, "latest": latest, "asked": asked, "listed": listed, "held": held,
-                                   "incomplete": incomplete, "last_incomplete": now if incomplete else before}
+                                   "incomplete": incomplete,
+                                   "last_incomplete": now if incomplete else before.get("last_incomplete"),
+                                   "last_doubt": now if doubt else before.get("last_doubt")}
             if incomplete:
                 log.warning("looking glass lists only %d of the %d routes held for %s: an incomplete answer, so "
                             "nothing is withdrawn from it (RIS Live reports real withdrawals as they happen)",

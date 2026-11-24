@@ -6,6 +6,9 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [Unreleased]
 
+### Changed
+- **New installs no longer ask Route Views' Singapore collector**, which stopped answering on 2026-11-07. Route Views' archive has had no data from it since, and every request to it timed out. AMS-IX (`amsix.ams.routeviews.org`) takes its place in the default list. Existing installs keep their own list: if `route-views.sg.routeviews.org` is in yours, remove it under *Settings › Detection & data sources*, or from `[routeviews] servers` in config.toml.
+
 ## [1.7.8] - 2026-11-24
 
 ### Fixed

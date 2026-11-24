@@ -71,7 +71,7 @@ control_prefixes = ["1.1.1.0/24", "8.8.8.0/24"]
 servers = [
   "route-views.routeviews.org", "route-views2.routeviews.org", "route-views4.routeviews.org",
   "route-views.chicago.routeviews.org", "route-views.eqix.routeviews.org", "route-views.linx.routeviews.org",
-  "route-views.sg.routeviews.org", "route-views.sydney.routeviews.org", "route-views.wide.routeviews.org",
+  "amsix.ams.routeviews.org", "route-views.sydney.routeviews.org", "route-views.wide.routeviews.org",
 ]
 poll_minutes = 720                          # routine "show ip bgp <prefix>" snapshots (Route Views allows
                                             # 100 connections + 500 KB per collector per day per IP)

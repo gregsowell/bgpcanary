@@ -8,8 +8,20 @@ anything, and major releases may need you to read the notes before upgrading.
 
 ## [1.7.10] - 2026-11-24
 
+### Added
+- **All of an event's evidence in one PDF.** Every event page now opens with *Download all evidence (PDF)*: what the page shows, in one file to send to a provider that's having problems. It holds:
+  - the event and the independent checks of it, and what else went on around it;
+  - the path tree pictured three times: before the event (its steady state, the healthiest moment in the three hours before), at its peak, and where it stands now or after it ended;
+  - the timeline, who carried your prefix through each upstream, and the AS paths before, at the peak and after;
+  - Route Views' answers, one line a path, RIPE Atlas's results, and the charts;
+  - the raw BGP updates, as an appendix.
+
+  All times are UTC. The text is real text, so it can be searched and copied, and each section has a bookmark. An event open for weeks has thousands of ping rounds and probes behind it: the PDF keeps the first and the last of each such list and says how many it left out, as the page has them all. Your alert channels and how you filed a neighbour stay out of it.
+- **Download evidence GIF**, next to it: the path tree from two minutes before the event to two minutes after it ends (or now), five seconds long at most, lingering where routes change. The tree's own *Export GIF* still does any range at any length.
+
 ### Fixed
 - **Alert emails could go out without their tree pictures.** Since 1.5.6, drawing them failed when one of your upstreams had carried none of your routes before the event. That covers an upstream that had been down for hours, one in your settings that wasn't live yet, and one that turned up during the event, which is what an *unexpected upstream* alert is about. The email went out without pictures, and the log said "tree images for event N failed; sending without them". Such an upstream is now drawn as the trees on the dashboard and event pages draw it: a red dotted line, "not carrying you".
+- **A long title in an alert email's tree picture ran into its legend.** It's drawn smaller now when it would.
 
 ## [1.7.9] - 2026-11-24
 

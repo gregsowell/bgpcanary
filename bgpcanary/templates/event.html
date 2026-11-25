@@ -2,6 +2,38 @@
 {% block title %}Event {{ ev.id }} · {{ cfg.site_name }}{% endblock %}
 {% block content %}
 <h1><span class="badge b-{{ ev.severity }}">{{ ev.severity }}</span> {{ ev.title }}</h1>
+{# the evidence in two downloads, to send to a provider: everything below as one PDF (evidence_pdf.py), and the path
+   tree from just before the event to just after it as a GIF of 5 seconds at most (replay.js evidenceGif) #}
+<div class="toolbar" id="downloads">
+  <a class="btn primary" href="/events/{{ ev.id }}/evidence.pdf" data-dl="pdf" title="Everything on this page in one PDF, to send to a provider: the event, the path tree before it, at its peak and now, the timeline, who carried your prefix, the AS paths, Route Views, RIPE Atlas, the charts and the raw updates. All times UTC.">Download all evidence (PDF)</a>
+  {% if shown_prefix %}<button type="button" data-dl="gif" title="The path tree from two minutes before the event to two minutes after it ends (or now), in 5 seconds">Download evidence GIF</button>{% endif %}
+  <span class="muted" data-dl="status" aria-live="polite" style="font-size:13px"></span>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const box = document.getElementById("downloads"), st = box.querySelector('[data-dl="status"]');
+  const pdf = box.querySelector('[data-dl="pdf"]'), gif = box.querySelector('[data-dl="gif"]');
+  pdf.addEventListener("click", async e => {   // (the link itself downloads it too; this says what's going on)
+    e.preventDefault();
+    pdf.setAttribute("aria-disabled", "true");
+    st.textContent = "Building the PDF (a few seconds)…";
+    try {
+      const r = await fetch(pdf.href);
+      if (r.status === 401) { location.href = "/login"; return; }
+      if (!r.ok) throw `the server answered ${r.status}`;
+      const blob = await r.blob(), m = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = m ? m[1] : "bgpcanary-event-{{ ev.id }}.pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      st.textContent = `Saved the PDF (${(blob.size / 1048576).toFixed(1)} MB)`;
+    } catch (err) {
+      st.textContent = "Couldn't build the PDF: " + err;
+    } finally { pdf.removeAttribute("aria-disabled"); }
+  });
+  if (gif) gif.addEventListener("click", () => window.eventTree && window.eventTree.evidenceGif(gif, st));
+});
+</script>
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
 {% if nb %}{% include "_neighbour.html" %}{% endif %}
 {% set cf = (ev.detail|fromjson).confirm %}

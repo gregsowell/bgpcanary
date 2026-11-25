@@ -362,11 +362,10 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
     def T(xy, text, f, fill):
         dr.text((xy[0] * S, xy[1] * S), text, font=font(f[0] * S, f[1]), fill=fill)
 
-    T((16, 10), title, (17, True), C["text"])
     T((16, 36), subtitle, (12, False), C["muted"])
     pcol = C["crit"] if pct < 50 else C["warn"] if pct < 80 else C["ok"]
     T((16, 52), f"{vis}/{total} RIS peers can see the prefix ({pct}%)", (13, True), pcol)
-    # legend
+    # legend (then the title beside it, smaller when it would run into it)
     # (the same patterns as the branches: dropped red dashed and thick, not carrying you red dotted, reaches you
     # another way blue dotted, no longer peered grey dash-dot)
     lg = [("carrying", C["accent"], None, 3), ("lost >50%", C["warn"], None, 3), ("dropped", C["crit"], (6, 4), 4),
@@ -381,6 +380,9 @@ def render(tree, names, now_paths, base_paths, total, title, subtitle, W=1100):
         _polyline(dr, [((x) * S, 21 * S), ((x + 20) * S, 21 * S)], col, lw * S,
                   tuple(v * S for v in dash) if dash else None)
         x -= 14
+    tw = dr.textlength(title, font=font(17 * S, True)) / S
+    tsz = 17 if tw <= x - 16 else max(11, int(17 * (x - 16) / tw))
+    T((16, 10 + (17 - tsz) / 2), title, (tsz, True), C["text"])
 
     colw = (W - 24 - 230) / max(tree.depth, 1)
     cols = (["You", "Upstreams · exchanges", "Their transits & peers · exchange", "Next hop out · your peers",
@@ -531,13 +533,28 @@ async def event_images(cfg, sourceapp, ev, phase, now=None, peering=None):
             moments.append(("after", min(now, ev["end_ts"] + 120), "Recovered"))
         else:
             moments.append(("now", now, "Now (when this alert was sent)"))
+    finally:
+        conn.close()
+    return await pictures(cfg, sourceapp, prefix, moments, peering=peering)
+
+
+async def pictures(cfg, sourceapp, prefix, moments, peering=None, utc=False, ref="before the event",
+                   first="healthy reference"):
+    """[(cid, png_bytes, caption)]: the tree for `prefix` at each of `moments` ([(key, ts, label)]), its colours
+    compared with the first moment's. The alert emails picture an event before it and now, or before, at its worst
+    and recovered (event_images); the evidence PDF before it, at its peak and where it stands now.
+    `utc`: times in UTC rather than the server's own time zone; `ref`: what the first moment is, in the others'
+    subtitles; `first`: the first picture's own subtitle."""
+    conn = db.connect(cfg.db_path)
+    try:
         states = {k: await asyncio.to_thread(state_paths, conn, prefix, ts) for k, ts, _ in moments}
         group = peering.group if peering else (lambda a: None)
         ups = set(cfg.expected_upstreams)
         for paths in states.values():
             ups.update(p[-2] for p in paths if len(p) >= 2 and p[-1] == cfg.asn and not group(p[-2]))
         states = {k: group_peers(v, cfg.asn, group) for k, v in states.items()}
-        base = states["before"]
+        (k0, t_ref, _l0) = moments[0]
+        base = states[k0]
         nbrs = await upstream_neighbors(sourceapp, sorted(ups))
         gone = {u: gone_neighbors(conn, u) for u in ups}
         asns = {a for paths in states.values() for p in paths for a in p[-6:] if isinstance(a, int)} | ups | \
@@ -550,11 +567,12 @@ async def event_images(cfg, sourceapp, ev, phase, now=None, peering=None):
         tree = Tree(cfg.asn, list(states.values()), sorted(ups), nbrs, gone=gone,
                     known=set(cfg.expected_upstreams) | set(cfg.peers))
         total = max(tree.visible(p) for p in states.values())
+        clock, zone = (time.gmtime, "UTC") if utc else (time.localtime, "%Z")
         out = []
         for key, ts, label in moments:
-            stamp = time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(ts))
-            sub = (f"{prefix} · AS{cfg.asn} · colours compared with {time.strftime('%H:%M', time.localtime(t_before))} "
-                   f"(before the event)" if key != "before" else f"{prefix} · AS{cfg.asn} · healthy reference")
+            stamp = time.strftime(f"%Y-%m-%d %H:%M {zone}", clock(ts))
+            sub = (f"{prefix} · AS{cfg.asn} · colours compared with {time.strftime('%H:%M', clock(t_ref))} ({ref})"
+                   if key != k0 else f"{prefix} · AS{cfg.asn} · {first}")
             png = await asyncio.to_thread(render, tree, names, states[key], base, total, f"{label} · {stamp}", sub)
             out.append((f"tree-{key}", png, f"{label} ({stamp})"))
         return out

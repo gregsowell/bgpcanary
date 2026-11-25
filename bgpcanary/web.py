@@ -13,7 +13,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadData, URLSafeTimedSerializer
@@ -21,8 +21,8 @@ from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (REPO, __version__, alerts, atlas, auth, config, db, evidence, pathfinder, paths, peering, registry, ripe,
-               tracer, transit, tree, updates, watch)
+from . import (REPO, __version__, alerts, atlas, auth, charts, config, db, evidence, evidence_pdf, pathfinder, paths,
+               peering, registry, ripe, tracer, transit, tree, updates, watch)
 from .changes import burst_text, bursts_of, chain_key, path_changes
 from .service import Service
 
@@ -672,6 +672,15 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
     end = end or time.time()
     start = start or end - 86400
     conn = rconn()
+    try:
+        return series_payload(conn, prefix, start, end)
+    finally:
+        conn.close()
+
+
+def series_payload(conn, prefix, start, end):
+    """A prefix's charts between `start` and `end` (the event page's, the dashboard's, the evidence PDF's): visibility,
+    its baseline, the top upstream chains, update churn, and the events to shade."""
     rows = db.fill_mix(conn, conn.execute("SELECT ts,visible,min_visible,baseline,chains,updates,withdrawals FROM buckets "
                                           "WHERE prefix=? AND ts>=? AND ts<=? ORDER BY ts", (prefix, start, end)), prefix)
     step = max(1, len(rows) // 1500)
@@ -704,7 +713,6 @@ async def api_series(request: Request, prefix: str = None, start: float = None, 
         "SELECT id,kind,severity,start_ts,end_ts,title FROM events WHERE (prefix=? OR prefix IS NULL) "
         "AND start_ts<=? AND COALESCE(end_ts, ?)>=? ORDER BY start_ts", (prefix, end, time.time(), start))]
     nm = names(conn, chain_asns(top))
-    conn.close()
     chain_series = {c: [None if p.get("gap") else p["chains"].get(c, 0) for p in pts] for c in top}
     chain_series["other"] = [None if p.get("gap") else sum(v for k, v in p["chains"].items() if k not in top)
                              for p in pts]
@@ -876,7 +884,7 @@ async def event_page(request: Request, eid: int, msg: str = ""):
     if not ev:
         raise HTTPException(404)
     end = ev["end_ts"] or time.time()
-    pad = max(900, min(3 * 3600, (end - ev["start_ts"]) * 0.5))
+    win_start, win_end = chart_window(ev)
     ev_data = await _evidence(conn, ev)
     # An event that names none of your prefixes (a reachability loss on a carrier's link address, a Path finder watch)
     # still shows the tree, the charts and the updates of one: the monitored prefix its evidence is drawn from.
@@ -898,10 +906,18 @@ async def event_page(request: Request, eid: int, msg: str = ""):
     nb_info = neighbour_info(conn, nb) if nb else None
     conn.close()
     return render(request, "event.html", ev=ev, raw=raw, probes=probes, snaps=snaps, alerts=alerts_sent,
-                  win_start=ev["start_ts"] - pad, win_end=end + pad, atlas_msms=atlas_msms,
+                  win_start=win_start, win_end=win_end, atlas_msms=atlas_msms,
                   atlas_target=base["target"] if base else None, evd=ev_data, compare_all=",".join(svc.atlas.targets()),
                   nb=nb_info, back=f"/events/{eid}", msg=msg, shown_prefix=shown, chart_prefix=charted,
                   kind_names=KIND_NAMES)
+
+
+def chart_window(ev):
+    """The stretch an event page's charts cover: the event and some time either side of it (half its length, at
+    least a quarter of an hour, at most three hours)."""
+    end = ev["end_ts"] or time.time()
+    pad = max(900, min(3 * 3600, (end - ev["start_ts"]) * 0.5))
+    return ev["start_ts"] - pad, end + pad
 
 
 def neighbour_info(conn, asn):
@@ -973,6 +989,35 @@ async def event_report(request: Request, eid: int):
     if resp is None:
         raise HTTPException(404)
     return resp
+
+
+@app.get("/events/{eid}/evidence.pdf")
+async def event_pdf(request: Request, eid: int):
+    """Everything the event page shows, as a PDF to send to a provider (evidence_pdf.py)."""
+    user(request)
+    conn = rconn()
+    try:
+        ev = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
+        if not ev:
+            raise HTTPException(404)
+        d = await _evidence(conn, ev)
+        # (the page's choices: the raw updates of the prefix it's about, the charts of a monitored one)
+        shown = ev["prefix"] or d["prefix"]
+        charted = ev["prefix"] if ev["prefix"] in cfg.prefixes else None if ev["prefix"] else d["prefix"]
+        raw = await asyncio.to_thread(evidence.raw_updates, conn, shown, ev) if shown else []
+        series = await asyncio.to_thread(series_payload, conn, charted, *chart_window(ev)) if charted else None
+        moments = evidence_pdf.tree_moments(conn, cfg, ev, d)
+    finally:
+        conn.close()
+    pics = await tree.pictures(cfg, svc.sourceapp, d["prefix"], moments, peering=svc.peering, utc=True,
+                               first="the steady state the other pictures are coloured against") if moments else []
+    imgs = await asyncio.to_thread(charts.all_charts, series) if series else []
+    data = await asyncio.to_thread(evidence_pdf.build, cfg, ev, d, pictures=pics, charts=imgs, raw=raw,
+                                   link=f"{cfg.base_url}/events/{eid}" if cfg.base_url else "",
+                                   kind_name=KIND_NAMES.get(ev["kind"], ""))
+    stamp = time.strftime("%Y%m%d-%H%M", time.gmtime(ev["start_ts"]))
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="bgpcanary-event-{eid}-{stamp}.pdf"'})
 
 
 def replay_payload(conn, prefix, s, e, base=None):

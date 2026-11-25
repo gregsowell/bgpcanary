@@ -522,10 +522,29 @@ def _span_of(sec):
     return f"{sec // 86400} d {sec % 86400 // 3600} h"
 
 
-def around_text(d):
+def cut(rows, cap):
+    """(head, tail, left out): all of `rows` as the head; or, with `cap` = (first, last) and more rows than that, the
+    first and the last ones and how many are left out between them (an event weeks long has thousands of ping
+    rounds: its start and its end matter most)."""
+    if not cap or len(rows) <= sum(cap):
+        return list(rows), [], 0
+    return list(rows[:cap[0]]), list(rows[len(rows) - cap[1]:]), len(rows) - sum(cap)
+
+
+def around_text(d, cap=None):
     """The report's "around this event" part (collect()'s "around", "related" and "already_open"), as lines: what
-    the routes did, the ping rounds that stood out, the other events, and what wasn't heard live."""
+    the routes did, the ping rounds that stood out, the other events, and what wasn't heard live. `cap`: (first,
+    last) for each list in it (the PDF's; the text report has every line)."""
     ar = d["around"]
+
+    def listed(rows, line):
+        head, tail, n = cut(rows, cap)
+        for r in head:
+            w(line(r))
+        if n:
+            w(f"  ... and {n} more in between (the event page lists them all)")
+        for r in tail:
+            w(line(r))
     hm = lambda ts: time.strftime("%H:%M:%S", time.gmtime(ts))   # noqa: E731
     L = ["", "AROUND THIS EVENT (the 30 minutes before and after it, UTC)", "-" * 72]
     w = L.append
@@ -565,22 +584,22 @@ def around_text(d):
     if ar["rounds"]:
         w(f"RIPE Atlas ping rounds: {ar['rounds']} to {ar['targets']} of your addresses"
           + (":" if ar["odd"] else ", all as usual."))
-        for r in ar["odd"]:
-            w(f"  {hm(r['ts'])}  {_round_text(r)}")
+        listed(ar["odd"], lambda r: f"  {hm(r['ts'])}  {_round_text(r)}")
         if ar["odd"] and ar["rounds"] > len(ar["odd"]):
             w(f"  The other {ar['rounds'] - len(ar['odd'])} were as usual.")
     else:
         w("RIPE Atlas ping rounds: none in this window.")
     w("Other events:" if d["related"] else "Other events: none began in this window.")
-    for r in d["related"]:
+
+    def other(r):
         when = ("at the same time" if abs(r["after"]) < 60
                 else f"{_span_of(r['after'])} {'after' if r['after'] > 0 else 'before'} this one began")
-        w(f"  - {when}: [{r['severity']}] {r['title']} (event {r['id']}"
-          + (", found during backfill" if r["historical"] else "") + ")")
+        return (f"  - {when}: [{r['severity']}] {r['title']} (event {r['id']}"
+                + (", found during backfill" if r["historical"] else "") + ")")
+    listed(d["related"], other)
     if d["already_open"]:
         w("Already open when this one began:")
-        for r in d["already_open"]:
-            w(f"  - [{r['severity']}] {r['title']} (since {_when(r['start_ts'])})")
+        listed(d["already_open"], lambda r: f"  - [{r['severity']}] {r['title']} (since {_when(r['start_ts'])})")
     for a, b in ar["unheard"]["open"]:
         w(f"Not heard: RIS Live wasn't being received from {hm(a)} to {hm(b)}, and RIPE's archive hasn't filled that "
           "stretch in yet: routes may have changed then without showing here.")

@@ -63,7 +63,8 @@ pre { background: var(--code-bg); border: 1px solid var(--border); border-radius
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 button, .btn { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
 button:hover, .btn:hover { border-color: var(--accent); text-decoration: none; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary, .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+[aria-disabled="true"] { opacity: .6; pointer-events: none; }
 button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .prefix-picker { gap: 6px 14px; }
 form.prefix-picker label { display: inline-flex; gap: 4px; align-items: center; color: var(--text); }

@@ -938,66 +938,100 @@
       const lo = rp.visSeries.reduce((m, v) => (v[0] >= from && v[1] < m[1] ? v : m), [from, Infinity]);
       setT(lo[0]);
     };
+    // A GIF of the replay from a to b (stitched time) in n frames, frame i of all shown for delayOf(i, all) ms;
+    // `gs` says how it's going. Resolves to the GIF's blob.
+    const buildGif = async (a, b, nFrames, delayOf, gs) => {
+      gs.textContent = "Loading encoder…";
+      await loadScript("/static/vendor/gif.js");
+      // A sub-range gets its own replay: the GIF's tree layout, timeline and colors are scoped to it.
+      let g = rp;
+      if ((a > data.start + 1 || b < data.end - 1) && !data.stitch) {   // (events together: the replay already has it)
+        gs.textContent = "Loading range…";
+        const many = data.prefixes || data.combined;
+        const qs = new URLSearchParams(many ? { prefixes: many.join(","), start: a, end: b, combine: data.combined ? 1 : 0 }
+                                            : { prefix: data.prefix, start: a, end: b });
+        const r = await fetch((many ? "/api/replay/compare?" : "/api/replay?") + qs);
+        if (!r.ok) throw "could not load the selected range";
+        const d2 = await r.json();
+        if (rp.ev) { d2.event = rp.ev; d2.events = [rp.ev]; }
+        g = new Replay(d2, rp.ev && a < rp.ev.start ? rp.baseMode : (q("base") ? q("base").value : "start"));
+        g.build(parseInt(q("depth").value), parseInt(q("top").value), nbrsMode());
+      }
+      const keepRowH = rp.rowH;
+      g.rowH = 20;   // GIFs always use full spacing, whatever the on-screen Size setting
+      const W = 1200, { H } = g.size(W);
+      const off = document.createElement("canvas"); off.width = W; off.height = H;
+      const ctx = off.getContext("2d", { willReadFrequently: true });
+      const gif = new GIF({ workers: 2, quality: 10, width: W, height: H, workerScript: "/static/vendor/gif.worker.js" });
+      const keepT = rp.t, label = rp.ev ? `event ${rp.ev.id}`
+        : data.stitch ? `events ${rp.events.map(e => e.id).join(", ")}` : `${data.prefix}`;
+      g.frameTimes(nFrames, a, b).forEach((t, i, ts) => {
+        g.seek(t);
+        g.draw(ctx, W, { footer: `bgpcanary · ${label}` });
+        gif.addFrame(ctx, { copy: true, delay: delayOf(i, ts.length) });
+        if (i % 10 === 0) gs.textContent = `Rendering frames ${i}/${nFrames}…`;
+      });
+      rp.seek(data.start); rp.seek(keepT);
+      rp.rowH = keepRowH;
+      gif.on("progress", p => gs.textContent = `Encoding GIF ${Math.round(p * 100)}%…`);
+      return new Promise(res => { gif.on("finished", res); gif.render(); });
+    };
+    const saveGif = (blob, a, what = "") => {
+      const link = document.createElement("a");
+      const d = new Date(realT(data, a) * 1000), stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+      link.href = URL.createObjectURL(blob);
+      link.download = rp.ev ? `bgpcanary-event-${rp.ev.id}${what}-${stamp}.gif` : data.stitch ? `bgpcanary-events-${stamp}.gif`
+        : data.prefixes || data.combined ? `bgpcanary-compare-${stamp}.gif` : `bgpcanary-paths-${stamp}.gif`;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    };
     if (q("gif")) q("gif").onclick = async () => {
       if (!rp) return;
       const btn = q("gif"), gs = q("gifstatus"); btn.disabled = true; stop();
       try {
-        gs.textContent = "Loading encoder…";
-        await loadScript("/static/vendor/gif.js");
         const nFrames = parseInt(q("frames").value), delay = parseInt(q("delay").value);
         const [a, b] = range();
         if (!(b > a)) throw "the From time must be before the To time";
-        // A sub-range gets its own replay: the GIF's tree layout, timeline and colors are scoped to it.
-        let g = rp;
-        if ((a > data.start + 1 || b < data.end - 1) && !data.stitch) {   // (events together: the replay already has it)
-          gs.textContent = "Loading range…";
-          const many = data.prefixes || data.combined;
-          const qs = new URLSearchParams(many ? { prefixes: many.join(","), start: a, end: b, combine: data.combined ? 1 : 0 }
-                                              : { prefix: data.prefix, start: a, end: b });
-          const r = await fetch((many ? "/api/replay/compare?" : "/api/replay?") + qs);
-          if (!r.ok) throw "could not load the selected range";
-          const d2 = await r.json();
-          if (rp.ev) { d2.event = rp.ev; d2.events = [rp.ev]; }
-          g = new Replay(d2, rp.ev && a < rp.ev.start ? rp.baseMode : (q("base") ? q("base").value : "start"));
-          g.build(parseInt(q("depth").value), parseInt(q("top").value), nbrsMode());
-        }
-        const keepRowH = rp.rowH;
-        g.rowH = 20;   // GIFs always use full spacing, whatever the on-screen Size setting
-        const W = 1200, { H } = g.size(W);
-        const off = document.createElement("canvas"); off.width = W; off.height = H;
-        const ctx = off.getContext("2d", { willReadFrequently: true });
-        const gif = new GIF({ workers: 2, quality: 10, width: W, height: H, workerScript: "/static/vendor/gif.worker.js" });
-        const keepT = rp.t, label = rp.ev ? `event ${rp.ev.id}`
-          : data.stitch ? `events ${rp.events.map(e => e.id).join(", ")}` : `${data.prefix}`;
-        g.frameTimes(nFrames, a, b).forEach((t, i, ts) => {
-          g.seek(t);
-          g.draw(ctx, W, { footer: `bgpcanary · ${label}` });
-          gif.addFrame(ctx, { copy: true, delay: i === 0 || i === ts.length - 1 ? 1500 : delay });
-          if (i % 10 === 0) gs.textContent = `Rendering frames ${i}/${nFrames}…`;
-        });
-        rp.seek(data.start); rp.seek(keepT);
-        rp.rowH = keepRowH;
-        gif.on("progress", p => gs.textContent = `Encoding GIF ${Math.round(p * 100)}%…`);
-        const blob = await new Promise(res => { gif.on("finished", res); gif.render(); });
-        const link = document.createElement("a");
-        const d = new Date(realT(data, a) * 1000), stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
-        link.href = URL.createObjectURL(blob);
-        link.download = rp.ev ? `bgpcanary-event-${rp.ev.id}-${stamp}.gif` : data.stitch ? `bgpcanary-events-${stamp}.gif`
-          : data.prefixes || data.combined ? `bgpcanary-compare-${stamp}.gif` : `bgpcanary-paths-${stamp}.gif`;
-        document.body.appendChild(link); link.click(); link.remove();
+        const blob = await buildGif(a, b, nFrames, (i, all) => (i === 0 || i === all - 1 ? 1500 : delay), gs);
+        saveGif(blob, a);
         gs.textContent = `Saved ${(blob.size / 1048576).toFixed(1)} MB GIF`;
       } catch (e) {
         gs.textContent = "GIF export failed: " + e;
       } finally { btn.disabled = false; }
     };
-    return { load, isFollowing: () => following && !timer };
+    // The event page's "Download evidence GIF": the tree from two minutes before the event (the steady state) to two
+    // minutes after it ends (or now), whatever the range set below the tree, in EVIDENCE_GIF_MS at most: a longer one
+    // only bores. The first and last frames hold a moment; frames linger where routes change (frameTimes).
+    const EVIDENCE_FRAMES = 32, EVIDENCE_GIF_MS = 5000, HOLD_FIRST = 800, HOLD_LAST = 1000;
+    let loading = null;
+    const evidenceGif = async (btn, gs) => {
+      if (btn.disabled) return;
+      btn.disabled = true; stop();
+      try {
+        if (!rp && loading) { gs.textContent = "Waiting for the path tree to load…"; await loading; }
+        if (!rp || !rp.ev) throw "the path tree has no stored routes for this event";
+        const a = Math.max(data.start, rp.ev.start - 120);
+        const b = rp.ev.end ? Math.min(data.end, rp.ev.end + 120) : data.end;
+        if (!(b > a)) throw "the event has no length to show";
+        // (GIF delays are hundredths of a second: the frames in between share what the holds leave, at most 100 ms each)
+        const step = all => Math.min(100, Math.floor((EVIDENCE_GIF_MS - HOLD_FIRST - HOLD_LAST) / Math.max(1, all - 2) / 10) * 10);
+        const blob = await buildGif(a, b, EVIDENCE_FRAMES, (i, all) => (i === 0 ? HOLD_FIRST : i === all - 1 ? HOLD_LAST : step(all)), gs);
+        saveGif(blob, a, "-evidence");
+        const secs = (HOLD_FIRST + HOLD_LAST + (EVIDENCE_FRAMES - 2) * step(EVIDENCE_FRAMES)) / 1000;
+        gs.textContent = `Saved the evidence GIF (${(blob.size / 1048576).toFixed(1)} MB, ${secs.toFixed(1)} s)`;
+      } catch (e) {
+        gs.textContent = "GIF export failed: " + e;
+      } finally { btn.disabled = false; }
+    };
+    return { load: (url, keep) => (loading = load(url, keep)), isFollowing: () => following && !timer, evidenceGif };
   };
 
-  // Event page convenience wrapper
+  // Event page convenience wrapper (the page's "Download evidence GIF" button reaches it as window.eventTree)
   window.initReplay = function (eventId) {
     const root = document.getElementById("replay");
     const ctl = initTree(root, { base: "best", startAt: d => Math.max(d.start, d.event.start - 1) });
     ctl.load(`/api/events/${eventId}/replay`);
+    window.eventTree = ctl;
   };
 
   // Events replayed together (Events › tick some › Replay selected together), from the first one's start
